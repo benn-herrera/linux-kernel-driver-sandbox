@@ -95,7 +95,33 @@ modules-clean:
   fi
   rm -rf "{{OUT}}/modules"
 
-[doc("Stage a busybox root with /work/vdev/initramfs/init and any OUT/modules/*.ko at /lib/modules, and pack it to OUT/initramfs.cpio.gz")]
+[doc("Build every program under /work/userspace/*/ as a static binary with clang; binaries go to OUT/userspace/")]
+userspace:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shopt -s nullglob
+  rm -rf "{{OUT}}/userspace"
+  mkdir -p "{{OUT}}/userspace"
+  for dir in /work/userspace/*/; do
+    [[ -f "${dir}Makefile" ]] || continue
+    make -C "${dir%/}" CC=clang OUT="{{OUT}}/userspace"
+  done
+  built=("{{OUT}}/userspace"/*)
+  built=("${built[@]##*/}")
+  printf 'built %s/userspace: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
+
+[doc("make clean in each /work/userspace/*/ program dir and remove OUT/userspace/")]
+userspace-clean:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shopt -s nullglob
+  for dir in /work/userspace/*/; do
+    [[ -f "${dir}Makefile" ]] || continue
+    make -C "${dir%/}" CC=clang OUT="{{OUT}}/userspace" clean
+  done
+  rm -rf "{{OUT}}/userspace"
+
+[doc("Stage a busybox root with /work/vdev/initramfs/init, any OUT/modules/*.ko at /lib/modules and any OUT/userspace/* at /usr/bin, and pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -116,6 +142,14 @@ initramfs:
     done
   else
     printf '%s/modules absent; building initramfs without modules\n' "{{OUT}}" >&2
+  fi
+  if [[ -d "{{OUT}}/userspace" ]]; then
+    mkdir -p "${root}/usr/bin"
+    for bin in "{{OUT}}/userspace"/*; do
+      [[ -f "${bin}" ]] && install -m 755 "${bin}" "${root}/usr/bin/"
+    done
+  else
+    printf '%s/userspace absent; building initramfs without userspace programs\n' "{{OUT}}" >&2
   fi
   cd "${root}"
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"

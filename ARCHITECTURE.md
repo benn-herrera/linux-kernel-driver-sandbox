@@ -1,11 +1,8 @@
 # ARCHITECTURE – linux-kernel-driver-sandbox
 
-> Draft. Describes the intended implementation ahead of the code. Targets
-> that exist so far: `just host-check`, `just machine-vdev`,
-> `just machine-stop-vdev`, `just image-vdev`, `just run-vdev`,
-> `just shell-vdev`, `just kernel-fetch-vdev`, `just kernel-config-vdev`,
-> `just kernel-build-vdev`, `just kernel-clean-vdev`, `just modules-vdev`,
-> `just modules-clean-vdev`, `just initramfs-vdev`, `just run-vtarget`.
+> Describes the implementation as built. `just --list` is the authoritative
+> list of recipes; a recipe named here that is not listed there is a
+> documentation defect.
 
 Consumer-facing outcomes belong to SPEC.md; this document covers how this
 implementation meets them. Podman-machine ownership and the Homebrew
@@ -31,7 +28,8 @@ restated, below.
   `MOUNTS` set. It never starts the machine.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
   `kernel-build-vdev`, `kernel-clean-vdev`, `modules-vdev`,
-  `modules-clean-vdev`, `initramfs-vdev`) depend on `machine-vdev` and
+  `modules-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
+  `initramfs-vdev`) depend on `machine-vdev` and
   compose one line: `just run-vdev just --justfile /work/vdev/justfile
   <name>`, where `<name>` is the root recipe's name with the `-vdev`
   suffix removed. The recipe dependency chain (build needs config needs
@@ -41,9 +39,11 @@ restated, below.
   staleness; the podman build owns image layer caching; the
   `machine-vdev` target checks live state (`podman machine inspect`), not
   timestamps.
-- The project's only Makefiles are the kbuild Makefiles under
-  `drivers/<name>/`, needed for out-of-tree module builds (`make M=...`),
-  invoked from the `modules` recipe in `vdev/justfile`.
+- The project's Makefiles are the kbuild Makefiles under `drivers/<name>/`,
+  needed for out-of-tree module builds (`make M=...`) and invoked from the
+  `modules` recipe in `vdev/justfile`, and the plain Makefiles under
+  `userspace/<name>/` invoked from its `userspace` recipe (see "Userspace
+  programs").
 
 ## Build host: Podman machine
 
@@ -82,12 +82,13 @@ restated, below.
   volume.
 - The named volume `KERNEL_VOLUME` (`lkds-kernel`) is mounted at `/kernel`,
   the container's working directory. Podman creates it on first use.
-- Three host directories are bind-mounted: `drivers/` at `/work/drivers`
-  (driver source), `OUT_DIR` (`out/`) at `/work/out` (build output handed
-  to the host), and `vdev/` read-only at `/work/vdev` (the in-container
-  justfile). `just run-vdev` and `just shell-vdev` create the first two on
-  the host before mounting; the mount set is the `MOUNTS` variable in the
-  root justfile.
+- Four host directories are bind-mounted: `drivers/` at `/work/drivers`
+  (driver source), `userspace/` at `/work/userspace` (userspace program
+  source), `OUT_DIR` (`out/`) at `/work/out` (build output handed to the
+  host), and `vdev/` read-only at `/work/vdev` (the in-container justfile).
+  `just run-vdev` and `just shell-vdev` create the first three on the host
+  before mounting; the mount set is the `MOUNTS` variable in the root
+  justfile.
 
 ## Kernel source and build
 
@@ -145,6 +146,9 @@ restated, below.
   kernel and module recipes.
 - If `out/modules/` exists, every `.ko` in it is staged at `/lib/modules/`;
   otherwise the archive is built without modules and says so on stderr.
+- If `out/userspace/` exists, every file in it is staged executable at
+  `/usr/bin/`; otherwise the archive is built without userspace programs
+  and says so on stderr.
 
 ## Debugging
 
@@ -170,13 +174,29 @@ restated, below.
   Modules are built for this kernel tree only, with no version
   compatibility shims.
 
+## Userspace programs
+
+- One program per directory: `userspace/<name>/` holds the sources and a
+  plain GNU Makefile (not kbuild) that honours `CC` and `OUT`, writes only
+  under `OUT`, and links `-static`: the guest has no shared libraries.
+- `just userspace-vdev` runs `make -C /work/userspace/<name> CC=clang
+  OUT=/work/out/userspace` for every `userspace/*/` with a `Makefile`, after
+  clearing `out/userspace/`. It does not depend on the kernel recipes.
+  `just userspace-clean-vdev` runs the matching `clean` and removes
+  `out/userspace/`.
+- `just initramfs-vdev` places the binaries at `/usr/bin/` in the guest,
+  which is on busybox's default `PATH`. `userspace/hello/` is the smoke
+  program that proves the path.
+
 ## Repo layout
 
 - `justfile`, `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`
   (mounted at `/work/vdev`), `Containerfile`, the project documents,
   `drivers/` (mounted at `/work/drivers`; `drivers/hello/` is the smoke
-  module that proves the build path), `out/` (gitignored build output,
-  mounted at `/work/out`), `.claude-temp/` (gitignored scratch).
+  module that proves the build path), `userspace/` (mounted at
+  `/work/userspace`; `userspace/hello/` is the smoke program), `out/`
+  (gitignored build output, mounted at `/work/out`), `.claude-temp/`
+  (gitignored scratch).
 
 ## Explicitly out of scope
 

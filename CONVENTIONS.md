@@ -46,6 +46,9 @@
   fragments merged over defconfig and debug.config by `kernel-config`.
   `.config` is never edited by hand; a change to a fragment is followed by
   `kernel-config-vdev` and a rebuild.
+- A `userspace/<name>/Makefile` is a plain Makefile that takes `CC` and
+  `OUT`, produces static binaries, and writes only under `OUT`. It is not a
+  kbuild fragment.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs

@@ -12,12 +12,13 @@ MACHINE_DISK_GB := "60"
 IMAGE := "lkds-build"
 KERNEL_VOLUME := "lkds-kernel"
 DRIVERS_DIR := justfile_directory() / "drivers"
+USERSPACE_DIR := justfile_directory() / "userspace"
 OUT_DIR := justfile_directory() / "out"
 VDEV_DIR := justfile_directory() / "vdev"
 VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
-MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
+MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(USERSPACE_DIR + ":/work/userspace") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
 # The in-container runner; the only container path named outside MOUNTS.
 VDEV_JUST := "just --justfile /work/vdev/justfile"
 
@@ -77,14 +78,14 @@ guard-vdev:
 run-vdev +ARGS: guard-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  mkdir -p "{{DRIVERS_DIR}}" "{{OUT_DIR}}"
+  mkdir -p "{{DRIVERS_DIR}}" "{{USERSPACE_DIR}}" "{{OUT_DIR}}"
   podman run --rm --workdir /kernel {{MOUNTS}} "{{IMAGE}}" "$@"
 
 [doc("open an interactive bash shell in a fresh build container (machine must be running)")]
 shell-vdev: guard-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  mkdir -p "{{DRIVERS_DIR}}" "{{OUT_DIR}}"
+  mkdir -p "{{DRIVERS_DIR}}" "{{USERSPACE_DIR}}" "{{OUT_DIR}}"
   podman run --rm -it --workdir /kernel {{MOUNTS}} "{{IMAGE}}" bash
 
 # Workflow entry points: start the machine, then hand the work to vdev/justfile.
@@ -119,6 +120,15 @@ modules-vdev: machine-vdev
 [doc("make clean in each drivers/ module dir and remove out/modules/")]
 modules-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} modules-clean
+
+[doc("build every program under userspace/ as a static binary with clang; binaries land in out/userspace/")]
+userspace-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} userspace
+  ls -l "{{OUT_DIR}}/userspace/"
+
+[doc("make clean in each userspace/ program dir and remove out/userspace/")]
+userspace-clean-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} userspace-clean
 
 # Test machine: boots out/ on the host under QEMU.
 
