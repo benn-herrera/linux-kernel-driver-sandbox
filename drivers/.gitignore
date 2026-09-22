@@ -1,0 +1,11 @@
+# kbuild artifacts from out-of-tree module builds (make M=...)
+*.o
+*.ko
+*.mod
+*.mod.c
+*.cmd
+.*.cmd
+*.symvers
+modules.order
+.tmp_versions/
+*.a

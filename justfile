@@ -93,11 +93,11 @@ shell-vdev: guard-vdev
 kernel-fetch-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} kernel-fetch
 
-[doc("configure the kernel: defconfig plus the debug.config fragment")]
+[doc("configure the kernel: defconfig, debug.config, then the vdev/kernel-config/ fragments")]
 kernel-config-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} kernel-config
 
-[doc("build the kernel Image in-tree and copy it to out/Image")]
+[doc("build the kernel Image and in-tree modules, and copy the Image to out/Image")]
 kernel-build-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} kernel-build
   ls -l "{{OUT_DIR}}/Image"
@@ -110,6 +110,15 @@ kernel-clean-vdev: machine-vdev
 initramfs-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} initramfs
   ls -l "{{OUT_DIR}}/initramfs.cpio.gz"
+
+[doc("build every out-of-tree module under drivers/ against the kernel tree; .ko files land in out/modules/")]
+modules-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} modules
+  ls -l "{{OUT_DIR}}/modules/"
+
+[doc("make clean in each drivers/ module dir and remove out/modules/")]
+modules-clean-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} modules-clean
 
 # Test machine: boots out/ on the host under QEMU.
 

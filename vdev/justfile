@@ -4,6 +4,8 @@
 KERNEL_VERSION := "7.2.7"
 KERNEL_SRC := "/kernel/linux-" + KERNEL_VERSION
 OUT := "/work/out"
+# clang/LLVM for every kbuild invocation: the kernel's Rust support builds with LLVM.
+MAKE := "make LLVM=1"
 
 [doc("Download, verify and extract the pinned kernel source into the volume (no-op if present)")]
 kernel-fetch:
@@ -25,24 +27,28 @@ kernel-fetch:
   rm -f "${tarball}" sha256sums.asc
   printf 'extracted to %s\n' "{{KERNEL_SRC}}" >&2
 
-[doc("Configure the kernel: defconfig plus the debug.config fragment")]
+[doc("Configure the kernel: defconfig, the debug.config fragment, then /work/vdev/kernel-config/*.config merged on top")]
 kernel-config: kernel-fetch
   #!/usr/bin/env bash
   set -euo pipefail
   cd "{{KERNEL_SRC}}"
-  make defconfig debug.config
+  {{MAKE}} defconfig debug.config
   [[ -f .config ]] || { printf '.config missing after make\n' >&2; exit 1; }
+  scripts/kconfig/merge_config.sh -m .config /work/vdev/kernel-config/*.config
+  {{MAKE}} olddefconfig
   printf '%s/.config written\n' "{{KERNEL_SRC}}" >&2
-  for opt in KASAN PROVE_LOCKING DEBUG_ATOMIC_SLEEP UBSAN; do
+  for opt in KASAN PROVE_LOCKING DEBUG_ATOMIC_SLEEP UBSAN RUST; do
     printf 'CONFIG_%s=%s\n' "${opt}" "$(scripts/config --state "${opt}")"
   done
+  # Kconfig drops CONFIG_RUST=y silently when RUST_IS_AVAILABLE is false; this is the only reliable signal.
+  [[ "$(scripts/config --state RUST)" == "y" ]] || { printf "CONFIG_RUST did not survive: run '%s rustavailable' in %s\n" "{{MAKE}}" "{{KERNEL_SRC}}" >&2; exit 1; }
 
-[doc("Build the kernel Image in-tree and copy it to OUT/Image")]
+[doc("Build the kernel Image and in-tree modules, and copy the Image to OUT/Image")]
 kernel-build: kernel-config
   #!/usr/bin/env bash
   set -euo pipefail
   cd "{{KERNEL_SRC}}"
-  make -j"$(nproc)" Image
+  {{MAKE}} -j"$(nproc)" Image modules
   cp arch/arm64/boot/Image "{{OUT}}/Image"
   printf 'built %s/Image\n' "{{OUT}}" >&2
 
@@ -54,9 +60,42 @@ kernel-clean:
     printf '%s absent; nothing to clean\n' "{{KERNEL_SRC}}" >&2
     exit 0
   fi
-  make -C "{{KERNEL_SRC}}" clean
+  {{MAKE}} -C "{{KERNEL_SRC}}" clean
 
-[doc("Stage a busybox root with /work/vdev/initramfs/init and pack it to OUT/initramfs.cpio.gz")]
+[doc("Build every out-of-tree module under /work/drivers/*/ with M= against the kernel tree; .ko files go to OUT/modules/")]
+modules: kernel-config
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shopt -s nullglob
+  [[ -f "{{KERNEL_SRC}}/Module.symvers" ]] || { printf "%s/Module.symvers missing: run 'kernel-build' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
+  mkdir -p "{{OUT}}/modules"
+  rm -f "{{OUT}}/modules"/*.ko
+  built=()
+  for dir in /work/drivers/*/; do
+    [[ -f "${dir}Makefile" ]] || continue
+    {{MAKE}} -C "{{KERNEL_SRC}}" M="${dir%/}" modules
+    for ko in "${dir}"*.ko; do
+      cp "${ko}" "{{OUT}}/modules/"
+      built+=("${ko##*/}")
+    done
+  done
+  printf 'built %s/modules: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
+
+[doc("make clean in each /work/drivers/*/ module dir and remove OUT/modules/")]
+modules-clean:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ -d "{{KERNEL_SRC}}" ]]; then
+    for dir in /work/drivers/*/; do
+      [[ -f "${dir}Makefile" ]] || continue
+      {{MAKE}} -C "{{KERNEL_SRC}}" M="${dir%/}" clean
+    done
+  else
+    printf '%s absent; skipping module clean\n' "{{KERNEL_SRC}}" >&2
+  fi
+  rm -rf "{{OUT}}/modules"
+
+[doc("Stage a busybox root with /work/vdev/initramfs/init and any OUT/modules/*.ko at /lib/modules, and pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -70,6 +109,14 @@ initramfs:
   chmod 755 "${root}/init"
   # busybox links applets to its own resolved path; chroot makes that /bin/busybox, as the guest sees it.
   chroot "${root}" /bin/busybox --install -s /bin
+  if [[ -d "{{OUT}}/modules" ]]; then
+    mkdir -p "${root}/lib/modules"
+    for ko in "{{OUT}}/modules"/*.ko; do
+      [[ -f "${ko}" ]] && cp "${ko}" "${root}/lib/modules/"
+    done
+  else
+    printf '%s/modules absent; building initramfs without modules\n' "{{OUT}}" >&2
+  fi
   cd "${root}"
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
   printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2

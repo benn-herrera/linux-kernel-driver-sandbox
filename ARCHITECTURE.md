@@ -4,8 +4,8 @@
 > that exist so far: `just host-check`, `just machine-vdev`,
 > `just machine-stop-vdev`, `just image-vdev`, `just run-vdev`,
 > `just shell-vdev`, `just kernel-fetch-vdev`, `just kernel-config-vdev`,
-> `just kernel-build-vdev`, `just kernel-clean-vdev`, `just initramfs-vdev`,
-> `just run-vtarget`.
+> `just kernel-build-vdev`, `just kernel-clean-vdev`, `just modules-vdev`,
+> `just modules-clean-vdev`, `just initramfs-vdev`, `just run-vtarget`.
 
 Consumer-facing outcomes belong to SPEC.md; this document covers how this
 implementation meets them. Podman-machine ownership and the Homebrew
@@ -30,7 +30,8 @@ restated, below.
   is already running, then runs `<cmd>` in a fresh container with the
   `MOUNTS` set. It never starts the machine.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
-  `kernel-build-vdev`, `kernel-clean-vdev`) depend on `machine-vdev` and
+  `kernel-build-vdev`, `kernel-clean-vdev`, `modules-vdev`,
+  `modules-clean-vdev`, `initramfs-vdev`) depend on `machine-vdev` and
   compose one line: `just run-vdev just --justfile /work/vdev/justfile
   <name>`, where `<name>` is the root recipe's name with the `-vdev`
   suffix removed. The recipe dependency chain (build needs config needs
@@ -40,9 +41,9 @@ restated, below.
   staleness; the podman build owns image layer caching; the
   `machine-vdev` target checks live state (`podman machine inspect`), not
   timestamps.
-- The project's only Makefile is the kbuild Makefile under `drivers/`,
-  needed for out-of-tree module builds (`make M=...`), invoked from a just
-  recipe.
+- The project's only Makefiles are the kbuild Makefiles under
+  `drivers/<name>/`, needed for out-of-tree module builds (`make M=...`),
+  invoked from the `modules` recipe in `vdev/justfile`.
 
 ## Build host: Podman machine
 
@@ -54,10 +55,15 @@ restated, below.
 
 ## Build environment: container image
 
-- A Containerfile in the repo root defines the kernel toolchain: gcc, GNU
-  make, flex, bison, bc, libssl-dev, libelf-dev, libncurses-dev, python3,
-  cpio, kmod, rsync, curl, busybox-static, gdb, pahole (dwarves), sparse,
-  the xz/zstd/lz4 compressors, and `just` (runs `vdev/justfile`).
+- A Containerfile in the repo root defines the kernel toolchain: clang/LLVM
+  19 with lld, driven with `LLVM=1` on every kbuild invocation because the
+  kernel's Rust support builds with LLVM; Rust 1.85 (`rustc`, `rust-src`,
+  `rustfmt`, `rust-clippy`) and bindgen 0.71 from trixie; GNU make, flex,
+  bison, bc, libssl-dev, libelf-dev, libncurses-dev, python3, cpio, kmod,
+  rsync, curl, busybox-static, gdb, pahole (dwarves), sparse, the
+  xz/zstd/lz4 compressors, and `just` (runs `vdev/justfile`).
+  `build-essential` remains in the image (GNU make, libc headers); with
+  `LLVM=1` kbuild uses clang for both target and host objects.
 - Base image: `docker.io/library/debian:trixie-slim`. Built by
   `just image-vdev` as `IMAGE` (`lkds-build`) from the Containerfile on
   stdin, with no build context.
@@ -90,16 +96,25 @@ restated, below.
   verified against the release directory's `sha256sums.asc`, and extracted
   to `KERNEL_SRC` (`/kernel/linux-<version>`) in the volume. Present tree
   means no fetch.
-- The build is in-tree (no `O=`): `just kernel-config-vdev` runs
-  `make defconfig debug.config` in `KERNEL_SRC`; `just kernel-build-vdev`
-  builds `Image` and copies it to `out/`. `just kernel-clean-vdev` is
-  `make clean`, keeping `.config`.
-- Modules are not yet built.
+- The build is in-tree (no `O=`) with clang: every make invocation in
+  `vdev/justfile` goes through its `MAKE` variable (`make LLVM=1`).
+  `just kernel-config-vdev` runs `make defconfig debug.config` in
+  `KERNEL_SRC`, merges the project fragments (see "Test kernel
+  configuration") and fails unless `CONFIG_RUST` ends up `y`;
+  `just kernel-build-vdev` builds the `Image` and `modules` targets and
+  copies `Image` to `out/`. The `modules` target is what produces
+  `Module.symvers`, which out-of-tree builds need. `just kernel-clean-vdev`
+  is `make clean`, keeping `.config`.
 
 ## Test kernel configuration
 
 - defconfig plus the kernel's `debug.config` fragment: KASAN, UBSAN,
   kmemleak, DEBUG_OBJECTS, lockdep (PROVE_LOCKING, DEBUG_ATOMIC_SLEEP).
+- The project's own fragments under `vdev/kernel-config/*.config`, merged
+  on top by `scripts/kconfig/merge_config.sh -m` then `make olddefconfig`.
+  `rust.config` sets `CONFIG_RUST=y`. Kconfig drops `CONFIG_RUST=y`
+  silently when the toolchain check fails, so `kernel-config` verifies it
+  with `scripts/config --state RUST`.
 - DMA_API_DEBUG added where a driver maps DMA.
 
 ## Boot
@@ -127,7 +142,9 @@ restated, below.
   `chroot` so they target `/bin/busybox`) and the `bin`, `sbin`, `proc`,
   `sys`, `dev` directories in a container temp dir, then packs a gzipped
   newc cpio to `out/initramfs.cpio.gz`. Always rebuilds; independent of the
-  kernel recipes.
+  kernel and module recipes.
+- If `out/modules/` exists, every `.ko` in it is staged at `/lib/modules/`;
+  otherwise the archive is built without modules and says so on stderr.
 
 ## Debugging
 
@@ -138,15 +155,27 @@ restated, below.
 
 ## Driver code
 
-- Out-of-tree modules live under `drivers/` in the repo.
-- Built with `make M=...` against the kernel build tree in the volume.
-- Loaded in the booted guest via the initramfs.
+- One module per directory: `drivers/<name>/` holds the sources and a
+  kbuild `Makefile` (`obj-m += <name>.o`). The kernel tree path and `M=`
+  come from the recipe, not the Makefile.
+- `just modules-vdev` runs `make -C KERNEL_SRC M=/work/drivers/<name>
+  modules` for every `drivers/*/` with a `Makefile`, against the in-tree
+  build in the volume; it fails naming `kernel-build` if `Module.symvers`
+  is absent. The resulting `.ko` files are copied to `out/modules/` (stale
+  `.ko` files cleared first). `just modules-clean-vdev` runs the matching
+  `make M=... clean` and removes `out/modules/`.
+- kbuild artifacts under `drivers/` are ignored by `drivers/.gitignore`.
+- `just initramfs-vdev` places the `.ko` files at `/lib/modules/` in the
+  guest; load with `insmod /lib/modules/<name>.ko`, unload with `rmmod`.
+  Modules are built for this kernel tree only, with no version
+  compatibility shims.
 
 ## Repo layout
 
-- `justfile`, `vdev/justfile` and `vdev/initramfs/` (mounted at
-  `/work/vdev`), `Containerfile`, the project documents,
-  `drivers/` (mounted at `/work/drivers`), `out/` (gitignored build output,
+- `justfile`, `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`
+  (mounted at `/work/vdev`), `Containerfile`, the project documents,
+  `drivers/` (mounted at `/work/drivers`; `drivers/hello/` is the smoke
+  module that proves the build path), `out/` (gitignored build output,
   mounted at `/work/out`), `.claude-temp/` (gitignored scratch).
 
 ## Explicitly out of scope

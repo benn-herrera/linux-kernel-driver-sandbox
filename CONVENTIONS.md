@@ -42,7 +42,21 @@
 - `/work/vdev` is read-only inside the container. A recipe there that
   assembles files stages them in a container-local temp dir and writes only
   to `/work/out`.
+- Kernel configuration choices live in `vdev/kernel-config/*.config`
+  fragments merged over defconfig and debug.config by `kernel-config`.
+  `.config` is never edited by hand; a change to a fragment is followed by
+  `kernel-config-vdev` and a rebuild.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs
   `podman machine set`.
+
+## Test machine
+
+- `out/initramfs.cpio.gz` is a snapshot. After `modules-vdev`, run
+  `initramfs-vdev` before `run-vtarget`, or the guest loads the previous
+  build of the module.
+- Stdin piped into `run-vtarget` at launch is delivered before the guest
+  UART exists and is lost. A scripted console session waits for the shell
+  prompt before sending its first line, and lets the last command's output
+  drain before its timeout ends QEMU, or the final line is lost.
