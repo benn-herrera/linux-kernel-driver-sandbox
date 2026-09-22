@@ -185,16 +185,16 @@ restated, below.
   `just userspace-clean-vdev` runs the matching `clean` and removes
   `out/userspace/`.
 - `just initramfs-vdev` places the binaries at `/usr/bin/` in the guest,
-  which is on busybox's default `PATH`. `userspace/hello/` is the smoke
-  program that proves the path.
+  which is on busybox's default `PATH`. `userspace/matx_mock/` is the the
+  first text exercise.
 
 ## Repo layout
 
 - `justfile`, `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`
   (mounted at `/work/vdev`), `Containerfile`, the project documents,
-  `drivers/` (mounted at `/work/drivers`; `drivers/hello/` is the smoke
-  module that proves the build path), `userspace/` (mounted at
-  `/work/userspace`; `userspace/hello/` is the smoke program), `out/`
+  `drivers/` (mounted at `/work/drivers`; `drivers/matx_mock/` is the first
+  user exercise driver), `userspace/` (mounted at
+  `/work/userspace`; `userspace/matx_mock/` is the driver test), `out/`
   (gitignored build output, mounted at `/work/out`), `.claude-temp/`
   (gitignored scratch).
 

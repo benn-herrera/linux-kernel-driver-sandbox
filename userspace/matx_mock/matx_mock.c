@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * hello: smoke program proving the static userspace build and staging path.
+ * userspace test of matx_mock driver ABI
  */
 
 #include <stdio.h>
@@ -14,6 +14,6 @@ int main(void)
 		perror("uname");
 		return 1;
 	}
-	printf("hello: userspace ok on %s\n", u.release);
+	printf("matx_mock: userspace ok on %s\n", u.release);
 	return 0;
 }
