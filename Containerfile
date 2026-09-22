@@ -8,11 +8,13 @@ RUN apt-get update \
     busybox-static \
     ca-certificates \
     cpio \
+    curl \
     dwarves \
     file \
     flex \
     gdb \
     git \
+    just \
     kmod \
     libelf-dev \
     libncurses-dev \

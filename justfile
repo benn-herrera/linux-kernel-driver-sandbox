@@ -13,10 +13,13 @@ IMAGE := "lkds-build"
 KERNEL_VOLUME := "lkds-kernel"
 DRIVERS_DIR := justfile_directory() / "drivers"
 OUT_DIR := justfile_directory() / "out"
+VDEV_DIR := justfile_directory() / "vdev"
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
-MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(OUT_DIR + ":/work/out")
+MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
+# The in-container runner; the only container path named outside MOUNTS.
+VDEV_JUST := "just --justfile /work/vdev/justfile"
 
-[doc("Verify the host tools the loop needs are on PATH")]
+[doc("verify the host tools the loop needs are on PATH")]
 host-check:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -32,8 +35,8 @@ host-check:
     exit 1
   fi
 
-[doc("Create the Podman machine if absent, start it if stopped, print its state")]
-machine: host-check
+[doc("create the podman virtual dev machine if absent, start it if stopped, print its state")]
+machine-vdev: host-check
   #!/usr/bin/env bash
   set -euo pipefail
   if ! podman machine inspect "{{MACHINE}}" >/dev/null 2>&1; then
@@ -44,34 +47,64 @@ machine: host-check
   fi
   podman machine inspect --format '{{{{.Name}}: {{{{.State}}' "{{MACHINE}}" >&2
 
-[doc("Stop the Podman machine if it is running")]
-machine-stop:
+[doc("stop the podman virtual dev machine if it is running")]
+machine-stop-vdev:
   #!/usr/bin/env bash
   set -euo pipefail
   if [[ "$(podman machine inspect --format '{{{{.State}}' "{{MACHINE}}" 2>/dev/null)" == "running" ]]; then
     podman machine stop "{{MACHINE}}"
   fi
 
-[doc("Build the kernel toolchain image from the Containerfile")]
-image: machine
+[doc("build the kernel toolchain image from the Containerfile")]
+image-vdev: machine-vdev
   #!/usr/bin/env bash
   set -euo pipefail
   podman build --tag "{{IMAGE}}" - < "{{justfile_directory()}}/Containerfile"
 
-[doc("Run a command in a fresh build container, e.g. just run make -C /kernel/linux Image")]
-run +ARGS: machine
+# Fails unless the machine is already running; never starts it.
+[private]
+guard-vdev:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ "$(podman machine inspect --format '{{{{.State}}' "{{MACHINE}}" 2>/dev/null)" != "running" ]]; then
+    printf "dev box is not running: run 'just machine-vdev'\n" >&2
+    exit 1
+  fi
+
+[doc("run a command in a fresh build container (machine must be running), e.g. just run-vdev ls /kernel")]
+run-vdev +ARGS: guard-vdev
   #!/usr/bin/env bash
   set -euo pipefail
   mkdir -p "{{DRIVERS_DIR}}" "{{OUT_DIR}}"
   podman run --rm --workdir /kernel {{MOUNTS}} "{{IMAGE}}" "$@"
 
-[doc("Open an interactive bash shell in a fresh build container")]
-shell: machine
+[doc("open an interactive bash shell in a fresh build container (machine must be running)")]
+shell-vdev: guard-vdev
   #!/usr/bin/env bash
   set -euo pipefail
   mkdir -p "{{DRIVERS_DIR}}" "{{OUT_DIR}}"
   podman run --rm -it --workdir /kernel {{MOUNTS}} "{{IMAGE}}" bash
 
+# Workflow entry points: start the machine, then hand the work to vdev/justfile.
+
+[doc("download, verify and extract the pinned kernel source into the volume (no-op if present)")]
+kernel-fetch-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} kernel-fetch
+
+[doc("configure the kernel: defconfig plus the debug.config fragment")]
+kernel-config-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} kernel-config
+
+[doc("build the kernel Image in-tree and copy it to out/Image")]
+kernel-build-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} kernel-build
+  ls -l "{{OUT_DIR}}/Image"
+
+[doc("make clean in the kernel tree (keeps .config); no-op if the tree is absent")]
+kernel-clean-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} kernel-clean
+
+[doc("install or update the agent and command set under .claude/")]
 agents:
 	@mkdir -p "{{parent_directory(AGENTS_DIR)}}"
 	@[[ -d "{{AGENTS_DIR}}" ]] && git -C "{{AGENTS_DIR}}" pull || git -C {{parent_directory(AGENTS_DIR)}} clone "{{AGENTS_REPO}}"

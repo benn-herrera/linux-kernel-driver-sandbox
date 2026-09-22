@@ -1,0 +1,57 @@
+# Runs inside the build container, mounted read-only at /work/vdev.
+# Every path here is a container path.
+
+KERNEL_VERSION := "7.2.7"
+KERNEL_SRC := "/kernel/linux-" + KERNEL_VERSION
+OUT := "/work/out"
+
+[doc("Download, verify and extract the pinned kernel source into the volume (no-op if present)")]
+kernel-fetch:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ -d "{{KERNEL_SRC}}" ]]; then
+    printf '%s already present; nothing to fetch\n' "{{KERNEL_SRC}}" >&2
+    exit 0
+  fi
+  cd /kernel
+  version="{{KERNEL_VERSION}}"
+  tarball="linux-${version}.tar.xz"
+  url_dir="https://cdn.kernel.org/pub/linux/kernel/v${version%%.*}.x"
+  printf 'downloading %s/%s\n' "${url_dir}" "${tarball}" >&2
+  curl -fsSLO "${url_dir}/${tarball}"
+  curl -fsSLO "${url_dir}/sha256sums.asc"
+  grep -E "  ${tarball}$" sha256sums.asc | sha256sum -c -
+  tar -xf "${tarball}"
+  rm -f "${tarball}" sha256sums.asc
+  printf 'extracted to %s\n' "{{KERNEL_SRC}}" >&2
+
+[doc("Configure the kernel: defconfig plus the debug.config fragment")]
+kernel-config: kernel-fetch
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{KERNEL_SRC}}"
+  make defconfig debug.config
+  [[ -f .config ]] || { printf '.config missing after make\n' >&2; exit 1; }
+  printf '%s/.config written\n' "{{KERNEL_SRC}}" >&2
+  for opt in KASAN PROVE_LOCKING DEBUG_ATOMIC_SLEEP UBSAN; do
+    printf 'CONFIG_%s=%s\n' "${opt}" "$(scripts/config --state "${opt}")"
+  done
+
+[doc("Build the kernel Image in-tree and copy it to OUT/Image")]
+kernel-build: kernel-config
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cd "{{KERNEL_SRC}}"
+  make -j"$(nproc)" Image
+  cp arch/arm64/boot/Image "{{OUT}}/Image"
+  printf 'built %s/Image\n' "{{OUT}}" >&2
+
+[doc("make clean in the kernel tree (keeps .config); no-op if the tree is absent")]
+kernel-clean:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  if [[ ! -d "{{KERNEL_SRC}}" ]]; then
+    printf '%s absent; nothing to clean\n' "{{KERNEL_SRC}}" >&2
+    exit 0
+  fi
+  make -C "{{KERNEL_SRC}}" clean
