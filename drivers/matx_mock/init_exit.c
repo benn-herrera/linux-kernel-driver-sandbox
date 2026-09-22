@@ -13,6 +13,7 @@ static struct pci_driver mxm_driver = {
 	.id_table = mxm_ids,
 	.probe = mxm_probe,
 	.remove = mxm_remove,
+	.shutdown = NULL,
 };
 
 int mxm_init(void)
