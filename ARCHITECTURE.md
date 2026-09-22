@@ -4,7 +4,8 @@
 > that exist so far: `just host-check`, `just machine-vdev`,
 > `just machine-stop-vdev`, `just image-vdev`, `just run-vdev`,
 > `just shell-vdev`, `just kernel-fetch-vdev`, `just kernel-config-vdev`,
-> `just kernel-build-vdev`, `just kernel-clean-vdev`.
+> `just kernel-build-vdev`, `just kernel-clean-vdev`, `just initramfs-vdev`,
+> `just run-vtarget`.
 
 Consumer-facing outcomes belong to SPEC.md; this document covers how this
 implementation meets them. Podman-machine ownership and the Homebrew
@@ -103,12 +104,30 @@ restated, below.
 
 ## Boot
 
-- Host QEMU, machine type `virt`, HVF acceleration with the host CPU model.
-- Headless, serial console on the terminal, user-mode networking.
-- Inputs: the kernel `Image` and a busybox initramfs, both built in the
-  container and copied to the gitignored `out/` directory.
+- `just run-vtarget` runs host QEMU (`qemu-system-aarch64`): machine type
+  `virt`, `-accel hvf`, `-cpu host`; CPUs and memory from the `VTARGET_CPUS`
+  and `VTARGET_MEMORY` justfile variables.
+- Headless (`-nographic`): the guest's serial console `ttyAMA0` is the
+  terminal; `Ctrl-A X` exits. `earlycon` on the kernel command line.
+- `panic=1` on the command line with `-no-reboot`: a kernel panic ends the
+  QEMU process instead of hanging or rebooting.
+- Inputs: `out/Image` and `out/initramfs.cpio.gz`, both produced in the
+  container. The recipe fails naming the producing recipe when either is
+  absent. No networking flags yet; QEMU's default applies.
 - x86_64, later, boots the same way under TCG emulation with no
   acceleration.
+
+### Initramfs
+
+- `vdev/initramfs/init`, a POSIX sh script: mounts proc, sysfs and devtmpfs,
+  prints the marker `lkds: userspace reached` and `uname -r`, then
+  `exec setsid cttyhack sh` for a shell with job control on the console.
+- `just initramfs-vdev` stages `/bin/busybox` (the image's `busybox-static`,
+  checked static with `file`), `/init`, the applet symlinks (installed under
+  `chroot` so they target `/bin/busybox`) and the `bin`, `sbin`, `proc`,
+  `sys`, `dev` directories in a container temp dir, then packs a gzipped
+  newc cpio to `out/initramfs.cpio.gz`. Always rebuilds; independent of the
+  kernel recipes.
 
 ## Debugging
 
@@ -125,8 +144,8 @@ restated, below.
 
 ## Repo layout
 
-- `justfile`, `vdev/justfile` (mounted at `/work/vdev`), `Containerfile`,
-  the project documents,
+- `justfile`, `vdev/justfile` and `vdev/initramfs/` (mounted at
+  `/work/vdev`), `Containerfile`, the project documents,
   `drivers/` (mounted at `/work/drivers`), `out/` (gitignored build output,
   mounted at `/work/out`), `.claude-temp/` (gitignored scratch).
 

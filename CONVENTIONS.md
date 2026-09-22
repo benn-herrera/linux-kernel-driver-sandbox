@@ -39,6 +39,9 @@
   `agent-user`. A host path can be bind-mounted only if `agent-user` has
   read and search permission on every directory from `/Users` down to it;
   traverse-only on an ancestor makes the mount fail with permission denied.
+- `/work/vdev` is read-only inside the container. A recipe there that
+  assembles files stages them in a container-local temp dir and writes only
+  to `/work/out`.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs

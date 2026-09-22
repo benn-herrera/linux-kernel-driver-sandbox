@@ -1,0 +1,8 @@
+#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+printf 'lkds: userspace reached\n'
+uname -r
+# setsid + cttyhack give sh a controlling tty on the console, so job control works.
+exec setsid cttyhack sh

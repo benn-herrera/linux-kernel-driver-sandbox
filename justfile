@@ -14,6 +14,8 @@ KERNEL_VOLUME := "lkds-kernel"
 DRIVERS_DIR := justfile_directory() / "drivers"
 OUT_DIR := justfile_directory() / "out"
 VDEV_DIR := justfile_directory() / "vdev"
+VTARGET_CPUS := "4"
+VTARGET_MEMORY := "2G"
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
 MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
 # The in-container runner; the only container path named outside MOUNTS.
@@ -103,6 +105,24 @@ kernel-build-vdev: machine-vdev
 [doc("make clean in the kernel tree (keeps .config); no-op if the tree is absent")]
 kernel-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} kernel-clean
+
+[doc("stage a busybox root with vdev/initramfs/init and pack it to out/initramfs.cpio.gz")]
+initramfs-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} initramfs
+  ls -l "{{OUT_DIR}}/initramfs.cpio.gz"
+
+# Test machine: boots out/ on the host under QEMU.
+
+[doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X)")]
+run-vtarget: host-check
+  #!/usr/bin/env bash
+  set -euo pipefail
+  [[ -f "{{OUT_DIR}}/Image" ]] || { printf "out/Image missing: run 'just kernel-build-vdev'\n" >&2; exit 1; }
+  [[ -f "{{OUT_DIR}}/initramfs.cpio.gz" ]] || { printf "out/initramfs.cpio.gz missing: run 'just initramfs-vdev'\n" >&2; exit 1; }
+  exec qemu-system-aarch64 -M virt -accel hvf -cpu host \
+    -smp "{{VTARGET_CPUS}}" -m "{{VTARGET_MEMORY}}" -nographic \
+    -kernel "{{OUT_DIR}}/Image" -initrd "{{OUT_DIR}}/initramfs.cpio.gz" \
+    -append 'console=ttyAMA0 earlycon panic=1' -no-reboot
 
 [doc("install or update the agent and command set under .claude/")]
 agents:

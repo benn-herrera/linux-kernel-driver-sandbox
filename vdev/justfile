@@ -55,3 +55,21 @@ kernel-clean:
     exit 0
   fi
   make -C "{{KERNEL_SRC}}" clean
+
+[doc("Stage a busybox root with /work/vdev/initramfs/init and pack it to OUT/initramfs.cpio.gz")]
+initramfs:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  busybox="$(command -v busybox)"
+  file -b "${busybox}" | grep -q 'statically linked' || { printf '%s is not statically linked\n' "${busybox}" >&2; exit 1; }
+  root="$(mktemp -d)"
+  trap 'rm -rf "${root}"' EXIT
+  mkdir -p "${root}/bin" "${root}/sbin" "${root}/proc" "${root}/sys" "${root}/dev"
+  cp "${busybox}" "${root}/bin/busybox"
+  cp /work/vdev/initramfs/init "${root}/init"
+  chmod 755 "${root}/init"
+  # busybox links applets to its own resolved path; chroot makes that /bin/busybox, as the guest sees it.
+  chroot "${root}" /bin/busybox --install -s /bin
+  cd "${root}"
+  find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
+  printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2
