@@ -1,6 +1,8 @@
 # Runs inside the build container, mounted read-only at /work/vdev.
 # Every path here is a container path.
 
+set positional-arguments
+
 KERNEL_VERSION := "7.2.7"
 KERNEL_SRC := "/kernel/linux-" + KERNEL_VERSION
 OUT := "/work/out"
@@ -154,3 +156,47 @@ initramfs:
   cd "${root}"
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
   printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2
+
+# Style tools: kernel coding style on both sides of an exercise.
+
+# Prints one *.c/*.h path per line under every ROOT/*/, or under ROOT/NAME/ for each ROOT
+# where it exists when NAME is set. kbuild's generated *.mod.c is excluded.
+[private]
+sources NAME +ROOTS:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shopt -s nullglob
+  name="${1}"
+  shift
+  [[ "${name}" != */* ]] || { printf '%s: a directory name, not a path\n' "${name}" >&2; exit 1; }
+  dirs=()
+  for root in "$@"; do
+    if [[ -z "${name}" ]]; then
+      dirs+=("${root}"/*/)
+    elif [[ -d "${root}/${name}" ]]; then
+      dirs+=("${root}/${name}")
+    fi
+  done
+  (( ${#dirs[@]} > 0 )) || { printf 'no directory %s under %s\n' "${name:-*/}" "$*" >&2; exit 1; }
+  files="$(find "${dirs[@]}" -type f \( -name '*.c' -o -name '*.h' \) ! -name '*.mod.c' | sort)"
+  [[ -n "${files}" ]] || { printf 'no *.c or *.h files under %s\n' "${dirs[*]}" >&2; exit 1; }
+  printf '%s\n' "${files}"
+
+[doc("Run the kernel tree's checkpatch.pl over every *.c and *.h under /work/drivers/*/ (or /work/drivers/NAME/); nonzero on any error or warning")]
+checkpatch NAME="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  [[ -f "{{KERNEL_SRC}}/scripts/checkpatch.pl" ]] || { printf "%s/scripts/checkpatch.pl missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
+  list="$(just --justfile "{{justfile()}}" sources "{{NAME}}" /work/drivers)"
+  mapfile -t files <<< "${list}"
+  "{{KERNEL_SRC}}/scripts/checkpatch.pl" --no-tree --terse -f "${files[@]}"
+
+[doc("Rewrite IN PLACE every *.c and *.h under /work/drivers/*/ and /work/userspace/*/ (or the NAME dir in each) with clang-format and the kernel tree's .clang-format")]
+format NAME="":
+  #!/usr/bin/env bash
+  set -euo pipefail
+  [[ -f "{{KERNEL_SRC}}/.clang-format" ]] || { printf "%s/.clang-format missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
+  list="$(just --justfile "{{justfile()}}" sources "{{NAME}}" /work/drivers /work/userspace)"
+  mapfile -t files <<< "${list}"
+  clang-format -i --style="file:{{KERNEL_SRC}}/.clang-format" "${files[@]}"
+  printf 'formatted %d files\n' "${#files[@]}" >&2

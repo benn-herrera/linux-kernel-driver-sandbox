@@ -17,6 +17,7 @@ OUT_DIR := justfile_directory() / "out"
 VDEV_DIR := justfile_directory() / "vdev"
 VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
+VTARGET_DEVICES := "edu"
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
 MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(USERSPACE_DIR + ":/work/userspace") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
 # The in-container runner; the only container path named outside MOUNTS.
@@ -130,16 +131,31 @@ userspace-vdev: machine-vdev
 userspace-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace-clean
 
+[doc("run the kernel tree's checkpatch.pl over drivers/ (or one driver dir by name); fails on any error or warning")]
+checkpatch-vdev *ARGS: machine-vdev
+  just run-vdev {{VDEV_JUST}} checkpatch "$@"
+
+[doc("rewrite drivers/ and userspace/ sources (or one dir name in each) in place with clang-format and the kernel tree's .clang-format")]
+format-vdev *ARGS: machine-vdev
+  just run-vdev {{VDEV_JUST}} format "$@"
+
 # Test machine: boots out/ on the host under QEMU.
 
-[doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X)")]
+[doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X); VTARGET_DEVICES is overridable on the command line, so `just VTARGET_DEVICES=\"\" run-vtarget` boots without any device")]
 run-vtarget: host-check
   #!/usr/bin/env bash
   set -euo pipefail
   [[ -f "{{OUT_DIR}}/Image" ]] || { printf "out/Image missing: run 'just kernel-build-vdev'\n" >&2; exit 1; }
   [[ -f "{{OUT_DIR}}/initramfs.cpio.gz" ]] || { printf "out/initramfs.cpio.gz missing: run 'just initramfs-vdev'\n" >&2; exit 1; }
+  # VTARGET_DEVICES is space-separated, so recipes interpolate it unquoted here: word-splitting is the point.
+  DEVICES=({{VTARGET_DEVICES}})
+  DEVICE_ARGS=()
+  for dev in ${DEVICES[@]+"${DEVICES[@]}"}; do
+    DEVICE_ARGS+=(-device "${dev}")
+  done
   exec qemu-system-aarch64 -M virt -accel hvf -cpu host \
     -smp "{{VTARGET_CPUS}}" -m "{{VTARGET_MEMORY}}" -nographic \
+    ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
     -kernel "{{OUT_DIR}}/Image" -initrd "{{OUT_DIR}}/initramfs.cpio.gz" \
     -append 'console=ttyAMA0 earlycon panic=1' -no-reboot
 

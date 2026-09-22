@@ -29,11 +29,13 @@ restated, below.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
   `kernel-build-vdev`, `kernel-clean-vdev`, `modules-vdev`,
   `modules-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
-  `initramfs-vdev`) depend on `machine-vdev` and
-  compose one line: `just run-vdev just --justfile /work/vdev/justfile
-  <name>`, where `<name>` is the root recipe's name with the `-vdev`
-  suffix removed. The recipe dependency chain (build needs config needs
-  fetch) lives in `vdev/justfile`, so one container run covers a workflow.
+  `initramfs-vdev`, `checkpatch-vdev`, `format-vdev`) depend on
+  `machine-vdev` and compose one line: `just run-vdev just --justfile
+  /work/vdev/justfile <name>`, where `<name>` is the root recipe's name
+  with the `-vdev` suffix removed; `checkpatch-vdev` and `format-vdev`
+  pass their arguments through. The recipe dependency chain (build needs
+  config needs fetch) lives in `vdev/justfile`, so one container run
+  covers a workflow.
 - Neither justfile carries staleness logic of its own.
 - Staleness ownership is split by target: kbuild owns kernel and module
   staleness; the podman build owns image layer caching; the
@@ -61,7 +63,8 @@ restated, below.
   `rustfmt`, `rust-clippy`) and bindgen 0.71 from trixie; GNU make, flex,
   bison, bc, libssl-dev, libelf-dev, libncurses-dev, python3, cpio, kmod,
   rsync, curl, busybox-static, gdb, pahole (dwarves), sparse, the
-  xz/zstd/lz4 compressors, and `just` (runs `vdev/justfile`).
+  xz/zstd/lz4 compressors, `clang-format` (same major as clang), and
+  `just` (runs `vdev/justfile`).
   `build-essential` remains in the image (GNU make, libc headers); with
   `LLVM=1` kbuild uses clang for both target and host objects.
 - Base image: `docker.io/library/debian:trixie-slim`. Built by
@@ -123,6 +126,11 @@ restated, below.
 - `just run-vtarget` runs host QEMU (`qemu-system-aarch64`): machine type
   `virt`, `-accel hvf`, `-cpu host`; CPUs and memory from the `VTARGET_CPUS`
   and `VTARGET_MEMORY` justfile variables.
+- Devices come from the `VTARGET_DEVICES` justfile variable, a space-separated
+  list of QEMU device names added as `-device <name>`; default `edu`, QEMU's
+  educational PCI device (vendor `0x1234`, device `0x11e8`, documented at
+  `docs/specs/edu.rst` in the QEMU tree). `just VTARGET_DEVICES="" run-vtarget`
+  boots with no device.
 - Headless (`-nographic`): the guest's serial console `ttyAMA0` is the
   terminal; `Ctrl-A X` exits. `earlycon` on the kernel command line.
 - `panic=1` on the command line with `-no-reboot`: a kernel panic ends the
@@ -185,8 +193,22 @@ restated, below.
   `just userspace-clean-vdev` runs the matching `clean` and removes
   `out/userspace/`.
 - `just initramfs-vdev` places the binaries at `/usr/bin/` in the guest,
-  which is on busybox's default `PATH`. `userspace/matx_mock/` is the the
-  first text exercise.
+  which is on busybox's default `PATH`. `userspace/matx_mock/` is the
+  first test exercise.
+
+## Style tools
+
+- `just checkpatch-vdev [name]` runs the kernel tree's
+  `scripts/checkpatch.pl --no-tree --terse -f` over every `*.c` and `*.h`
+  under `drivers/*/`, or under `drivers/<name>/` only. Its exit status is
+  checkpatch's own: nonzero on any error or warning. It fails naming
+  `kernel-fetch` when the tree is absent.
+- `just format-vdev [name]` runs `clang-format -i` with the tree's
+  `.clang-format` over every `*.c` and `*.h` under `drivers/*/` and
+  `userspace/*/`, or under the `<name>` directory in each, so both sides of
+  an exercise share kernel style. It rewrites files in place.
+- Both skip kbuild's generated `*.mod.c`. The file list comes from the
+  private `sources` recipe in `vdev/justfile`.
 
 ## Repo layout
 

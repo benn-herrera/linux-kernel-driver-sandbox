@@ -23,6 +23,12 @@
   `machine-vdev` and `machine-stop-vdev` manage the Podman VM from the
   host; the suffix names what they act on.
 
+## Style
+
+- Driver and userspace sources follow kernel coding style. `format-vdev`
+  applies it; `checkpatch-vdev` must be clean before a driver change is
+  considered done.
+
 ## Build environment
 
 - A Podman machine is per-account state. This project's machine belongs to
@@ -46,6 +52,9 @@
   fragments merged over defconfig and debug.config by `kernel-config`.
   `.config` is never edited by hand; a change to a fragment is followed by
   `kernel-config-vdev` and a rebuild.
+- A module build leaves kbuild artifacts, including the generated
+  `<name>.mod.c`, inside `drivers/<name>/`. A recipe that globs sources
+  there excludes them.
 - A `userspace/<name>/Makefile` is a plain Makefile that takes `CC` and
   `OUT`, produces static binaries, and writes only under `OUT`. It is not a
   kbuild fragment.

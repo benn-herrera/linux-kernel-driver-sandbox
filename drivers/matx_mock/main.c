@@ -9,12 +9,12 @@
 
 static int __init matx_mock_init(void)
 {
-	return mmd_init();
+	return mxm_init();
 }
 
 static void __exit matx_mock_exit(void)
 {
-  return mmd_exit();
+	return mxm_exit();
 }
 
 module_init(matx_mock_init);

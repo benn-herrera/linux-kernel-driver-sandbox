@@ -9,6 +9,7 @@ RUN apt-get update \
     busybox-static \
     ca-certificates \
     clang \
+    clang-format \
     cpio \
     curl \
     dwarves \
