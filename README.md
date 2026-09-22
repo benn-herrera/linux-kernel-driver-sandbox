@@ -5,19 +5,23 @@ The human writes the kernel code. Agent assistance is limited to project setup a
 
 ## Platform
 
-macOS on Apple Silicon only, deliberately. There is no intention of
-cross-platform portability. 
+### Host
 
-### Virtual Machines
+This project is set up for macOS on Apple Silicon and makes no pretensions to portability.
+That said, this is a *Linux* kernel driver sandbox. If one was developing on Linux directly 
+the Podman virtualized dev machine would be unnecessary, and the pieces here could fairly easily
+be re-arranged to work.
 
-- vdev: podman-run virtual Debian Linux ARM64 dev machine
+### Virtualized Machines
+
+- vdev: Podman-run virtual Debian Linux ARM64 dev machine
   - image defined by `./Containerfile`
   - builds a Debian kernel with Rust enabled (once)
   - builds driver projects (C and/or Rust)
   - builds userspace test applications (any project that builds a statically linked executable)
-- vtarget: qemu-run virtual ARM64 test target
+- vtarget: QEMU-run virtual ARM64 test target
   - boots the Debian image built by vdev (`./out/Image`), minimal ramfs/busybox setup
-  - drivers and userspace programs built on vdev are all available following boot
+  - drivers and userspace programs built on vdev are available following boot
 
 ## Two layers
 
@@ -31,10 +35,7 @@ which describe it in full.
 **The exercises** are the driver work itself. Each exercise is a triplet:
 `exercises/<name>/` holds the exercise's own SPEC.md and ARCHITECTURE.md,
 `drivers/<name>/` holds the kernel module and its kbuild Makefile, and
-`userspace/<name>/` holds a static test program with a plain Makefile. The
-current exercise is `matx_mock`, a mock accelerator driver that binds to
-QEMU's `edu` PCI device as a stand-in until a custom device model exists —
-see `exercises/matx_mock/SPEC.md` for the register map.
+`userspace/<name>/` holds a static test program with a plain Makefile.
 
 ## Getting started
 
