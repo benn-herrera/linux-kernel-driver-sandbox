@@ -1,9 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * main: matx_mock driver entry point source file
+ * main: driver entry point
  */
 #include "common.h"
-#include <linux/module.h>
 
 static int __init matx_mock_init(void)
 {

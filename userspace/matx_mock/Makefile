@@ -2,7 +2,7 @@ ifeq ($(strip $(OUT)),)
 $(error OUT is not set: make OUT=<dir>)
 endif
 
-CFLAGS := -g -Wall -Wextra
+CFLAGS := -g -Wall -Wextra -I /work/drivers
 
 NAME := matx_mock
 SRCS := $(wildcard *.c)

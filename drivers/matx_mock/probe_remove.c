@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * probe_remove: device setup/shutdown cycle
+ */
 #include "common.h"
 #include <linux/slab.h>
 
@@ -23,14 +26,16 @@ int mxm_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 				     "iomap region failed.\n");
 
 	mxmid = ioread32(pmxm->regs + MXM_REG_ID);
-	pci_set_master(pdev);
 	dev_info(&pdev->dev, "id %#010x\n", mxmid);
 
+	// dma setup
+	pci_set_master(pdev);
 	error = dma_set_mask_and_coherent(&pdev->dev, MXM_DMA_MASK);
 	if (error)
 		return dev_err_probe(&pdev->dev, error,
 				     "dma set mask failed.\n");
 
+	// assign driver data pointer for access by other driver functions
 	pci_set_drvdata(pdev, pmxm);
 
 	return 0;

@@ -5,8 +5,10 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 
+#include "mxm_ioctl.h"
+
 //
-// macros and constants
+// enums and macro constants
 //
 #define MXM_NAME "matx_mock"
 #define MXM_VENDOR_ID 0x1234
@@ -25,6 +27,18 @@ enum mxm_register {
 	MXM_REG_DMA_DEST = 0x88,
 	MXM_REG_DMA_COUNT = 0x90,
 	MXM_REG_DMA_COMMAND = 0x98
+};
+
+enum mxm_dma_command_bit {
+	MXM_DMA_COMMAND_BIT_START = 0x01,
+	MXM_DMA_COMMAND_BIT_DIRECTION = 0x02,
+	MXM_DMA_COMMAND_BIT_RAISE_INTERRUPT = 0x04,
+	MXM_DMA_COMMAND_BIT_COMPLETION = 0x100
+};
+
+enum mxm_dma_direction {
+	MXM_DMA_DIRECTION_RAM_TO_DEVICE = 0,
+	MXM_DMA_DIRECTION_DEVICE_TO_RAM = 1
 };
 
 //
@@ -46,3 +60,8 @@ extern void mxm_exit(void);
 // activation cycle
 extern int mxm_probe(struct pci_dev *pdev, const struct pci_device_id *id);
 extern void mxm_remove(struct pci_dev *pdev);
+
+// DMA operations
+extern int mxm_dma_host_to_device(struct pci_dev *pdev, const void *src,
+				  u64 dest);
+extern int mxm_dma_device_to_host(struct pci_dev *pdev, u64 src, void *dst);

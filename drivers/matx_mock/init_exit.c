@@ -1,4 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * init_exit:  driver life cycle
+ */
 #include "common.h"
 #include <linux/init.h>
 #include <linux/printk.h>
