@@ -25,9 +25,9 @@
 
 ## Style
 
-- Driver and userspace sources follow kernel coding style. `format-vdev`
-  applies it; `checkpatch-vdev` must be clean before a driver change is
-  considered done.
+- Driver and userspace sources follow kernel coding style. `format` (on
+  the host) applies it; `checkpatch-vdev` must be clean before a driver
+  change is considered done.
 
 ## Build environment
 
@@ -45,19 +45,19 @@
   `agent-user`. A host path can be bind-mounted only if `agent-user` has
   read and search permission on every directory from `/Users` down to it;
   traverse-only on an ancestor makes the mount fail with permission denied.
-- `/work/vdev` is read-only inside the container. A recipe there that
+- `/work/drivers`, `/work/userspace` and `/work/vdev` are read-only inside
+  the container; `/work/out` is the only writable mount. A recipe that
   assembles files stages them in a container-local temp dir and writes only
-  to `/work/out`.
+  to `/work/out`. Module builds pass `MO=` so kbuild's artifacts land there
+  too.
 - Kernel configuration choices live in `vdev/kernel-config/*.config`
   fragments merged over defconfig and debug.config by `kernel-config`.
   `.config` is never edited by hand; a change to a fragment is followed by
   `kernel-config-vdev` and a rebuild.
-- A module build leaves kbuild artifacts, including the generated
-  `<name>.mod.c`, inside `drivers/<name>/`. A recipe that globs sources
-  there excludes them.
 - A `userspace/<name>/Makefile` is a plain Makefile that takes `CC` and
-  `OUT`, produces static binaries, and writes only under `OUT`. It is not a
-  kbuild fragment.
+  `OUT`, writes only under `OUT`, and produces the static binary
+  `$(OUT)/<name>`, named after its directory; anything else it writes
+  under `OUT` is intermediate. It is not a kbuild fragment.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs

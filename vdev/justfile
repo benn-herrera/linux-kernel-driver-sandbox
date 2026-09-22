@@ -9,7 +9,7 @@ OUT := "/work/out"
 # clang/LLVM for every kbuild invocation: the kernel's Rust support builds with LLVM.
 MAKE := "make LLVM=1"
 
-[doc("Download, verify and extract the pinned kernel source into the volume (no-op if present)")]
+[doc("download, verify and extract the pinned kernel source into the volume (no-op if present)")]
 kernel-fetch:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -29,7 +29,7 @@ kernel-fetch:
   rm -f "${tarball}" sha256sums.asc
   printf 'extracted to %s\n' "{{KERNEL_SRC}}" >&2
 
-[doc("Configure the kernel: defconfig, the debug.config fragment, then /work/vdev/kernel-config/*.config merged on top")]
+[doc("configure the kernel: defconfig, the debug.config fragment, then /work/vdev/kernel-config/*.config merged on top")]
 kernel-config: kernel-fetch
   #!/usr/bin/env bash
   set -euo pipefail
@@ -45,7 +45,7 @@ kernel-config: kernel-fetch
   # Kconfig drops CONFIG_RUST=y silently when RUST_IS_AVAILABLE is false; this is the only reliable signal.
   [[ "$(scripts/config --state RUST)" == "y" ]] || { printf "CONFIG_RUST did not survive: run '%s rustavailable' in %s\n" "{{MAKE}}" "{{KERNEL_SRC}}" >&2; exit 1; }
 
-[doc("Build the kernel Image and in-tree modules, and copy the Image to OUT/Image")]
+[doc("build the kernel Image and in-tree modules, and copy the Image to OUT/Image")]
 kernel-build: kernel-config
   #!/usr/bin/env bash
   set -euo pipefail
@@ -64,7 +64,7 @@ kernel-clean:
   fi
   {{MAKE}} -C "{{KERNEL_SRC}}" clean
 
-[doc("Build every out-of-tree module under /work/drivers/*/ with M= against the kernel tree; .ko files go to OUT/modules/")]
+[doc("build every out-of-tree module under /work/drivers/*/ with M= against the kernel tree; .ko files go to OUT/modules/")]
 modules: kernel-config
   #!/usr/bin/env bash
   set -euo pipefail
@@ -75,55 +75,49 @@ modules: kernel-config
   built=()
   for dir in /work/drivers/*/; do
     [[ -f "${dir}Makefile" ]] || continue
-    {{MAKE}} -C "{{KERNEL_SRC}}" M="${dir%/}" modules
-    for ko in "${dir}"*.ko; do
+    mo="{{OUT}}/modules-build/$(basename "${dir}")"
+    mkdir -p "${mo}"
+    {{MAKE}} -C "{{KERNEL_SRC}}" M="${dir%/}" MO="${mo}" modules
+    for ko in "${mo}"/*.ko; do
       cp "${ko}" "{{OUT}}/modules/"
       built+=("${ko##*/}")
     done
   done
   printf 'built %s/modules: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
 
-[doc("make clean in each /work/drivers/*/ module dir and remove OUT/modules/")]
+[doc("remove OUT/modules-build/ (the MO= build trees) and OUT/modules/")]
 modules-clean:
   #!/usr/bin/env bash
   set -euo pipefail
-  if [[ -d "{{KERNEL_SRC}}" ]]; then
-    for dir in /work/drivers/*/; do
-      [[ -f "${dir}Makefile" ]] || continue
-      {{MAKE}} -C "{{KERNEL_SRC}}" M="${dir%/}" clean
-    done
-  else
-    printf '%s absent; skipping module clean\n' "{{KERNEL_SRC}}" >&2
-  fi
-  rm -rf "{{OUT}}/modules"
+  rm -rf "{{OUT}}/modules-build" "{{OUT}}/modules"
 
-[doc("Build every program under /work/userspace/*/ as a static binary with clang; binaries go to OUT/userspace/")]
+[doc("build every program under /work/userspace/*/ as a static binary with clang; intermediates go to OUT/userspace-build/<name>/, the product OUT/userspace-build/<name>/<name> is copied to OUT/userspace/")]
 userspace:
   #!/usr/bin/env bash
   set -euo pipefail
   shopt -s nullglob
   rm -rf "{{OUT}}/userspace"
   mkdir -p "{{OUT}}/userspace"
+  built=()
   for dir in /work/userspace/*/; do
     [[ -f "${dir}Makefile" ]] || continue
-    make -C "${dir%/}" CC=clang OUT="{{OUT}}/userspace"
+    name="$(basename "${dir}")"
+    build="{{OUT}}/userspace-build/${name}"
+    mkdir -p "${build}"
+    make -C "${dir%/}" CC=clang OUT="${build}"
+    [[ -x "${build}/${name}" ]] || { printf '%s did not produce %s\n' "${dir}Makefile" "${build}/${name}" >&2; exit 1; }
+    cp "${build}/${name}" "{{OUT}}/userspace/"
+    built+=("${name}")
   done
-  built=("{{OUT}}/userspace"/*)
-  built=("${built[@]##*/}")
   printf 'built %s/userspace: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
 
-[doc("make clean in each /work/userspace/*/ program dir and remove OUT/userspace/")]
+[doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/")]
 userspace-clean:
   #!/usr/bin/env bash
   set -euo pipefail
-  shopt -s nullglob
-  for dir in /work/userspace/*/; do
-    [[ -f "${dir}Makefile" ]] || continue
-    make -C "${dir%/}" CC=clang OUT="{{OUT}}/userspace" clean
-  done
-  rm -rf "{{OUT}}/userspace"
+  rm -rf "{{OUT}}/userspace-build" "{{OUT}}/userspace"
 
-[doc("Stage a busybox root with /work/vdev/initramfs/init, any OUT/modules/*.ko at /lib/modules and any OUT/userspace/* at /usr/bin, and pack it to OUT/initramfs.cpio.gz")]
+[doc("stage a busybox root with /work/vdev/initramfs/init, any OUT/modules/*.ko at /lib/modules and any OUT/userspace/* at /usr/bin, and pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -157,46 +151,18 @@ initramfs:
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
   printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2
 
-# Style tools: kernel coding style on both sides of an exercise.
-
-# Prints one *.c/*.h path per line under every ROOT/*/, or under ROOT/NAME/ for each ROOT
-# where it exists when NAME is set. kbuild's generated *.mod.c is excluded.
-[private]
-sources NAME +ROOTS:
+[doc("copy the kernel tree's .clang-format to OUT/clang-format for the host-side format recipe")]
+export-clang-format:
   #!/usr/bin/env bash
   set -euo pipefail
-  shopt -s nullglob
-  name="${1}"
-  shift
-  [[ "${name}" != */* ]] || { printf '%s: a directory name, not a path\n' "${name}" >&2; exit 1; }
-  dirs=()
-  for root in "$@"; do
-    if [[ -z "${name}" ]]; then
-      dirs+=("${root}"/*/)
-    elif [[ -d "${root}/${name}" ]]; then
-      dirs+=("${root}/${name}")
-    fi
-  done
-  (( ${#dirs[@]} > 0 )) || { printf 'no directory %s under %s\n' "${name:-*/}" "$*" >&2; exit 1; }
-  files="$(find "${dirs[@]}" -type f \( -name '*.c' -o -name '*.h' \) ! -name '*.mod.c' | sort)"
-  [[ -n "${files}" ]] || { printf 'no *.c or *.h files under %s\n' "${dirs[*]}" >&2; exit 1; }
-  printf '%s\n' "${files}"
+  [[ -f "{{KERNEL_SRC}}/.clang-format" ]] || { printf "%s/.clang-format missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
+  cp -v "{{KERNEL_SRC}}/.clang-format" "{{OUT}}/clang-format"
 
-[doc("Run the kernel tree's checkpatch.pl over every *.c and *.h under /work/drivers/*/ (or /work/drivers/NAME/); nonzero on any error or warning")]
+[doc("run the kernel tree's checkpatch.pl over every *.c and *.h under /work/drivers/NAME/ (default: all); nonzero on any error or warning")]
 checkpatch NAME="":
   #!/usr/bin/env bash
   set -euo pipefail
   [[ -f "{{KERNEL_SRC}}/scripts/checkpatch.pl" ]] || { printf "%s/scripts/checkpatch.pl missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
-  list="$(just --justfile "{{justfile()}}" sources "{{NAME}}" /work/drivers)"
-  mapfile -t files <<< "${list}"
-  "{{KERNEL_SRC}}/scripts/checkpatch.pl" --no-tree --terse -f "${files[@]}"
-
-[doc("Rewrite IN PLACE every *.c and *.h under /work/drivers/*/ and /work/userspace/*/ (or the NAME dir in each) with clang-format and the kernel tree's .clang-format")]
-format NAME="":
-  #!/usr/bin/env bash
-  set -euo pipefail
-  [[ -f "{{KERNEL_SRC}}/.clang-format" ]] || { printf "%s/.clang-format missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
-  list="$(just --justfile "{{justfile()}}" sources "{{NAME}}" /work/drivers /work/userspace)"
-  mapfile -t files <<< "${list}"
-  clang-format -i --style="file:{{KERNEL_SRC}}/.clang-format" "${files[@]}"
-  printf 'formatted %d files\n' "${#files[@]}" >&2
+  find "/work/drivers/{{NAME}}" -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+    | xargs -0 "{{KERNEL_SRC}}/scripts/checkpatch.pl" --no-tree --terse -f
+  printf 'checkpatch: clean\n' >&2

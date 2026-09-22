@@ -17,9 +17,9 @@ OUT_DIR := justfile_directory() / "out"
 VDEV_DIR := justfile_directory() / "vdev"
 VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
-VTARGET_DEVICES := "edu"
+VTARGET_DEVICES := "edu,dma_mask=0xffffffff"
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
-MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers") + " -v " + quote(USERSPACE_DIR + ":/work/userspace") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
+MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers:ro") + " -v " + quote(USERSPACE_DIR + ":/work/userspace:ro") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
 # The in-container runner; the only container path named outside MOUNTS.
 VDEV_JUST := "just --justfile /work/vdev/justfile"
 
@@ -118,7 +118,7 @@ modules-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} modules
   ls -l "{{OUT_DIR}}/modules/"
 
-[doc("make clean in each drivers/ module dir and remove out/modules/")]
+[doc("remove out/modules-build/ (the MO= build trees) and out/modules/")]
 modules-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} modules-clean
 
@@ -127,7 +127,7 @@ userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace
   ls -l "{{OUT_DIR}}/userspace/"
 
-[doc("make clean in each userspace/ program dir and remove out/userspace/")]
+[doc("remove out/userspace-build/ (the intermediate trees) and out/userspace/")]
 userspace-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace-clean
 
@@ -135,9 +135,16 @@ userspace-clean-vdev: machine-vdev
 checkpatch-vdev *ARGS: machine-vdev
   just run-vdev {{VDEV_JUST}} checkpatch "$@"
 
-[doc("rewrite drivers/ and userspace/ sources (or one dir name in each) in place with clang-format and the kernel tree's .clang-format")]
-format-vdev *ARGS: machine-vdev
-  just run-vdev {{VDEV_JUST}} format "$@"
+[doc("copy the kernel's .clang-format to out/clang-format (no-op if present)")]
+export-clang-format-vdev *ARGS: machine-vdev
+  @[[ -f "{{OUT_DIR}}/clang-format" ]] || just run-vdev {{VDEV_JUST}} export-clang-format "$@"
+
+[doc("Rewrite IN PLACE every *.c and *.h under ./drivers/*/ and ./userspace/*/ with clang-format and the kernel tree's .clang-format")]
+format: export-clang-format-vdev
+  #!/usr/bin/env bash
+  set -euo pipefail
+  find ./drivers ./userspace -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
+  echo "formatted all drivers and userspace c sources"
 
 # Test machine: boots out/ on the host under QEMU.
 

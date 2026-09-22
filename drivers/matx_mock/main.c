@@ -2,10 +2,8 @@
 /*
  * main: matx_mock driver entry point source file
  */
-
-#include <linux/init.h>
-#include <linux/module.h>
 #include "common.h"
+#include <linux/module.h>
 
 static int __init matx_mock_init(void)
 {

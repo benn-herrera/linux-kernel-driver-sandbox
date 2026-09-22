@@ -85,10 +85,11 @@ restated, below.
   volume.
 - The named volume `KERNEL_VOLUME` (`lkds-kernel`) is mounted at `/kernel`,
   the container's working directory. Podman creates it on first use.
-- Four host directories are bind-mounted: `drivers/` at `/work/drivers`
-  (driver source), `userspace/` at `/work/userspace` (userspace program
-  source), `OUT_DIR` (`out/`) at `/work/out` (build output handed to the
-  host), and `vdev/` read-only at `/work/vdev` (the in-container justfile).
+- Four host directories are bind-mounted: `drivers/` read-only at
+  `/work/drivers` (driver source), `userspace/` read-only at
+  `/work/userspace` (userspace program source), `OUT_DIR` (`out/`) at
+  `/work/out` (the only writable mount: build output handed to the host),
+  and `vdev/` read-only at `/work/vdev` (the in-container justfile).
   `just run-vdev` and `just shell-vdev` create the first three on the host
   before mounting; the mount set is the `MOUNTS` variable in the root
   justfile.
@@ -171,12 +172,13 @@ restated, below.
   kbuild `Makefile` (`obj-m += <name>.o`). The kernel tree path and `M=`
   come from the recipe, not the Makefile.
 - `just modules-vdev` runs `make -C KERNEL_SRC M=/work/drivers/<name>
-  modules` for every `drivers/*/` with a `Makefile`, against the in-tree
-  build in the volume; it fails naming `kernel-build` if `Module.symvers`
-  is absent. The resulting `.ko` files are copied to `out/modules/` (stale
-  `.ko` files cleared first). `just modules-clean-vdev` runs the matching
-  `make M=... clean` and removes `out/modules/`.
-- kbuild artifacts under `drivers/` are ignored by `drivers/.gitignore`.
+  MO=/work/out/modules-build/<name> modules` for every `drivers/*/` with a
+  `Makefile`, against the in-tree build in the volume; it fails naming
+  `kernel-build` if `Module.symvers` is absent. `MO=` sends every kbuild
+  artifact to the output tree, so `drivers/` is never written and is
+  mounted read-only. The resulting `.ko` files are copied to `out/modules/`
+  (stale `.ko` files cleared first). `just modules-clean-vdev` removes
+  `out/modules-build/` and `out/modules/`.
 - `just initramfs-vdev` places the `.ko` files at `/lib/modules/` in the
   guest; load with `insmod /lib/modules/<name>.ko`, unload with `rmmod`.
   Modules are built for this kernel tree only, with no version
@@ -188,9 +190,11 @@ restated, below.
   plain GNU Makefile (not kbuild) that honours `CC` and `OUT`, writes only
   under `OUT`, and links `-static`: the guest has no shared libraries.
 - `just userspace-vdev` runs `make -C /work/userspace/<name> CC=clang
-  OUT=/work/out/userspace` for every `userspace/*/` with a `Makefile`, after
-  clearing `out/userspace/`. It does not depend on the kernel recipes.
-  `just userspace-clean-vdev` runs the matching `clean` and removes
+  OUT=/work/out/userspace-build/<name>` for every `userspace/*/` with a
+  `Makefile`, then copies the product `<name>` from that tree to
+  `out/userspace/`, which holds only what the initramfs ships (cleared
+  first). It does not depend on the kernel recipes.
+  `just userspace-clean-vdev` removes `out/userspace-build/` and
   `out/userspace/`.
 - `just initramfs-vdev` places the binaries at `/usr/bin/` in the guest,
   which is on busybox's default `PATH`. `userspace/matx_mock/` is the
@@ -203,12 +207,13 @@ restated, below.
   under `drivers/*/`, or under `drivers/<name>/` only. Its exit status is
   checkpatch's own: nonzero on any error or warning. It fails naming
   `kernel-fetch` when the tree is absent.
-- `just format-vdev [name]` runs `clang-format -i` with the tree's
-  `.clang-format` over every `*.c` and `*.h` under `drivers/*/` and
-  `userspace/*/`, or under the `<name>` directory in each, so both sides of
-  an exercise share kernel style. It rewrites files in place.
-- Both skip kbuild's generated `*.mod.c`. The file list comes from the
-  private `sources` recipe in `vdev/justfile`.
+- `just format` runs on the host: the Homebrew `clang-format` with the
+  kernel tree's `.clang-format`, exported to `out/clang-format` by
+  `just export-clang-format-vdev` (a prerequisite, no-op once present),
+  over every `*.c` and `*.h` under `drivers/` and `userspace/`, so both
+  sides of an exercise share kernel style. It rewrites files in place. It
+  runs on the host because a rewrite from inside the container replaces
+  the file with root's umask and drops the group-write bit the IDE needs.
 
 ## Repo layout
 
