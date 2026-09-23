@@ -4,5 +4,13 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 printf 'lkds: userspace reached\n'
 uname -r
+# lkds_test on the kernel command line (from `just test-vtarget`): run the suite,
+# report its exit status on its own line for the host, and power off.
+if grep -qw lkds_test /proc/cmdline; then
+  lkds-test
+  status=$?
+  printf 'lkds-test: exit %s\n' "${status}"
+  poweroff -f
+fi
 # setsid + cttyhack give sh a controlling tty on the console, so job control works.
 exec setsid cttyhack sh

@@ -157,6 +157,9 @@ initramfs:
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
   printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2
 
+[doc("build the modules and userspace programs and pack the initramfs, in one container")]
+stage: modules userspace initramfs
+
 [doc("copy the kernel tree's .clang-format to OUT/clang-format for the host-side format recipe")]
 export-clang-format:
   #!/usr/bin/env bash

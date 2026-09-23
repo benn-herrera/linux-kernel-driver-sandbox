@@ -36,6 +36,9 @@ restated, below.
   through. `format` runs on the host (see "Style tools"). The recipe dependency chain (build needs
   config needs fetch) lives in `vdev/justfile`, so one container run
   covers a workflow.
+- `just test` is one development iteration: `stage` in `vdev/justfile`
+  (modules, userspace, initramfs, one container run) followed by
+  `test-vtarget`. Its exit status is the guest's `lkds-test` result.
 - Neither justfile carries staleness logic of its own.
 - Staleness ownership is split by target: kbuild owns kernel and module
   staleness; the podman build owns image layer caching; the
@@ -75,7 +78,10 @@ restated, below.
 - The target is ARM64: the guest runs near-native under HVF on the Apple
   Silicon host. An x86_64 cross-gcc is added when that platform comes into
   scope.
-- Image and volume names carry the project prefix `lkds-`.
+- Image and volume names carry the project prefix `lkds-`, as do the
+  framework's artifacts inside the guest: the `init` marker line, the
+  `lkds-test` script and its `/etc/lkds/tests` manifest. Exercise names
+  stay with the exercise (`mxm_`).
 
 ## Storage
 
@@ -139,13 +145,29 @@ restated, below.
 - Inputs: `out/Image` and `out/initramfs.cpio.gz`, both produced in the
   container. The recipe fails naming the producing recipe when either is
   absent. No networking flags yet; QEMU's default applies.
+- `run-vtarget` and `test-vtarget` share one QEMU invocation, the private
+  `vtarget-qemu` recipe, which holds the input guards and takes the kernel
+  command line as its argument (`VTARGET_APPEND` is the default). It is a
+  nested `just` call, so the callers pass the `VTARGET_*` values through
+  explicitly (`VTARGET_QEMU`); a command-line override reaches it.
+- `just test-vtarget` boots with the marker word `lkds_test` appended to
+  the kernel command line, stdin from `/dev/null`. The kernel passes the
+  unrecognised word through to init, which runs `lkds-test`, prints
+  `lkds-test: exit <status>` and powers off, ending QEMU. The console is
+  echoed and saved to `out/vtarget-test.log` (truncated first). The recipe
+  passes only if that log contains `lkds-test: exit 0`; otherwise it prints
+  the `lkds-test:` lines and the log path and fails. A guest still running
+  after `VTARGET_TEST_TIMEOUT` seconds (justfile variable, default 120) is
+  killed and the recipe fails naming the log.
 - x86_64, later, boots the same way under TCG emulation with no
   acceleration.
 
 ### Initramfs
 
 - `vdev/initramfs/init`, a POSIX sh script: mounts proc, sysfs and devtmpfs,
-  prints the marker `lkds: userspace reached` and `uname -r`, then
+  prints the marker `lkds: userspace reached` and `uname -r`, then, if
+  `lkds_test` is a word of `/proc/cmdline`, runs `lkds-test`, prints
+  `lkds-test: exit <status>` and `poweroff -f` (see "Boot"); otherwise
   `exec setsid cttyhack sh` for a shell with job control on the console.
 - `just initramfs-vdev` stages `/bin/busybox` (the image's `busybox-static`,
   checked static with `file`), `/init`, the applet symlinks (installed under

@@ -74,3 +74,11 @@
   UART exists and is lost. A scripted console session waits for the shell
   prompt before sending its first line, and lets the last command's output
   drain before its timeout ends QEMU, or the final line is lost.
+- The guest reports a test run to the host through one line on the
+  console, `lkds-test: exit N`, printed by `init` after `lkds-test`
+  returns. `test-vtarget` passes only on `exit 0`; nothing else in the
+  console output is a contract.
+- A command-line variable override (`just VAR=value recipe`) does not
+  reach a `just` invoked from inside a recipe. A root recipe that invokes
+  `just` recursively passes every overridable variable it depends on
+  explicitly as `VAR=value` arguments, the way `VTARGET_QEMU` does.

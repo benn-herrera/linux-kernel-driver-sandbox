@@ -18,6 +18,11 @@ VDEV_DIR := justfile_directory() / "vdev"
 VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
 VTARGET_DEVICES := "edu,dma_mask=0xffffffff"
+VTARGET_APPEND := "console=ttyAMA0 earlycon panic=1"
+VTARGET_TEST_TIMEOUT := "120"
+# Command-line overrides never reach a nested just, so the boot recipe is invoked with the VTARGET_* values passed explicitly.
+# Each is shell-quoted here, so recipes interpolate VTARGET_QEMU unquoted.
+VTARGET_QEMU := "just " + quote("VTARGET_CPUS=" + VTARGET_CPUS) + " " + quote("VTARGET_MEMORY=" + VTARGET_MEMORY) + " " + quote("VTARGET_DEVICES=" + VTARGET_DEVICES) + " vtarget-qemu"
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
 MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers:ro") + " -v " + quote(USERSPACE_DIR + ":/work/userspace:ro") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
 # The in-container runner; the only container path named outside MOUNTS.
@@ -146,10 +151,11 @@ format: export-clang-format-vdev
   find ./drivers -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
   echo "formatted all drivers and userspace c sources"
 
-# Test machine: boots out/ on the host under QEMU.
+# Test machine: boots out/ on the host under QEMU. run-vtarget and test-vtarget share vtarget-qemu.
 
-[doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X); VTARGET_DEVICES is overridable on the command line, so `just VTARGET_DEVICES=\"\" run-vtarget` boots without any device")]
-run-vtarget: host-check
+# The one QEMU invocation: guards the inputs, then execs QEMU with APPEND as the kernel command line.
+[private]
+vtarget-qemu APPEND:
   #!/usr/bin/env bash
   set -euo pipefail
   [[ -f "{{OUT_DIR}}/Image" ]] || { printf "out/Image missing: run 'just kernel-build-vdev'\n" >&2; exit 1; }
@@ -164,7 +170,41 @@ run-vtarget: host-check
     -smp "{{VTARGET_CPUS}}" -m "{{VTARGET_MEMORY}}" -nographic \
     ${DEVICE_ARGS[@]+"${DEVICE_ARGS[@]}"} \
     -kernel "{{OUT_DIR}}/Image" -initrd "{{OUT_DIR}}/initramfs.cpio.gz" \
-    -append 'console=ttyAMA0 earlycon panic=1' -no-reboot
+    -append "${1}" -no-reboot
+
+[doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X); VTARGET_DEVICES is overridable on the command line, so `just VTARGET_DEVICES=\"\" run-vtarget` boots without any device")]
+run-vtarget: host-check
+  exec {{VTARGET_QEMU}} "{{VTARGET_APPEND}}"
+
+[doc("boot with lkds_test on the kernel command line: the guest runs lkds-test and powers off; console echoed and saved to out/vtarget-test.log; passes only if the guest reports 'lkds-test: exit 0'; a guest still running after VTARGET_TEST_TIMEOUT seconds is killed and fails")]
+test-vtarget: host-check
+  #!/usr/bin/env bash
+  set -euo pipefail
+  [[ "{{VTARGET_TEST_TIMEOUT}}" =~ ^[0-9]+$ ]] || { printf "VTARGET_TEST_TIMEOUT must be a whole number of seconds, got '{{VTARGET_TEST_TIMEOUT}}'\n" >&2; exit 1; }
+  log="{{OUT_DIR}}/vtarget-test.log"
+  : > "${log}"
+  # -m: each background job leads its own process group, so one kill reaches the nested just and QEMU.
+  set -m
+  ( set +m; {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" ) &
+  guest=$!
+  ( set +m; sleep "{{VTARGET_TEST_TIMEOUT}}"; printf 'test-vtarget: guest still running after {{VTARGET_TEST_TIMEOUT}} s; killing it (log: %s)\n' "${log}" >&2; kill -TERM -- -"${guest}" ) &
+  watchdog=$!
+  # disown and the wait redirect drop bash's "Terminated" job notices; the watchdog reports a timeout itself.
+  disown "${watchdog}"
+  wait "${guest}" 2>/dev/null || true
+  kill -TERM -- -"${watchdog}" 2>/dev/null || true
+  if grep -qw 'lkds-test: exit 0' "${log}"; then
+    printf 'test-vtarget: passed (log: %s)\n' "${log}" >&2
+    exit 0
+  fi
+  grep 'lkds-test:' "${log}" | tr -d '\r' >&2 || true
+  printf 'test-vtarget: failed (log: %s)\n' "${log}" >&2
+  exit 1
+
+[doc("one dev iteration: build modules, userspace and initramfs in one container, then boot and run lkds-test")]
+test: machine-vdev
+  just run-vdev {{VDEV_JUST}} stage
+  just test-vtarget
 
 [doc("install or update the agent and command set under .claude/")]
 agents:

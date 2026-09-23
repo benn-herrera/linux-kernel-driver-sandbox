@@ -39,13 +39,13 @@ which describe it in full.
 
 ## Getting started
 
-Install host tools:
+### Install host tools
 
 ```
 brew install just podman qemu clang-format
 ```
 
-From a fresh clone:
+### From a fresh clone
 
 ```
 just machine-vdev
@@ -57,16 +57,25 @@ just initramfs-vdev
 just run-vtarget         # exit with Ctrl-A X
 ```
 
-At the vtarget prompt:
+### At the vtarget prompt
 
+load and test all drivers:
+```
+/usr/bin/lkds-test
+```
+(`just test-vtarget` on the host boots the target, runs it and reports the result; console log in `out/vtarget-test.log`)
+
+individual driver test:
 ```
 insmod /lib/modules/<driver-name>.ko
 dmesg
 /usr/bin/<test-program-name>
 ```
 
+### Additional deets
+
 `just format` and `just checkpatch-vdev` apply and check kernel style on
-driver and userspace sources. `just --list` is the authoritative recipe
+driver sources. `just --list` is the authoritative recipe
 list; ARCHITECTURE.md explains what each piece does and how they fit
 together.
 
