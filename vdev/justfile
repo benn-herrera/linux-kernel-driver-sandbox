@@ -117,7 +117,7 @@ userspace-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/userspace-build" "{{OUT}}/userspace"
 
-[doc("stage a busybox root with /work/vdev/initramfs/init, any OUT/modules/*.ko at /lib/modules and any OUT/userspace/* at /usr/bin, and pack it to OUT/initramfs.cpio.gz")]
+[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test at /usr/bin, any OUT/modules/*.ko at /lib/modules and any OUT/userspace/* at /usr/bin (recorded as an /etc/lkds/tests manifest), and pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -139,11 +139,17 @@ initramfs:
   else
     printf '%s/modules absent; building initramfs without modules\n' "{{OUT}}" >&2
   fi
+  mkdir -p "${root}/usr/bin"
+  install -m 755 /work/vdev/initramfs/lkds-test "${root}/usr/bin/lkds-test"
   if [[ -d "{{OUT}}/userspace" ]]; then
-    mkdir -p "${root}/usr/bin"
+    staged=()
     for bin in "{{OUT}}/userspace"/*; do
-      [[ -f "${bin}" ]] && install -m 755 "${bin}" "${root}/usr/bin/"
+      [[ -f "${bin}" ]] || continue
+      install -m 755 "${bin}" "${root}/usr/bin/"
+      staged+=("$(basename "${bin}")")
     done
+    mkdir -p "${root}/etc/lkds"
+    printf '%s\n' "${staged[@]}" > "${root}/etc/lkds/tests"
   else
     printf '%s/userspace absent; building initramfs without userspace programs\n' "{{OUT}}" >&2
   fi

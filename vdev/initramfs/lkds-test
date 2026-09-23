@@ -1,0 +1,41 @@
+#!/bin/sh
+set -u
+
+loaded=0
+passed=0
+failed=0
+
+for ko in /lib/modules/*.ko; do
+  [ -e "${ko}" ] || continue
+  name="${ko##*/}"
+  name="${name%.ko}"
+  loaded=$((loaded + 1))
+  if insmod "${ko}"; then
+    printf 'load %s: ok\n' "${name}"
+  else
+    rc=$?
+    printf 'load %s: FAIL (%s)\n' "${name}" "${rc}"
+  fi
+done
+
+tests_file=/etc/lkds/tests
+if [ -f "${tests_file}" ]; then
+  while IFS= read -r test_name || [ -n "${test_name}" ]; do
+    [ -n "${test_name}" ] || continue
+    echo "running ${test_name}..."
+    if "${test_name}"; then
+      printf 'test %s: ok\n' "${test_name}"
+      passed=$((passed + 1))
+    else
+      rc=$?
+      printf 'test %s: FAIL (%s)\n' "${test_name}" "${rc}"
+      failed=$((failed + 1))
+    fi
+    echo ""
+  done < "${tests_file}"
+else
+  printf 'lkds-test: %s absent; running 0 tests\n' "${tests_file}" >&2
+fi
+
+printf 'lkds-test: %s loaded, %s passed, %s failed\n' "${loaded}" "${passed}" "${failed}"
+[ "${failed}" -eq 0 ]

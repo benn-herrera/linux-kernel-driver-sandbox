@@ -29,11 +29,11 @@ restated, below.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
   `kernel-build-vdev`, `kernel-clean-vdev`, `modules-vdev`,
   `modules-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
-  `initramfs-vdev`, `checkpatch-vdev`, `format-vdev`) depend on
-  `machine-vdev` and compose one line: `just run-vdev just --justfile
+  `initramfs-vdev`, `checkpatch-vdev`, `export-clang-format-vdev`) depend
+  on `machine-vdev` and compose one line: `just run-vdev just --justfile
   /work/vdev/justfile <name>`, where `<name>` is the root recipe's name
-  with the `-vdev` suffix removed; `checkpatch-vdev` and `format-vdev`
-  pass their arguments through. The recipe dependency chain (build needs
+  with the `-vdev` suffix removed; `checkpatch-vdev` passes its arguments
+  through. `format` runs on the host (see "Style tools"). The recipe dependency chain (build needs
   config needs fetch) lives in `vdev/justfile`, so one container run
   covers a workflow.
 - Neither justfile carries staleness logic of its own.
@@ -158,6 +158,13 @@ restated, below.
 - If `out/userspace/` exists, every file in it is staged executable at
   `/usr/bin/`; otherwise the archive is built without userspace programs
   and says so on stderr.
+- `vdev/initramfs/lkds-test`, staged executable at `/usr/bin/lkds-test`,
+  always: loads every `.ko` staged at `/lib/modules/`, runs every command
+  named in the `/etc/lkds/tests` manifest, and prints a one-line summary.
+  Exits 0 if every test passed, 1 if any failed.
+- `/etc/lkds/tests` lists the basename of every program `initramfs-vdev`
+  staged from `out/userspace/`, one per line; it is written only when
+  `out/userspace/` existed at staging time.
 
 ## Debugging
 
