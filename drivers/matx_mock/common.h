@@ -2,6 +2,9 @@
 #pragma once
 
 #include <linux/dma-mapping.h>
+#include <linux/errno.h>
+#include <linux/fs.h>
+#include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 
@@ -47,6 +50,7 @@ enum mxm_dma_direction {
 struct mxm_dev {
 	struct pci_dev *pdev;
 	void __iomem *regs;
+	struct miscdevice miscdev;
 };
 
 //
@@ -60,6 +64,11 @@ extern void mxm_exit(void);
 // activation cycle
 extern int mxm_probe(struct pci_dev *pdev, const struct pci_device_id *id);
 extern void mxm_remove(struct pci_dev *pdev);
+
+// file descriptor operations
+extern int mxm_open(struct inode *inode, struct file *file);
+extern int mxm_release(struct inode *inode, struct file *file);
+extern long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 
 // DMA operations
 extern int mxm_dma_host_to_device(struct pci_dev *pdev, const void *src,
