@@ -161,6 +161,11 @@ restated, below.
   run wraps the recipe in an external `timeout`.
 - x86_64, later, boots the same way under TCG emulation with no
   acceleration.
+- Dynamic programs in the guest, later: the initramfs recipe stages the
+  loader and the shared libraries `ldd` names for each dynamic binary,
+  copied from the same image that built them. This is the tier between the
+  static busybox root and a full Debian root, and what an interpreter such
+  as LuaJIT needs.
 
 ### Initramfs
 

@@ -3,7 +3,8 @@
 A driver for a small PCI compute device: probe and teardown, a
 character-device ABI, interrupt-driven compute, DMA, concurrent callers,
 and multiple device instances. The device is QEMU's `edu`, whose
-register map follows. ROADMAP.md lists what remains.
+register map follows. The Roadmap section of ARCHITECTURE.md beside this
+file lists what remains.
 
 ## Device: QEMU `edu`
 
