@@ -4,6 +4,7 @@
  */
 #include "common.h"
 #include <linux/uaccess.h>
+#include <linux/cleanup.h>
 
 struct mxm_file {
 	struct mxm_dev *mxm;
@@ -80,10 +81,8 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		if (get_user(val, (__u32 __user *)arg))
 			return -EFAULT;
 
-		result = mutex_lock_interruptible(&mfile->mxm->compute_lock);
-		if (result < 0)
-			return -EFAULT;
-		// THIS BLOCK IS A LOCKED CRITICAL SECTION. MUST NOT RETURN.
+		scoped_cond_guard(mutex_intr, return -ERESTARTSYS,
+				  &mfile->mxm->compute_lock)
 		{
 			reinit_completion(&mfile->mxm->compute_done);
 			iowrite32(MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION,
@@ -91,15 +90,12 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			iowrite32(val, mfile->mxm->regs + MXM_REG_COMPUTE);
 			result = wait_for_completion_interruptible_timeout(
 				&mfile->mxm->compute_done, HZ);
-			if (result > 0) {
-				val = ioread32(mfile->mxm->regs +
-					       MXM_REG_COMPUTE);
-				result = 0;
-			} else
-				result = (result == 0) ? -ETIMEDOUT :
-							 -ERESTARTSYS;
+			if (result <= 0)
+				return (result == 0) ? -ETIMEDOUT :
+						       -ERESTARTSYS;
+			val = ioread32(mfile->mxm->regs + MXM_REG_COMPUTE);
+			result = 0;
 		}
-		mutex_unlock(&mfile->mxm->compute_lock);
 
 		if (put_user(val, (__u32 __user *)arg))
 			return -EFAULT;
