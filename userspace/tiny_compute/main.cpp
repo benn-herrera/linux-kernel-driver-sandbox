@@ -48,7 +48,9 @@ int main(void) {
     } else {
       printf("ABI version: 0x%08x\n", tcd.abi_version);
       printf("device ID: 0x%08x\n", tcd.device_id);
-      printf("capabilitiy flags: 0x%016llx\n", tcd.flags);
+      printf("dma buf size: %llu\n", tcd.dma_buf_size);
+      printf("dma alignment: %u\n", tcd.dma_alignment);
+      printf("capabilitiy flags: 0x%08x\n", tcd.flags);
       if (!tcd.abi_version || !tcd.device_id) {
         fprintf(stderr, "invalid abi_version and/or device_id - both expected to be non-zero.\n");
         result = 1;

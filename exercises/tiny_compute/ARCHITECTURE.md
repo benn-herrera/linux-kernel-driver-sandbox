@@ -16,8 +16,8 @@
 
 ### Driver Test – userspace/tiny_compute
 
-- tiny_compute.cpp: test program that exercises the tiny_compute driver ABI
-- Makefile: userspace project C/C++ makefile (100% generic and copyable)
+- main.cpp: test program that exercises the tiny_compute driver ABI
+- Makefile: single line consumer of `../cpp.mk`, generic C++ userspace project Makefile
 
 ## Project Design
 
@@ -67,13 +67,13 @@
 - proper dmsg logging
 - A Rust port of the driver.
 - Driver-side device mocking to present additional design considerations to ABI and surfaces to userspace.
+  - will build on existing IRQ and DMA mechanisms
+  - computation will be mocked and placed into device buffer, user will have to fetch them via normal mechanism
+  - will blend device handling logic in the driver with more sophisticated 'compute device' ABI offered to userland 
 - Removal while open: `misc_deregister` does not close open files, so an
   ioctl can run after `remove` (reachable via sysfs `unbind`). A removed
   flag in `tcd_dev`, set in `remove` under the operation locks and checked
   by every ioctl (`-ENODEV`), plus the adversarial test that exercises it.
-  - will build on existing IRQ and DMA mechanisms
-  - computation will be mocked and placed into device buffer, user will have to fetch them via normal mechanism
-  - will blend device handling logic in the driver with more sophisticated 'compute device' ABI offered to userland 
 
 ### DMA Burndown
 

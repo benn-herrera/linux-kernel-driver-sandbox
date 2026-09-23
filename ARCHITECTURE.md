@@ -4,10 +4,8 @@
 > list of recipes; a recipe named here that is not listed there is a
 > documentation defect.
 
-Consumer-facing outcomes belong to SPEC.md; this document covers how this
-implementation meets them. Podman-machine ownership and the Homebrew
-install-failure contract are defined in CONVENTIONS.md and are cited, not
-restated, below.
+Podman-machine ownership and the Homebrew install-failure contract are 
+defined in CONVENTIONS.md and are cited, not restated, below.
 
 ## Host
 
