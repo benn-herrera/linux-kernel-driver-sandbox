@@ -139,11 +139,11 @@ checkpatch-vdev *ARGS: machine-vdev
 export-clang-format-vdev *ARGS: machine-vdev
   @[[ -f "{{OUT_DIR}}/clang-format" ]] || just run-vdev {{VDEV_JUST}} export-clang-format "$@"
 
-[doc("Rewrite IN PLACE every *.c and *.h under ./drivers/*/ and ./userspace/*/ with clang-format and the kernel tree's .clang-format")]
+[doc("Rewrite IN PLACE every *.c and *.h under ./drivers/*/ with clang-format and the kernel tree's .clang-format")]
 format: export-clang-format-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  find ./drivers ./userspace -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
+  find ./drivers -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
   echo "formatted all drivers and userspace c sources"
 
 # Test machine: boots out/ on the host under QEMU.

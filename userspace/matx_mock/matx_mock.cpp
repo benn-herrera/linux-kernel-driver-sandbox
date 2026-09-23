@@ -5,7 +5,7 @@
 
 #include <stdio.h>
 #include <sys/utsname.h>
-#include "matx_mock/mxm_ioctl.h"
+#include <matx_mock/mxm_ioctl.h>
 
 int main(void)
 {

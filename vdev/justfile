@@ -104,7 +104,7 @@ userspace:
     name="$(basename "${dir}")"
     build="{{OUT}}/userspace-build/${name}"
     mkdir -p "${build}"
-    make -C "${dir%/}" CC=clang OUT="${build}"
+    make -C "${dir%/}" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/drivers
     [[ -x "${build}/${name}" ]] || { printf '%s did not produce %s\n' "${dir}Makefile" "${build}/${name}" >&2; exit 1; }
     cp "${build}/${name}" "{{OUT}}/userspace/"
     built+=("${name}")

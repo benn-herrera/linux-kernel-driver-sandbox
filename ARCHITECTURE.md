@@ -190,7 +190,8 @@ restated, below.
   plain GNU Makefile (not kbuild) that honours `CC` and `OUT`, writes only
   under `OUT`, and links `-static`: the guest has no shared libraries.
 - `just userspace-vdev` runs `make -C /work/userspace/<name> CC=clang
-  OUT=/work/out/userspace-build/<name>` for every `userspace/*/` with a
+  CXX=clang++ OUT=/work/out/userspace-build/<name>
+  DRIVER_INCLUDE=/work/drivers` for every `userspace/*/` with a
   `Makefile`, then copies the product `<name>` from that tree to
   `out/userspace/`, which holds only what the initramfs ships (cleared
   first). It does not depend on the kernel recipes.
