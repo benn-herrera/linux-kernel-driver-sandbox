@@ -156,9 +156,9 @@ restated, below.
   `lkds-test: exit <status>` and powers off, ending QEMU. The console is
   echoed and saved to `out/vtarget-test.log` (truncated first). The recipe
   passes only if that log contains `lkds-test: exit 0`; otherwise it prints
-  the `lkds-test:` lines and the log path and fails. A guest still running
-  after `VTARGET_TEST_TIMEOUT` seconds (justfile variable, default 120) is
-  killed and the recipe fails naming the log.
+  the `lkds-test:` lines and the log path and fails. There is no watchdog:
+  a hung guest is stopped with Ctrl-C at the terminal, and an unattended
+  run wraps the recipe in an external `timeout`.
 - x86_64, later, boots the same way under TCG emulation with no
   acceleration.
 

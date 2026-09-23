@@ -19,7 +19,6 @@ VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
 VTARGET_DEVICES := "edu,dma_mask=0xffffffff"
 VTARGET_APPEND := "console=ttyAMA0 earlycon panic=1"
-VTARGET_TEST_TIMEOUT := "120"
 # Command-line overrides never reach a nested just, so the boot recipe is invoked with the VTARGET_* values passed explicitly.
 # Each is shell-quoted here, so recipes interpolate VTARGET_QEMU unquoted.
 VTARGET_QEMU := "just " + quote("VTARGET_CPUS=" + VTARGET_CPUS) + " " + quote("VTARGET_MEMORY=" + VTARGET_MEMORY) + " " + quote("VTARGET_DEVICES=" + VTARGET_DEVICES) + " vtarget-qemu"
@@ -176,23 +175,13 @@ vtarget-qemu APPEND:
 run-vtarget: host-check
   exec {{VTARGET_QEMU}} "{{VTARGET_APPEND}}"
 
-[doc("boot with lkds_test on the kernel command line: the guest runs lkds-test and powers off; console echoed and saved to out/vtarget-test.log; passes only if the guest reports 'lkds-test: exit 0'; a guest still running after VTARGET_TEST_TIMEOUT seconds is killed and fails")]
+[doc("boot with lkds_test on the kernel command line: the guest runs lkds-test and powers off; console echoed and saved to out/vtarget-test.log; passes only if the guest reports 'lkds-test: exit 0'; Ctrl-C stops a hung guest")]
 test-vtarget: host-check
   #!/usr/bin/env bash
   set -euo pipefail
-  [[ "{{VTARGET_TEST_TIMEOUT}}" =~ ^[0-9]+$ ]] || { printf "VTARGET_TEST_TIMEOUT must be a whole number of seconds, got '{{VTARGET_TEST_TIMEOUT}}'\n" >&2; exit 1; }
   log="{{OUT_DIR}}/vtarget-test.log"
-  : > "${log}"
-  # -m: each background job leads its own process group, so one kill reaches the nested just and QEMU.
-  set -m
-  ( set +m; {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" ) &
-  guest=$!
-  ( set +m; sleep "{{VTARGET_TEST_TIMEOUT}}"; printf 'test-vtarget: guest still running after {{VTARGET_TEST_TIMEOUT}} s; killing it (log: %s)\n' "${log}" >&2; kill -TERM -- -"${guest}" ) &
-  watchdog=$!
-  # disown and the wait redirect drop bash's "Terminated" job notices; the watchdog reports a timeout itself.
-  disown "${watchdog}"
-  wait "${guest}" 2>/dev/null || true
-  kill -TERM -- -"${watchdog}" 2>/dev/null || true
+  # sed expressions filter out the many pages of normal boot output before arriving at userspace and the shutdown after testing
+  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" | sed -ne '/^lkds: userspace reached/,$ p' | sed '/^lkds-test: exit/q' || true
   if grep -qw 'lkds-test: exit 0' "${log}"; then
     printf 'test-vtarget: passed (log: %s)\n' "${log}" >&2
     exit 0
@@ -206,7 +195,8 @@ precommit: format checkpatch-vdev
 
 [doc("build modules, userspace, initramfs in vdev")]
 stage-vdev: machine-vdev
-  just run-vdev {{VDEV_JUST}} stage
+  # filtering out all of the kernel config spam. logging starts at make execution.
+  just run-vdev {{VDEV_JUST}} stage | sed -ne '/^make: Entering directory/,$p'
 
 [doc("one dev iteration: build modules, userspace and initramfs in vdev, then boot vtarget and run lkds-test")]
 test: machine-vdev

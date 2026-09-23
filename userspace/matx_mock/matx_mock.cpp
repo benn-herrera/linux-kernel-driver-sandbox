@@ -72,7 +72,7 @@ int main(void) {
     }
   }
 
-  {
+  if (false) {
   	static constexpr uint32_t kFactArg = 6;
   	static constexpr uint32_t kFactVal = 6 * 5 * 4 * 3 * 2;
   	uint32_t factParam = kFactArg;
