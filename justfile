@@ -195,7 +195,8 @@ precommit: format checkpatch-vdev
 
 [doc("build modules, userspace, initramfs in vdev")]
 stage-vdev: machine-vdev
-  # filtering out all of the kernel config spam. logging starts at make execution.
+  #!/usr/bin/env bash
+  set -euo pipefail
   just run-vdev {{VDEV_JUST}} stage | sed -ne '/^make: Entering directory/,$p'
 
 [doc("one dev iteration: build modules, userspace and initramfs in vdev, then boot vtarget and run lkds-test")]
