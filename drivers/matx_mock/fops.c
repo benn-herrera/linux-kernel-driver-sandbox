@@ -63,13 +63,13 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case MXM_IOC_LIVENESS: {
 		u32 val = 0;
 
-		if (get_user(val, (__u32 __user *)arg))
+		if (get_user(val, (u32 __user *)arg))
 			return -EFAULT;
 
 		iowrite32(val, mfile->mxm->regs + MXM_REG_LIVENESS);
 		val = ioread32(mfile->mxm->regs + MXM_REG_LIVENESS);
 
-		if (put_user(val, (__u32 __user *)arg))
+		if (put_user(val, (u32 __user *)arg))
 			return -EFAULT;
 
 		return 0;
@@ -78,7 +78,7 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		u32 val = 0;
 		int result = 0;
 
-		if (get_user(val, (__u32 __user *)arg))
+		if (get_user(val, (u32 __user *)arg))
 			return -EFAULT;
 
 		scoped_cond_guard(mutex_intr, return -ERESTARTSYS,
@@ -97,7 +97,7 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			result = 0;
 		}
 
-		if (put_user(val, (__u32 __user *)arg))
+		if (put_user(val, (u32 __user *)arg))
 			return -EFAULT;
 
 		return 0;
