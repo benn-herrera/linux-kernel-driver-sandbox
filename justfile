@@ -171,6 +171,20 @@ vtarget-qemu APPEND:
     -kernel "{{OUT_DIR}}/Image" -initrd "{{OUT_DIR}}/initramfs.cpio.gz" \
     -append "${1}" -no-reboot
 
+[private]
+run-test-vtarget:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  log="{{OUT_DIR}}/vtarget-test.log"
+  # the sed range shows only the window from userspace up to the verdict line; the full console is in the log
+  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" || true
+  if grep -qw 'lkds-test: exit 0' "${log}"; then
+    printf 'test-vtarget: passed (log: %s)\n' "${log}" >&2
+    exit 0
+  fi
+  printf 'test-vtarget: failed (log: %s)\n' "${log}" >&2
+  exit 1
+
 [doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X); VTARGET_DEVICES is overridable on the command line, so `just VTARGET_DEVICES=\"\" run-vtarget` boots without any device")]
 run-vtarget: host-check
   exec {{VTARGET_QEMU}} "{{VTARGET_APPEND}}"
@@ -179,15 +193,13 @@ run-vtarget: host-check
 test-vtarget: host-check
   #!/usr/bin/env bash
   set -euo pipefail
-  log="{{OUT_DIR}}/vtarget-test.log"
-  # the sed range shows only the window from userspace up to the verdict line; the full console is in the log
-  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" | sed -n '/^lkds: userspace reached/,/^lkds-test: exit/p' || true
-  if grep -qw 'lkds-test: exit 0' "${log}"; then
-    printf 'test-vtarget: passed (log: %s)\n' "${log}" >&2
-    exit 0
-  fi
-  printf 'test-vtarget: failed (log: %s)\n' "${log}" >&2
-  exit 1
+  #just run-test-vtarget | sed -n '/^lkds: userspace reached/,/^lkds-test: exit/p'
+  stdbuf -oL -eL just run-test-vtarget 2>&1 | awk '
+      /^lkds-test: exit/ { print $0; exit(0); }
+      /^lkds: userspace reached/ { p = 1; print ""; }
+      p || /error|Error|warning/  { print; next; }
+      { d = d + 1; if (d == 80) { printf ".\n"; d = 0; } else { printf "." } fflush(); }
+      END { if (!p) print "" }'
 
 [doc("format module sources and check for kernel coding standard compliance")]
 precommit: format checkpatch-vdev
