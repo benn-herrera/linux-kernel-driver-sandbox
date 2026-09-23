@@ -73,29 +73,33 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		return 0;
 	}
-	case MXM_IOC_FACTORIAL: {
+	case MXM_IOC_COMPUTE: {
 		u32 val = 0;
-		u32 status = 0;
+		int result = 0;
 
 		if (get_user(val, (__u32 __user *)arg))
 			return -EFAULT;
 
-		status = ioread32(mfile->mxm->regs + MXM_REG_STATUS);
-		if (status & MXM_COMPUTE_STATUS_BIT_WORKING) {
-			// already working.
+		result = mutex_lock_interruptible(&mfile->mxm->compute_lock);
+		if (result < 0)
 			return -EFAULT;
+		// THIS BLOCK IS A LOCKED CRITICAL SECTION. MUST NOT RETURN.
+		{
+			reinit_completion(&mfile->mxm->compute_done);
+			iowrite32(MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION,
+				  mfile->mxm->regs + MXM_REG_STATUS);
+			iowrite32(val, mfile->mxm->regs + MXM_REG_COMPUTE);
+			result = wait_for_completion_interruptible_timeout(
+				&mfile->mxm->compute_done, HZ);
+			if (result > 0) {
+				val = ioread32(mfile->mxm->regs +
+					       MXM_REG_COMPUTE);
+				result = 0;
+			} else
+				result = (result == 0) ? -ETIMEDOUT :
+							 -ERESTARTSYS;
 		}
-
-		// write the argument
-		iowrite32(val, mfile->mxm->regs + MXM_REG_FACTORIAL);
-
-		// preserve existing status, add request for an interrupt on completion
-		status = ioread32(mfile->mxm->regs + MXM_REG_STATUS) |
-			 MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION;
-		iowrite32(status, mfile->mxm->regs + MXM_REG_STATUS);
-
-		// interrupt handler needed!
-		//val = ioread32(mfile->mxm->regs + MXM_REG_FACTORIAL);
+		mutex_unlock(&mfile->mxm->compute_lock);
 
 		if (put_user(val, (__u32 __user *)arg))
 			return -EFAULT;

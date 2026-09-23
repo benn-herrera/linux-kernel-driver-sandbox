@@ -17,7 +17,7 @@
 #define MXM_IOC_MAGIC 0x8d /* 0x81 + 'M' - 'A'*/
 #define MXM_IOC_INFO _IOR(MXM_IOC_MAGIC, 0x00, struct mxm_info)
 #define MXM_IOC_LIVENESS _IOWR(MXM_IOC_MAGIC, 0x01, __u32)
-#define MXM_IOC_FACTORIAL _IOWR(MXM_IOC_MAGIC, 0x02, __u32)
+#define MXM_IOC_COMPUTE _IOWR(MXM_IOC_MAGIC, 0x02, __u32)
 #define MXM_IOC_TEST_IRQ _IOW(MXM_IOC_MAGIC, 0x03, __u32)
 
 // structures

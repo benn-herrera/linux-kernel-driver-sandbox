@@ -13,13 +13,12 @@ int mxm_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 							 .unlocked_ioctl =
 								 mxm_ioctl };
 
-	struct mxm_dev *pmxm = NULL;
+	struct mxm_dev *mxm = NULL;
 	int error = 0;
-	u32 mxmid = 0;
 
 	// lifetime managed by device. mxm_remove does not need to deallocate
-	pmxm = devm_kzalloc(&pdev->dev, sizeof(*pmxm), GFP_KERNEL);
-	if (!pmxm)
+	mxm = devm_kzalloc(&pdev->dev, sizeof(*mxm), GFP_KERNEL);
+	if (!mxm)
 		return dev_err_probe(&pdev->dev, -ENOMEM, "out of memory.\n");
 
 	// basic setup - enable, read the BARs
@@ -27,42 +26,71 @@ int mxm_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	if (error)
 		return dev_err_probe(&pdev->dev, error, "enable failed.\n");
 
-	pmxm->regs = pcim_iomap_region(pdev, 0, MXM_NAME);
-	if (IS_ERR(pmxm->regs))
-		return dev_err_probe(&pdev->dev, PTR_ERR(pmxm->regs),
+	mxm->regs = pcim_iomap_region(pdev, 0, MXM_NAME);
+	if (IS_ERR(mxm->regs))
+		return dev_err_probe(&pdev->dev, PTR_ERR(mxm->regs),
 				     "iomap region failed.\n");
 
-	mxmid = ioread32(pmxm->regs + MXM_REG_ID);
-	dev_info(&pdev->dev, "id %#010x\n", mxmid);
+	mxm->pdev = pdev;
+
+	{
+		u32 mxmid = ioread32(mxm->regs + MXM_REG_ID);
+
+		dev_info(&pdev->dev, "id %#010x\n", mxmid);
+	}
 
 	// dma setup
 	pci_set_master(pdev);
 	error = dma_set_mask_and_coherent(&pdev->dev, MXM_DMA_MASK);
-	if (error) {
+	if (error)
 		return dev_err_probe(&pdev->dev, error,
 				     "dma set mask failed.\n");
+
+	// device-scoped interrupt handler completion
+	init_completion(&mxm->compute_done);
+	init_completion(&mxm->dma_done);
+	mutex_init(&mxm->compute_lock);
+	mutex_init(&mxm->dma_lock);
+	error = pci_alloc_irq_vectors(pdev, 1, 1, PCI_IRQ_ALL_TYPES);
+	if (error < 0)
+		return dev_err_probe(&pdev->dev, error,
+				     "pci irq vector allocation failed.\n");
+
+	mxm->irq = pci_irq_vector(pdev, 0);
+	error = request_irq(mxm->irq, mxm_irq, IRQF_SHARED, KBUILD_MODNAME,
+			    mxm);
+	if (error) {
+		pci_free_irq_vectors(pdev);
+		return dev_err_probe(&pdev->dev, error,
+				     "request irq failed.\n");
 	}
 
 	// misc device file descriptor operations registration
 	// requires matching unregister in remove()
-	pmxm->miscdev.name = KBUILD_MODNAME;
-	pmxm->miscdev.minor = MISC_DYNAMIC_MINOR;
-	pmxm->miscdev.fops = &mxm_fops;
-	error = misc_register(&pmxm->miscdev);
-	if (error)
+	mxm->miscdev.name = KBUILD_MODNAME;
+	mxm->miscdev.minor = MISC_DYNAMIC_MINOR;
+	mxm->miscdev.fops = &mxm_fops;
+	error = misc_register(&mxm->miscdev);
+	if (error) {
+		free_irq(mxm->irq, mxm);
+		pci_free_irq_vectors(pdev);
 		return dev_err_probe(&pdev->dev, error,
 				     "misc registration failed.\n");
+	}
 
 	// assign driver data pointer for access by other driver functions
-	pci_set_drvdata(pdev, pmxm);
+	pci_set_drvdata(pdev, mxm);
 
 	return 0;
 }
 
 void mxm_remove(struct pci_dev *pdev)
 {
-	struct mxm_dev *pmxm = pci_get_drvdata(pdev);
+	struct mxm_dev *mxm = pci_get_drvdata(pdev);
 
-	if (pmxm)
-		misc_deregister(&pmxm->miscdev);
+	if (mxm) {
+		misc_deregister(&mxm->miscdev);
+		free_irq(mxm->irq, mxm);
+		pci_free_irq_vectors(pdev);
+	}
 }

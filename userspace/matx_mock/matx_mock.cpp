@@ -72,18 +72,18 @@ int main(void) {
     }
   }
 
-  if (false) {
+  {
   	static constexpr uint32_t kFactArg = 6;
   	static constexpr uint32_t kFactVal = 6 * 5 * 4 * 3 * 2;
   	uint32_t factParam = kFactArg;
-  	if (ioctl(fd, MXM_IOC_FACTORIAL, IOC_PARAM(factParam))) {
-      fprintf(stderr, "ioctl failed running factorial of %d: %s\n", factParam, strerror(errno));
+  	if (ioctl(fd, MXM_IOC_COMPUTE, IOC_PARAM(factParam))) {
+      fprintf(stderr, "ioctl failed running compute [factorial(%d)]: %s\n", factParam, strerror(errno));
       result = 1;
   	} else {
      	const bool factCorrect = factParam == kFactVal;
      	printf("factorial(%u): %u success: %s\n", kFactArg, factParam, boolstr(factCorrect));
      	if (!factCorrect) {
-     	  fprintf(stderr, "expected factorial(%u) to be %u\n", kFactArg, kFactVal);
+     	  fprintf(stderr, "expected compute factorial(%u) to produce %u\n", kFactArg, kFactVal);
         result = 1;
      	}
     }
