@@ -60,9 +60,10 @@
 - DMA through the edu device.
 - A multi-threaded test program exercising the per-device locks.
 - Multiple device instances with per-instance device nodes.
-- A Rust port of the driver.
 - A C wrapper library over the ioctl ABI (`userspace/libtcd/`), consumed by
   the test program and shaped for foreign-function binding.
 - A LuaJIT binding to that library through its FFI, running in the guest
   (needs the dynamic-library initramfs tier; see the root ARCHITECTURE.md).
+- proper dmsg logging
+- A Rust port of the driver.
 - A custom QEMU device model as a possible later exercise.

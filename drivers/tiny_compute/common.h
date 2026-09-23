@@ -21,6 +21,9 @@
 #define TCD_DEVICE_ID 0x11e8
 #define TCD_DMA_MASK DMA_BIT_MASK(32)
 
+#define TCD_DMA_BUF_SIZE 4096
+#define TCD_DMA_ALIGNMENT 16
+
 enum tcd_register {
 	TCD_REG_ID = 0x00,
 	TCD_REG_LIVENESS = 0x04,

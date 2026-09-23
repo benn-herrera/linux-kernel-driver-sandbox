@@ -3,6 +3,7 @@
  * fops: live device file descriptor operations
  */
 #include "common.h"
+#include "tcd_ioctl.h"
 #include <linux/uaccess.h>
 #include <linux/cleanup.h>
 
@@ -53,7 +54,9 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		info.abi_version = TCD_ABI_VERSION;
 		info.device_id = ioread32(mfile->tcd->regs + TCD_REG_ID);
-		info.flags = 0ull;
+		info.dma_buf_size = TCD_DMA_BUF_SIZE;
+		info.dma_alignment = TCD_DMA_ALIGNMENT;
+		info.flags = TCD_DEVICE_CAP_ALL;
 
 		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
 			return -EFAULT;
