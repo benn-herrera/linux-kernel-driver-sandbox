@@ -4,8 +4,8 @@
  */
 #include "common.h"
 #include "tcd_ioctl.h"
-#include <linux/uaccess.h>
 #include <linux/cleanup.h>
+#include <linux/uaccess.h>
 
 struct tcd_file {
 	struct tcd_dev *tcd;
@@ -104,6 +104,26 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			return -EFAULT;
 
 		return 0;
+	}
+	case TCD_IOC_DMA_FROM_DEVICE: {
+		struct tcd_dma_req dma_req = {};
+
+		if (copy_from_user(&dma_req, (const void *)arg,
+				   sizeof(dma_req)))
+			return -EFAULT;
+		return tcd_dma_from_device(mfile->tcd, dma_req.dev_offset,
+					   u64_to_user_ptr(dma_req.ubuf),
+					   dma_req.count);
+	}
+	case TCD_IOC_DMA_TO_DEVICE: {
+		struct tcd_dma_req dma_req = {};
+
+		if (copy_from_user(&dma_req, (const void *)arg,
+				   sizeof(dma_req)))
+			return -EFAULT;
+		return tcd_dma_to_device(mfile->tcd,
+					 u64_to_user_ptr(dma_req.ubuf),
+					 dma_req.dev_offset, dma_req.count);
 	}
 	default:
 		break;

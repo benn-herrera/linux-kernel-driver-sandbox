@@ -21,8 +21,9 @@
 #define TCD_DEVICE_ID 0x11e8
 #define TCD_DMA_MASK DMA_BIT_MASK(32)
 
-#define TCD_DMA_BUF_SIZE 4096
+#define TCD_DMA_BUF_SIZE 4096ull
 #define TCD_DMA_ALIGNMENT 16
+#define TCD_DMA_DEVICE_BUF 0x40000ull
 
 enum tcd_register {
 	TCD_REG_ID = 0x00,
@@ -55,13 +56,20 @@ enum tcd_irq_value {
 };
 
 enum tcd_dma_direction {
-	TCD_DMA_DIRECTION_RAM_TO_DEVICE = 0,
-	TCD_DMA_DIRECTION_DEVICE_TO_RAM = 1,
+	TCD_DMA_TO_DEVICE = 0,
+	TCD_DMA_FROM_DEVICE = 1,
 };
 
 //
 // structures
 //
+
+struct tcd_dma_buf {
+	void *cpu;
+	dma_addr_t dma;
+	size_t size;
+};
+
 struct tcd_dev {
 	struct pci_dev *pdev;
 	void __iomem *regs;
@@ -70,6 +78,8 @@ struct tcd_dev {
 	struct completion compute_done;
 	struct mutex dma_lock;
 	struct completion dma_done;
+	struct tcd_dma_buf dma_from_device;
+	struct tcd_dma_buf dma_to_device;
 	int irq;
 };
 
@@ -94,6 +104,7 @@ extern long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
 extern irqreturn_t tcd_irq(int irq, void *dev_id);
 
 // DMA operations
-extern int tcd_dma_host_to_device(struct pci_dev *pdev, const void *src,
-				  u64 dest);
-extern int tcd_dma_device_to_host(struct pci_dev *pdev, u64 src, void *dst);
+extern int tcd_dma_to_device(struct tcd_dev *tcd, const void __user *src,
+			     u64 dst, u64 count);
+extern int tcd_dma_from_device(struct tcd_dev *tcd, u64 src, void __user *dst,
+			       u64 count);
