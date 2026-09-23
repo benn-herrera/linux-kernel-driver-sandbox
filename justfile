@@ -22,6 +22,9 @@ VTARGET_APPEND := "console=ttyAMA0 earlycon panic=1"
 # Command-line overrides never reach a nested just, so the boot recipe is invoked with the VTARGET_* values passed explicitly.
 # Each is shell-quoted here, so recipes interpolate VTARGET_QEMU unquoted.
 VTARGET_QEMU := "just " + quote("VTARGET_CPUS=" + VTARGET_CPUS) + " " + quote("VTARGET_MEMORY=" + VTARGET_MEMORY) + " " + quote("VTARGET_DEVICES=" + VTARGET_DEVICES) + " vtarget-qemu"
+# one-shot testing target output
+VTARGET_TEST_LOG := OUT_DIR / "vtarget-test.log"
+
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
 MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers:ro") + " -v " + quote(USERSPACE_DIR + ":/work/userspace:ro") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
 # The in-container runner; the only container path named outside MOUNTS.
@@ -175,14 +178,11 @@ vtarget-qemu APPEND:
 run-test-vtarget:
   #!/usr/bin/env bash
   set -euo pipefail
-  log="{{OUT_DIR}}/vtarget-test.log"
   # the sed range shows only the window from userspace up to the verdict line; the full console is in the log
-  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" || true
-  if grep -qw 'lkds-test: exit 0' "${log}"; then
-    printf 'test-vtarget: passed (log: %s)\n' "${log}" >&2
+  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "{{VTARGET_TEST_LOG}}" || true
+  if grep -qw 'lkds-test: exit 0' "{{VTARGET_TEST_LOG}}"; then
     exit 0
   fi
-  printf 'test-vtarget: failed (log: %s)\n' "${log}" >&2
   exit 1
 
 [doc("boot out/Image with out/initramfs.cpio.gz headless under qemu on the serial console (exit: Ctrl-A X); VTARGET_DEVICES is overridable on the command line, so `just VTARGET_DEVICES=\"\" run-vtarget` boots without any device")]
@@ -195,11 +195,12 @@ test-vtarget: host-check
   set -euo pipefail
   #just run-test-vtarget | sed -n '/^lkds: userspace reached/,/^lkds-test: exit/p'
   stdbuf -oL -eL just run-test-vtarget 2>&1 | awk '
-      /^lkds-test: exit/ { print $0; exit(0); }
+      /^lkds-test: exit / { print $0; exit(0); }
       /^lkds: userspace reached/ { p = 1; print ""; }
       p || /error|Error|warning/  { print; next; }
       { d = d + 1; if (d == 80) { printf ".\n"; d = 0; } else { printf "." } fflush(); }
       END { if (!p) print "" }'
+  printf 'log: %s\n' "{{VTARGET_TEST_LOG}}"
 
 [doc("format module sources and check for kernel coding standard compliance")]
 precommit: format checkpatch-vdev
