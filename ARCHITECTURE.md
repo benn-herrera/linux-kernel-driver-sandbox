@@ -81,7 +81,7 @@ restated, below.
 - Image and volume names carry the project prefix `lkds-`, as do the
   framework's artifacts inside the guest: the `init` marker line, the
   `lkds-test` script and its `/etc/lkds/tests` manifest. Exercise names
-  stay with the exercise (`mxm_`).
+  stay with the exercise (`tcd_`).
 
 ## Storage
 
@@ -227,7 +227,7 @@ restated, below.
   `just userspace-clean-vdev` removes `out/userspace-build/` and
   `out/userspace/`.
 - `just initramfs-vdev` places the binaries at `/usr/bin/` in the guest,
-  which is on busybox's default `PATH`. `userspace/matx_mock/` is the
+  which is on busybox's default `PATH`. `userspace/tiny_compute/` is the
   first test exercise.
 
 ## Style tools
@@ -249,9 +249,9 @@ restated, below.
 
 - `justfile`, `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`
   (mounted at `/work/vdev`), `Containerfile`, the project documents,
-  `drivers/` (mounted at `/work/drivers`; `drivers/matx_mock/` is the first
+  `drivers/` (mounted at `/work/drivers`; `drivers/tiny_compute/` is the first
   user exercise driver), `userspace/` (mounted at
-  `/work/userspace`; `userspace/matx_mock/` is the driver test), `out/`
+  `/work/userspace`; `userspace/tiny_compute/` is the driver test), `out/`
   (gitignored build output, mounted at `/work/out`), `.claude-temp/`
   (gitignored scratch).
 

@@ -1,16 +1,17 @@
-# SPEC – matx_mock
+# SPEC – tiny_compute
 
-A driver for a mock MatX variable systolic array device analogue.
-The mock device will take broad stabs at what might be present on the real thing and try to simulate some of the concerns a real driver might have to address.
+A driver for a small PCI compute device: probe and teardown, a
+character-device ABI, interrupt-driven compute, DMA, concurrent callers,
+and multiple device instances. The device is QEMU's `edu`, whose
+register map follows. ROADMAP.md lists what remains.
 
-## Stand-in device: QEMU `edu`
+## Device: QEMU `edu`
 
-Until the mock device model exists, the driver binds to QEMU's `edu` device,
-which `just run-vtarget` attaches by default (`VTARGET_DEVICES`). This section
-transcribes `docs/specs/edu.rst` from the QEMU v11.1.1 tree (the installed
-version), copyright 2014-2015 Jiri Slaby, GPLv2 or later. The register map
-below is the whole hardware interface; when the mock device replaces `edu`,
-this section is replaced by the mock's map.
+The driver binds to QEMU's `edu` device, which `just run-vtarget` attaches
+by default (`VTARGET_DEVICES`). This section transcribes `docs/specs/edu.rst`
+from the QEMU v11.1.1 tree (the installed version), copyright 2014-2015 Jiri
+Slaby, GPLv2 or later. The register map below is the whole hardware
+interface.
 
 ### PCI identification
 

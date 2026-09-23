@@ -6,30 +6,30 @@
 #include <linux/uaccess.h>
 #include <linux/cleanup.h>
 
-struct mxm_file {
-	struct mxm_dev *mxm;
+struct tcd_file {
+	struct tcd_dev *tcd;
 	// other stuff will go here eventually
 };
 
-int mxm_open(struct inode *inode, struct file *file)
+int tcd_open(struct inode *inode, struct file *file)
 {
-	struct mxm_dev *pdev =
-		container_of(file->private_data, struct mxm_dev, miscdev);
-	struct mxm_file *mfile = NULL;
+	struct tcd_dev *pdev =
+		container_of(file->private_data, struct tcd_dev, miscdev);
+	struct tcd_file *mfile = NULL;
 
-	mfile = kzalloc_obj(struct mxm_file, GFP_KERNEL);
+	mfile = kzalloc_obj(struct tcd_file, GFP_KERNEL);
 	if (!mfile)
 		return -ENOMEM;
 
-	mfile->mxm = pdev;
+	mfile->tcd = pdev;
 	file->private_data = mfile;
 
 	return 0;
 }
 
-int mxm_release(struct inode *inode, struct file *file)
+int tcd_release(struct inode *inode, struct file *file)
 {
-	struct mxm_file *mfile = file->private_data;
+	struct tcd_file *mfile = file->private_data;
 
 	if (!mfile)
 		return -EFAULT;
@@ -40,19 +40,19 @@ int mxm_release(struct inode *inode, struct file *file)
 	return 0;
 }
 
-long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	struct mxm_file *mfile = file->private_data;
+	struct tcd_file *mfile = file->private_data;
 
 	if (!mfile)
 		return -EFAULT;
 
 	switch (cmd) {
-	case MXM_IOC_INFO: {
-		struct mxm_info info = {};
+	case TCD_IOC_INFO: {
+		struct tcd_info info = {};
 
-		info.abi_version = MXM_ABI_VERSION;
-		info.device_id = ioread32(mfile->mxm->regs + MXM_REG_ID);
+		info.abi_version = TCD_ABI_VERSION;
+		info.device_id = ioread32(mfile->tcd->regs + TCD_REG_ID);
 		info.flags = 0ull;
 
 		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
@@ -60,21 +60,21 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		return 0;
 	}
-	case MXM_IOC_LIVENESS: {
+	case TCD_IOC_LIVENESS: {
 		u32 val = 0;
 
 		if (get_user(val, (u32 __user *)arg))
 			return -EFAULT;
 
-		iowrite32(val, mfile->mxm->regs + MXM_REG_LIVENESS);
-		val = ioread32(mfile->mxm->regs + MXM_REG_LIVENESS);
+		iowrite32(val, mfile->tcd->regs + TCD_REG_LIVENESS);
+		val = ioread32(mfile->tcd->regs + TCD_REG_LIVENESS);
 
 		if (put_user(val, (u32 __user *)arg))
 			return -EFAULT;
 
 		return 0;
 	}
-	case MXM_IOC_COMPUTE: {
+	case TCD_IOC_COMPUTE: {
 		u32 val = 0;
 		int result = 0;
 
@@ -82,18 +82,18 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			return -EFAULT;
 
 		scoped_cond_guard(mutex_intr, return -ERESTARTSYS,
-				  &mfile->mxm->compute_lock)
+				  &mfile->tcd->compute_lock)
 		{
-			reinit_completion(&mfile->mxm->compute_done);
-			iowrite32(MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION,
-				  mfile->mxm->regs + MXM_REG_STATUS);
-			iowrite32(val, mfile->mxm->regs + MXM_REG_COMPUTE);
+			reinit_completion(&mfile->tcd->compute_done);
+			iowrite32(TCD_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION,
+				  mfile->tcd->regs + TCD_REG_STATUS);
+			iowrite32(val, mfile->tcd->regs + TCD_REG_COMPUTE);
 			result = wait_for_completion_interruptible_timeout(
-				&mfile->mxm->compute_done, HZ);
+				&mfile->tcd->compute_done, HZ);
 			if (result <= 0)
 				return (result == 0) ? -ETIMEDOUT :
 						       -ERESTARTSYS;
-			val = ioread32(mfile->mxm->regs + MXM_REG_COMPUTE);
+			val = ioread32(mfile->tcd->regs + TCD_REG_COMPUTE);
 			result = 0;
 		}
 

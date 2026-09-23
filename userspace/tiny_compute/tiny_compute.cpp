@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * userspace test of matx_mock driver ABI
+ * userspace test of tiny_compute driver ABI
  */
 
 #include <unistd.h>
@@ -11,7 +11,7 @@
 #include <sys/ioctl.h>
 #include <sys/errno.h>
 
-#include <matx_mock/mxm_ioctl.h>
+#include <tiny_compute/tcd_ioctl.h>
 
 struct AutoFD {
   int fd = -1;
@@ -32,7 +32,7 @@ const char* boolstr(bool v) {
 }
 
 int main(void) {
-	AutoFD fd = open("/dev/matx_mock", O_RDWR|O_SYNC);
+	AutoFD fd = open("/dev/tiny_compute", O_RDWR|O_SYNC);
 	if (fd < 0) {
 	  fprintf(stderr, "failed opening device: %s\n", strerror(errno));
 	  return 1;
@@ -41,15 +41,15 @@ int main(void) {
 	int result = 0;
 
 	{
-    mxm_info mxm{};
-    if (ioctl(fd, MXM_IOC_INFO, IOC_PARAM(mxm)) < 0) {
+    tcd_info tcd{};
+    if (ioctl(fd, TCD_IOC_INFO, IOC_PARAM(tcd)) < 0) {
       fprintf(stderr, "ioctl failed getting device info: %s\n", strerror(errno));
       result = 1;
     } else {
-      printf("ABI version: 0x%08x\n", mxm.abi_version);
-      printf("device ID: 0x%08x\n", mxm.device_id);
-      printf("capabilitiy flags: 0x%016llx\n", mxm.flags);
-      if (!mxm.abi_version || !mxm.device_id) {
+      printf("ABI version: 0x%08x\n", tcd.abi_version);
+      printf("device ID: 0x%08x\n", tcd.device_id);
+      printf("capabilitiy flags: 0x%016llx\n", tcd.flags);
+      if (!tcd.abi_version || !tcd.device_id) {
         fprintf(stderr, "invalid abi_version and/or device_id - both expected to be non-zero.\n");
         result = 1;
       }
@@ -59,7 +59,7 @@ int main(void) {
   {
     static constexpr uint32_t kLiveCheck = 0x80800101;
     uint32_t alive = kLiveCheck;
-    if (ioctl(fd, MXM_IOC_LIVENESS, IOC_PARAM(alive))) {
+    if (ioctl(fd, TCD_IOC_LIVENESS, IOC_PARAM(alive))) {
       fprintf(stderr, "ioctl failed running liveness check: %s\n", strerror(errno));
       result = 1;
     } else {
@@ -76,7 +76,7 @@ int main(void) {
   	static constexpr uint32_t kFactArg = 6;
   	static constexpr uint32_t kFactVal = 6 * 5 * 4 * 3 * 2;
   	uint32_t factParam = kFactArg;
-  	if (ioctl(fd, MXM_IOC_COMPUTE, IOC_PARAM(factParam))) {
+  	if (ioctl(fd, TCD_IOC_COMPUTE, IOC_PARAM(factParam))) {
       fprintf(stderr, "ioctl failed running compute [factorial(%d)]: %s\n", factParam, strerror(errno));
       result = 1;
   	} else {
