@@ -5,6 +5,9 @@ loaded=0
 passed=0
 failed=0
 
+echo ""
+echo "##"
+echo "## loading all driver modules"
 for ko in /lib/modules/*.ko; do
   [ -e "${ko}" ] || continue
   name="${ko##*/}"
@@ -18,11 +21,19 @@ for ko in /lib/modules/*.ko; do
   fi
 done
 
+# give load module logging a chance to flush
+sleep 1
+
+echo "## done loading all driver modules"
+echo "##"
+echo ""
+echo "##"
+echo "## running all driver tests"
 tests_file=/etc/lkds/tests
 if [ -f "${tests_file}" ]; then
   while IFS= read -r test_name || [ -n "${test_name}" ]; do
     [ -n "${test_name}" ] || continue
-    echo "running ${test_name}..."
+    echo "# running ${test_name}"
     if "${test_name}"; then
       printf 'test %s: ok\n' "${test_name}"
       passed=$((passed + 1))

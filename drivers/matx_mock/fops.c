@@ -73,6 +73,34 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		return 0;
 	}
+	case MXM_IOC_FACTORIAL: {
+		u32 val = 0;
+		u32 status = 0;
+
+		if (get_user(val, (__u32 __user *)arg))
+			return -EFAULT;
+
+		status = ioread32(mfile->mxm->regs + MXM_REG_STATUS);
+		if (status & MXM_COMPUTE_STATUS_BIT_WORKING) {
+		  // already working.
+		  return -EFAULT;
+		}
+
+		// write the argument
+		iowrite32(val, mfile->mxm->regs + MXM_REG_FACTORIAL);
+
+		// preserve existing status, add request for an interrupt on completion
+	  status = ioread32(mfile->mxm->regs + MXM_REG_STATUS) | MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION;
+		iowrite32(status, mfile->mxm->regs + MXM_REG_STATUS);
+
+		// interrupt handler needed!
+		//val = ioread32(mfile->mxm->regs + MXM_REG_FACTORIAL);
+
+		if (put_user(val, (__u32 __user *)arg))
+			return -EFAULT;
+
+		return 0;
+	}
 	default:
 		break;
 	}
