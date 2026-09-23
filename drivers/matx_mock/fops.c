@@ -82,15 +82,16 @@ long mxm_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		status = ioread32(mfile->mxm->regs + MXM_REG_STATUS);
 		if (status & MXM_COMPUTE_STATUS_BIT_WORKING) {
-		  // already working.
-		  return -EFAULT;
+			// already working.
+			return -EFAULT;
 		}
 
 		// write the argument
 		iowrite32(val, mfile->mxm->regs + MXM_REG_FACTORIAL);
 
 		// preserve existing status, add request for an interrupt on completion
-	  status = ioread32(mfile->mxm->regs + MXM_REG_STATUS) | MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION;
+		status = ioread32(mfile->mxm->regs + MXM_REG_STATUS) |
+			 MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION;
 		iowrite32(status, mfile->mxm->regs + MXM_REG_STATUS);
 
 		// interrupt handler needed!

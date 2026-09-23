@@ -33,8 +33,8 @@ enum mxm_register {
 };
 
 enum mxm_compute_status_bit {
-  MXM_COMPUTE_STATUS_BIT_WORKING = 0x01,
-  MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION = 0x08
+	MXM_COMPUTE_STATUS_BIT_WORKING = 0x01,
+	MXM_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION = 0x08
 };
 
 enum mxm_dma_command_bit {

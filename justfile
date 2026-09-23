@@ -201,9 +201,16 @@ test-vtarget: host-check
   printf 'test-vtarget: failed (log: %s)\n' "${log}" >&2
   exit 1
 
-[doc("one dev iteration: build modules, userspace and initramfs in one container, then boot and run lkds-test")]
-test: machine-vdev
+[doc("format module sources and check for kernel coding standard compliance")]
+precommit: format checkpatch-vdev
+
+[doc("build modules, userspace, initramfs in vdev")]
+stage-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} stage
+
+[doc("one dev iteration: build modules, userspace and initramfs in vdev, then boot vtarget and run lkds-test")]
+test: machine-vdev
+  @just stage-vdev
   just test-vtarget
 
 [doc("install or update the agent and command set under .claude/")]
