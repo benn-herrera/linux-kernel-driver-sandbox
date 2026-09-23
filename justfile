@@ -180,13 +180,12 @@ test-vtarget: host-check
   #!/usr/bin/env bash
   set -euo pipefail
   log="{{OUT_DIR}}/vtarget-test.log"
-  # sed expressions filter out the many pages of normal boot output before arriving at userspace and the shutdown after testing
-  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" | sed -ne '/^lkds: userspace reached/,$ p' | sed '/^lkds-test: exit/q' || true
+  # the sed range shows only the window from userspace up to the verdict line; the full console is in the log
+  {{VTARGET_QEMU}} "{{VTARGET_APPEND}} lkds_test" < /dev/null 2>&1 | tee "${log}" | sed -n '/^lkds: userspace reached/,/^lkds-test: exit/p' || true
   if grep -qw 'lkds-test: exit 0' "${log}"; then
     printf 'test-vtarget: passed (log: %s)\n' "${log}" >&2
     exit 0
   fi
-  grep 'lkds-test:' "${log}" | tr -d '\r' >&2 || true
   printf 'test-vtarget: failed (log: %s)\n' "${log}" >&2
   exit 1
 
@@ -195,9 +194,7 @@ precommit: format checkpatch-vdev
 
 [doc("build modules, userspace, initramfs in vdev")]
 stage-vdev: machine-vdev
-  #!/usr/bin/env bash
-  set -euo pipefail
-  just run-vdev {{VDEV_JUST}} stage | sed -ne '/^make: Entering directory/,$p'
+  just run-vdev {{VDEV_JUST}} stage
 
 [doc("one dev iteration: build modules, userspace and initramfs in vdev, then boot vtarget and run lkds-test")]
 test: machine-vdev

@@ -157,8 +157,18 @@ initramfs:
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
   printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2
 
+[private]
+modules-log-filtered:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  stdbuf -oL -eL just modules 2>&1 | awk -W interactive '
+      /^make: Entering directory/ { p = 1; print ""; }
+      p || /error|Error|warning/  { print; next; }
+      { d = d + 1; if (d == 80) { printf ".\n"; d = 0; } else { printf "." } fflush(); }
+      END { if (!p) print "" }'
+
 [doc("build the modules and userspace programs and pack the initramfs, in one container")]
-stage: modules userspace initramfs
+stage: modules-log-filtered userspace initramfs
 
 [doc("copy the kernel tree's .clang-format to OUT/clang-format for the host-side format recipe")]
 export-clang-format:
