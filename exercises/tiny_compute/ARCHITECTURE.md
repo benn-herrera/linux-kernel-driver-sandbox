@@ -86,7 +86,7 @@ Three consumers of the driver, each one layer up from the last:
 - two homes, split by what each language can do
   - the C++ program: the smoke test through the library, and the one
     threaded case, two threads on one fd (**NYI**)
-  - the Lua script: everything multi-device and multi-process, since Lua
+  - the Lua script: **IN PROGRESS** everything multi-device and multi-process, since Lua
     has no threads and coroutines are cooperative; N processes across all
     devices, the isolation check, and the adversarial phase
 - isolate testing into two phases
