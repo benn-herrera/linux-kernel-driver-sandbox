@@ -10,16 +10,29 @@
 
 #include <tiny_compute/tcd_ioctl.h>
 
+// owns one descriptor; move-only so a copy can never close it twice
 struct AutoFD {
   int fd = -1;
   AutoFD() = default;
-  AutoFD(int fd) : fd(fd) {}
+  explicit AutoFD(int fd) : fd(fd) {}
+  AutoFD(const AutoFD&) = delete;
+  AutoFD& operator=(const AutoFD&) = delete;
+  AutoFD(AutoFD&& o) noexcept : fd(o.fd) { o.fd = -1; }
+  AutoFD& operator=(AutoFD&& o) noexcept {
+    if (this != &o) {
+      reset();
+      fd = o.fd;
+      o.fd = -1;
+    }
+    return *this;
+  }
+  ~AutoFD() { reset(); }
   operator int() const { return fd; }
-  ~AutoFD() {
+  void reset() {
     if (fd >= 0) {
       close(fd);
-      fd = -1;
     }
+    fd = -1;
   }
 };
 
