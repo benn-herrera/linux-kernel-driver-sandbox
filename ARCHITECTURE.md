@@ -163,11 +163,11 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   run wraps the recipe in an external `timeout`.
 - x86_64, later, boots the same way under TCG emulation with no
   acceleration.
-- Dynamic programs in the guest, later: the initramfs recipe stages the
-  loader and the shared libraries `ldd` names for each dynamic binary,
-  copied from the same image that built them. This is the tier between the
-  static busybox root and a full Debian root, and what an interpreter such
-  as LuaJIT needs.
+- Dynamic programs run in the guest: the initramfs carries the loader and
+  the shared libraries each dynamic binary needs, copied from the image
+  that built them (see "Initramfs"). This is the tier between the static
+  busybox root and a full Debian root, and what an interpreter such as
+  LuaJIT needs.
 
 ### Initramfs
 
@@ -184,16 +184,29 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   kernel and module recipes.
 - If `out/modules/` exists, every `.ko` in it is staged at `/lib/modules/`;
   otherwise the archive is built without modules and says so on stderr.
-- If `out/userspace/` exists, every file in it is staged executable at
-  `/usr/bin/`; otherwise the archive is built without userspace programs
-  and says so on stderr.
+- If `out/userspace/` exists, every file in it is classified by `file`,
+  never by name: an ELF executable (PIE included) is staged at `/usr/bin/`,
+  an ELF shared object at `/lib/`, anything else fails the recipe.
+  Otherwise the archive is built without userspace programs and says so
+  on stderr.
+- Runtime closure: for every staged executable and project library the
+  recipe runs `ldd` in the build image, with `LD_LIBRARY_PATH` at
+  `out/userspace/` so the exercise's own libraries resolve, and copies each
+  `=>` target into `/lib/` (flat, dereferencing symlinks: glibc's default
+  search covers `/lib`) and the interpreter to exactly its `PT_INTERP`
+  path, `/lib/ld-linux-aarch64.so.1` on arm64. `linux-vdso` is skipped; a
+  `not found`, an interpreter outside `/lib` (an absolute `NEEDED`, for
+  instance) or an unrecognised `ldd` line fails the recipe. A static binary
+  (`ldd`: "not a dynamic executable") is staged with no closure, so static
+  and dynamic programs coexist in one root.
 - `vdev/initramfs/lkds-test`, staged executable at `/usr/bin/lkds-test`,
   always: loads every `.ko` staged at `/lib/modules/`, runs every command
   named in the `/etc/lkds/tests` manifest, and prints a one-line summary.
   Exits 0 if every test passed, 1 if any failed.
-- `/etc/lkds/tests` lists the basename of every program `initramfs-vdev`
-  staged from `out/userspace/`, one per line; it is written only when
-  `out/userspace/` existed at staging time.
+- `/etc/lkds/tests` lists the basename of every executable
+  `initramfs-vdev` staged from `out/userspace/`, one per line, and never a
+  library; it is written only when `out/userspace/` existed at staging
+  time.
 
 ## Debugging
 
@@ -222,20 +235,24 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 
 ## Userspace programs
 
-- One program per directory: `userspace/<name>/` holds the sources and a
-  plain GNU Makefile (not kbuild) that honours `CC` and `OUT`, writes only
-  under `OUT`, and links `-static`: the guest has no shared libraries.
-- `just userspace-vdev` runs `make -C /work/userspace/<name> CC=clang
-  CXX=clang++ OUT=/work/out/userspace-build/<name>
-  DRIVER_INCLUDE=/work/drivers` for every `userspace/*/` with a
-  `Makefile`, then copies the product `<name>` from that tree to
-  `out/userspace/`, which holds only what the initramfs ships (cleared
-  first). It does not depend on the kernel recipes.
-  `just userspace-clean-vdev` removes `out/userspace-build/` and
-  `out/userspace/`.
-- `just initramfs-vdev` places the binaries at `/usr/bin/` in the guest,
-  which is on busybox's default `PATH`. `userspace/tiny_compute/` is the
-  first test exercise.
+- One exercise per directory: `userspace/<name>/lib/` holds the library
+  sources and `userspace/<name>/app/` the executable's, each with a plain
+  GNU Makefile (not kbuild) that includes the shared `userspace/cpp.mk`,
+  honours `CC`, `CXX`, `OUT` and `DRIVER_INCLUDE`, and writes only under
+  `OUT`. The products may be dynamic: a PIE executable `<name>` linking
+  `lib<name>*.so` by `SONAME`; the initramfs carries their runtime closure
+  (see "Initramfs"). The contract is in CONVENTIONS.md.
+- `just userspace-vdev` runs `make -C /work/userspace/<name>/lib` then
+  `make -C /work/userspace/<name>/app`, each with `CC=clang CXX=clang++
+  OUT=/work/out/userspace-build/<name> DRIVER_INCLUDE=/work/drivers`, for
+  every `userspace/*/` with a `lib/Makefile`, then copies the executable
+  `<name>` and every `lib*.so*` from that tree to `out/userspace/`, which
+  holds only what the initramfs ships (cleared first). It does not depend
+  on the kernel recipes. `just userspace-clean-vdev` removes
+  `out/userspace-build/` and `out/userspace/`.
+- `just initramfs-vdev` places the executables at `/usr/bin/` in the
+  guest, which is on busybox's default `PATH`, and the libraries at
+  `/lib/`. `userspace/tiny_compute/` is the first test exercise.
 
 ## Style tools
 

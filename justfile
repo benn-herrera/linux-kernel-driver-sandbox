@@ -129,7 +129,7 @@ modules-vdev: machine-vdev
 modules-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} modules-clean
 
-[doc("build every program under userspace/ as a static binary with clang; binaries land in out/userspace/")]
+[doc("build every exercise under userspace/ with clang (lib/ then app/); executables and lib*.so land in out/userspace/")]
 userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace
   ls -l "{{OUT_DIR}}/userspace/"

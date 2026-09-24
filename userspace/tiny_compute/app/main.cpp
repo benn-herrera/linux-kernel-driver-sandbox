@@ -2,7 +2,7 @@
  * userspace test of tiny_compute driver ABI
  */
 
-#include "common.h"
+#include "lib/common.h"
 
 int main(void) {
   int result = 0;

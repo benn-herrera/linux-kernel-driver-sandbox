@@ -54,12 +54,15 @@
   fragments merged over defconfig and debug.config by `kernel-config`.
   `.config` is never edited by hand; a change to a fragment is followed by
   `kernel-config-vdev` and a rebuild.
-- A `userspace/<name>/Makefile` is a plain Makefile that takes `CC`,
-  `CXX`, `OUT` and `DRIVER_INCLUDE` (the directory holding `drivers/`,
-  for the UAPI headers), writes only under `OUT`, and produces the static
-  binary `$(OUT)/<name>`, named after its directory; anything else it
-  writes under `OUT` is intermediate. It knows no container or repository
-  path. It is not a kbuild fragment.
+- An exercise's userspace tree, `userspace/<name>/`, builds through plain
+  Makefiles (not kbuild fragments) that take `CC`, `CXX`, `OUT` and
+  `DRIVER_INCLUDE` (the directory holding `drivers/`, for the UAPI
+  headers) and write only under `OUT`. It produces the executable
+  `$(OUT)/<name>`, named after the exercise directory, and optionally
+  shared libraries `$(OUT)/lib<name>*.so` each carrying a `SONAME` equal to
+  its file name; the executable links a library by that name, never by
+  path. Static linking is not required. Anything else written under `OUT`
+  is intermediate. The Makefiles know no container or repository path.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs
@@ -70,6 +73,8 @@
 - `out/initramfs.cpio.gz` is a snapshot. After `modules-vdev`, run
   `initramfs-vdev` before `run-vtarget`, or the guest loads the previous
   build of the module.
+- `out/Image` comes only from `kernel-build-vdev`; `stage` and `test` do
+  not produce it. A boot recipe that finds it missing names that recipe.
 - Stdin piped into `run-vtarget` at launch is delivered before the guest
   UART exists and is lost. A scripted console session waits for the shell
   prompt before sending its first line, and lets the last command's output

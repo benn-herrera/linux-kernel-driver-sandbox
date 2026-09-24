@@ -91,7 +91,7 @@ modules-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/modules-build" "{{OUT}}/modules"
 
-[doc("build every program under /work/userspace/*/ as a static binary with clang; intermediates go to OUT/userspace-build/<name>/, the product OUT/userspace-build/<name>/<name> is copied to OUT/userspace/")]
+[doc("build every exercise under /work/userspace/*/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/<name>/, the products OUT/userspace-build/<name>/<name> and every lib*.so* there are copied to OUT/userspace/")]
 userspace:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -100,13 +100,17 @@ userspace:
   mkdir -p "{{OUT}}/userspace"
   built=()
   for dir in /work/userspace/*/; do
-    [[ -f "${dir}Makefile" ]] || continue
+    [[ -f "${dir}/lib/Makefile" ]] || continue
     name="$(basename "${dir}")"
     build="{{OUT}}/userspace-build/${name}"
     mkdir -p "${build}"
-    make -C "${dir%/}" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/drivers
-    [[ -x "${build}/${name}" ]] || { printf '%s did not produce %s\n' "${dir}Makefile" "${build}/${name}" >&2; exit 1; }
+    make -C "${dir%/}/lib" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/drivers
+    make -C "${dir%/}/app" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/drivers
+    [[ -x "${build}/${name}" ]] || { printf '%s did not produce %s\n' "${dir}app/Makefile" "${build}/${name}" >&2; exit 1; }
     cp "${build}/${name}" "{{OUT}}/userspace/"
+    for lib in "${build}"/lib*.so*; do
+      cp "${lib}" "{{OUT}}/userspace/"
+    done
     built+=("${name}")
   done
   printf 'built %s/userspace: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
@@ -117,7 +121,7 @@ userspace-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/userspace-build" "{{OUT}}/userspace"
 
-[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test at /usr/bin, any OUT/modules/*.ko at /lib/modules and any OUT/userspace/* at /usr/bin (recorded as an /etc/lkds/tests manifest), and pack it to OUT/initramfs.cpio.gz")]
+[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test at /usr/bin, any OUT/modules/*.ko at /lib/modules, any OUT/userspace/* by what `file` says it is: ELF executables at /usr/bin (recorded as the /etc/lkds/tests manifest), shared objects at /lib, plus the loader at its PT_INTERP path and every library ldd resolves for them copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -142,11 +146,38 @@ initramfs:
   mkdir -p "${root}/usr/bin"
   install -m 755 /work/vdev/initramfs/lkds-test "${root}/usr/bin/lkds-test"
   if [[ -d "{{OUT}}/userspace" ]]; then
+    mkdir -p "${root}/lib"
     staged=()
+    elfs=()
     for bin in "{{OUT}}/userspace"/*; do
       [[ -f "${bin}" ]] || continue
-      install -m 755 "${bin}" "${root}/usr/bin/"
-      staged+=("$(basename "${bin}")")
+      case "$(file -b "${bin}")" in
+        ELF*" executable,"*) install -m 755 "${bin}" "${root}/usr/bin/"; staged+=("$(basename "${bin}")") ;;
+        ELF*" shared object,"*) install -m 755 "${bin}" "${root}/lib/" ;;
+        *) printf '%s is neither an ELF executable nor a shared object\n' "${bin}" >&2; exit 1 ;;
+      esac
+      elfs+=("${bin}")
+    done
+    # Runtime closure from the image that built them; LD_LIBRARY_PATH resolves the exercise's own libraries.
+    for elf in "${elfs[@]}"; do
+      deps="$(LD_LIBRARY_PATH="{{OUT}}/userspace" ldd "${elf}" 2>&1)" || {
+        [[ "${deps}" == *"not a dynamic executable"* ]] && continue
+        printf 'ldd %s failed: %s\n' "${elf}" "${deps}" >&2; exit 1
+      }
+      while IFS= read -r line; do
+        read -r name arrow target _ <<< "${line}"
+        if [[ "${arrow}" == "=>" ]]; then
+          [[ "${target}" == /* ]] || { printf '%s: %s\n' "${elf}" "${line}" >&2; exit 1; }
+          cp -L "${target}" "${root}/lib/"
+        elif [[ "${name}" == /* ]]; then
+          # the interpreter: the kernel opens it at exactly its PT_INTERP path
+          [[ "${name}" == /lib/* || "${name}" == /lib64/* ]] || { printf '%s: %s is outside /lib\n' "${elf}" "${name}" >&2; exit 1; }
+          mkdir -p "${root}$(dirname "${name}")"
+          cp -L "${name}" "${root}${name}"
+        elif [[ "${name}" != linux-vdso* ]]; then
+          printf '%s: unrecognised ldd line: %s\n' "${elf}" "${line}" >&2; exit 1
+        fi
+      done <<< "${deps}"
     done
     mkdir -p "${root}/etc/lkds"
     printf '%s\n' "${staged[@]}" > "${root}/etc/lkds/tests"
