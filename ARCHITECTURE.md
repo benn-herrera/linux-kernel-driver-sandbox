@@ -135,9 +135,10 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `virt`, `-accel hvf`, `-cpu host`; CPUs and memory from the `VTARGET_CPUS`
   and `VTARGET_MEMORY` justfile variables.
 - Devices come from the `VTARGET_DEVICES` justfile variable, a space-separated
-  list of QEMU device names added as `-device <name>`; default `edu`, QEMU's
-  educational PCI device (vendor `0x1234`, device `0x11e8`, documented at
-  `docs/specs/edu.rst` in the QEMU tree). `just VTARGET_DEVICES="" run-vtarget`
+  list of QEMU device names added as `-device <name>`; default two instances
+  of `edu` with `dma_mask=0xffffffff`, QEMU's educational PCI device (vendor
+  `0x1234`, device `0x11e8`, documented at `docs/specs/edu.rst` in the QEMU
+  tree), so multi-device paths are exercised on every boot. `just VTARGET_DEVICES="" run-vtarget`
   boots with no device.
 - Headless (`-nographic`): the guest's serial console `ttyAMA0` is the
   terminal; `Ctrl-A X` exits. `earlycon` on the kernel command line.

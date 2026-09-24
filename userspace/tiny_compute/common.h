@@ -44,10 +44,13 @@ struct AutoFD {
   }
 };
 
-inline AutoFD open_tcd(const char* devPath=nullptr) {
-  auto afd = AutoFD(open(devPath ? devPath : "/dev/tiny_compute", O_RDWR|O_SYNC));
-  if (afd < 0) {
-    fprintf(stderr, "failed opening device: %s\n", strerror(errno));
+inline AutoFD open_tcd(int devIdx = 0) {
+  std::string devPath = "/dev/tiny_compute" + std::to_string(devIdx);
+  auto afd = AutoFD(open(devPath.c_str(), O_RDWR|O_SYNC));
+  if (afd > 0) {
+    printf("opened device %s\n", devPath.c_str());
+  } else {
+    fprintf(stderr, "failed opening device %s: %s\n", devPath.c_str(), strerror(errno));
   }
   return afd;
 }

@@ -33,7 +33,12 @@
   - mutex guards around interrupt-gated operations
   - completion per interrupt-gated operation
 - multi-device capable
-  - **NYI**: name allocation and release 
+  - every piece of state lives in the per-device `tcd_dev`; the only shared
+    object is the driver-wide IDA that numbers instances
+  - each instance registers `/dev/tiny_compute<N>` with an IDA-allocated
+    `N` and a `devm_kasprintf` name; `remove` releases the number after the
+    node is gone so it can be reused
+  - the test machine boots two `edu` instances so both paths run every time
 - resilient, with full error trapping for all potential failure modes
 - reasonable userspace ABI
   - balances driver thinness with standard userspace functionality and responsibility expectations
@@ -65,10 +70,10 @@
 The stack from driver to script is the priority: one host coordinating
 several accelerators through a library and a binding. In order:
 
-- Multiple device instances with per-instance device nodes
-  (`/dev/tiny_compute<N>` from an IDA-allocated number), a second `edu` on
-  the QEMU command line, and the test iterating over every node it finds.
-  First because every layer above carries the device identity.
+- Multi-device isolation check in the test program: a DMA pattern written
+  to one device must not be readable from the other, and operations on the
+  two must not serialise on each other. The driver side is done; the test
+  expects the two instances the test machine boots.
 - A C wrapper library over the ioctl ABI (`userspace/libtcd/`), designed as
   the foreign-function surface: opaque handle, fixed-width arguments,
   errno-style results, no callbacks. Built as a shared object for the

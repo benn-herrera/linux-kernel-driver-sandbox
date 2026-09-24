@@ -152,6 +152,9 @@ bool test_functionality(void) {
    	result = test_func_compute(open_tcd()) && result;
    	result = test_func_dma_round_trip(open_tcd()) && result;
   }
+  // verify 2nd device works at all.
+ 	result = test_func_info(open_tcd(1)) && result;
+
 
 	return result;
 }

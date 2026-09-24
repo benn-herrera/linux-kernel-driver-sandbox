@@ -17,7 +17,7 @@ OUT_DIR := justfile_directory() / "out"
 VDEV_DIR := justfile_directory() / "vdev"
 VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
-VTARGET_DEVICES := "edu,dma_mask=0xffffffff"
+VTARGET_DEVICES := "edu,dma_mask=0xffffffff edu,dma_mask=0xffffffff"
 VTARGET_APPEND := "console=ttyAMA0 earlycon panic=1"
 # Command-line overrides never reach a nested just, so the boot recipe is invoked with the VTARGET_* values passed explicitly.
 # Each is shell-quoted here, so recipes interpolate VTARGET_QEMU unquoted.

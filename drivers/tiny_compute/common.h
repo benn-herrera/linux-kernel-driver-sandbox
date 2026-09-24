@@ -81,6 +81,7 @@ struct tcd_dev {
 	struct completion dma_done;
 	struct tcd_dma_buf dma_from_device;
 	struct tcd_dma_buf dma_to_device;
+	int id;
 	int irq;
 };
 

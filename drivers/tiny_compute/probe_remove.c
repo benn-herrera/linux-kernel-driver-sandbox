@@ -5,6 +5,8 @@
 #include "common.h"
 #include <linux/slab.h>
 
+static DEFINE_IDA(tcd_ida);
+
 int tcd_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 {
 	static const struct file_operations tcd_fops = { .owner = THIS_MODULE,
@@ -73,28 +75,53 @@ int tcd_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	error = request_irq(tcd->irq, tcd_irq, IRQF_SHARED, KBUILD_MODNAME,
 			    tcd);
 	if (error) {
-		pci_free_irq_vectors(pdev);
-		return dev_err_probe(&pdev->dev, error,
-				     "request irq failed.\n");
+		error = dev_err_probe(&pdev->dev, error,
+				      "request irq failed.\n");
+		goto err_free_irq_vectors;
 	}
+
+	// multi-device support requires serial naming
+	tcd->id = ida_alloc(&tcd_ida, GFP_KERNEL);
+	if (tcd->id < 0) {
+		error = dev_err_probe(&pdev->dev, tcd->id,
+				      "ida alloc failed.\n");
+		goto err_free_irq;
+	}
+
+	// name buffer is devm managed (no free() required in remove())
+	tcd->miscdev.name = devm_kasprintf(&pdev->dev, GFP_KERNEL, "%s%d",
+					   KBUILD_MODNAME, tcd->id);
+	if (!tcd->miscdev.name) {
+		error = dev_err_probe(
+			&pdev->dev, -ENOMEM,
+			"serial name buffer allocation failed.\n");
+		goto err_free_ida;
+	}
+	tcd->miscdev.minor = MISC_DYNAMIC_MINOR;
+	tcd->miscdev.fops = &tcd_fops;
 
 	// misc device file descriptor operations registration
 	// requires matching unregister in remove()
-	tcd->miscdev.name = KBUILD_MODNAME;
-	tcd->miscdev.minor = MISC_DYNAMIC_MINOR;
-	tcd->miscdev.fops = &tcd_fops;
 	error = misc_register(&tcd->miscdev);
 	if (error) {
-		free_irq(tcd->irq, tcd);
-		pci_free_irq_vectors(pdev);
-		return dev_err_probe(&pdev->dev, error,
-				     "misc registration failed.\n");
+		error = dev_err_probe(&pdev->dev, error,
+				      "misc registration failed.\n");
+		goto err_free_ida;
 	}
 
 	// assign driver data pointer for access by other driver functions
 	pci_set_drvdata(pdev, tcd);
 
 	return 0;
+
+err_free_ida:
+	ida_free(&tcd_ida, tcd->id);
+err_free_irq:
+	free_irq(tcd->irq, tcd);
+err_free_irq_vectors:
+	pci_free_irq_vectors(pdev);
+
+	return error;
 }
 
 void tcd_remove(struct pci_dev *pdev)
@@ -103,6 +130,7 @@ void tcd_remove(struct pci_dev *pdev)
 
 	if (tcd) {
 		misc_deregister(&tcd->miscdev);
+		ida_free(&tcd_ida, tcd->id);
 		free_irq(tcd->irq, tcd);
 		pci_free_irq_vectors(pdev);
 	}
