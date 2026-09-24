@@ -24,6 +24,7 @@
 #define TCD_DMA_BUF_SIZE 4096ull
 #define TCD_DMA_ALIGNMENT 16
 #define TCD_DMA_DEVICE_BUF 0x40000ull
+#define TCD_DMA_DIRECTION_BIT_IDX 1
 
 enum tcd_register {
 	TCD_REG_ID = 0x00,
@@ -55,9 +56,9 @@ enum tcd_irq_value {
 	TCD_IRQ_DMA = 0x100,
 };
 
-enum tcd_dma_direction {
-	TCD_DMA_TO_DEVICE = 0,
-	TCD_DMA_FROM_DEVICE = 1,
+enum tcd_dma_direction_bit {
+	TCD_DMA_TO_DEVICE = (0u << TCD_DMA_DIRECTION_BIT_IDX),
+	TCD_DMA_FROM_DEVICE = (1u << TCD_DMA_DIRECTION_BIT_IDX),
 };
 
 //

@@ -71,21 +71,58 @@ bool test_func_compute(int fd) {
   return result;
 }
 
-bool test_func_dma_from_dev(int fd) {
+bool test_func_dma_round_trip(int fd) {
   if (fd < 0) {
     return false;
   }
   bool result = true;
-  // do the thing
-  return result;
-}
 
-bool test_func_dma_to_dev(int fd) {
-  if (fd < 0) {
+  tcd_info tcd{};
+
+  if (ioctl(fd, TCD_IOC_INFO, IOC_PARAM(tcd)) < 0) {
+    fprintf(stderr, "ioctl failed getting device info: %s\n", strerror(errno));
     return false;
   }
-  bool result = true;
-  // do the thing
+
+  if ((tcd.flags & (TCD_DEVICE_CAP_DMA_READ | TCD_DEVICE_CAP_DMA_WRITE)) != (TCD_DEVICE_CAP_DMA_READ | TCD_DEVICE_CAP_DMA_WRITE)) {
+    fprintf(stderr, "DMA read/write capabilities expected but one or both missing.\n");
+    return false;
+  }
+
+  if (!tcd.dma_buf_size || !tcd.dma_alignment) {
+    fprintf(stderr, "DMA buf size and alignment both expected to be non-zero.\n");
+    return false;
+  }
+
+  using namespace std;
+  // cap out at 16K - max buf size or 16k are going to be aligned for this device.
+  auto pattern = vector<uint16_t>(min(tcd.dma_buf_size, (1ull << 14)) / sizeof(uint16_t));
+  for (size_t i = 0, e = pattern.size() - 1; i <= e; ++i) {
+    pattern[e - i] = uint16_t(i);
+  }
+
+  {
+    tcd_dma_req to_dev_req{ .ubuf = uint64_t(pattern.data()), .dev_offset = 0x0ull, .count = pattern.size() * sizeof(pattern[0]) };
+    if (ioctl(fd, TCD_IOC_DMA_TO_DEVICE, IOC_PARAM(to_dev_req))) {
+      fprintf(stderr, "dma to device failed.\n");
+      return false;
+    }
+  }
+
+  auto readback = vector<uint16_t>(pattern.size(), 0xffff);
+  {
+    tcd_dma_req from_dev_req{ .ubuf = uint64_t(readback.data()), .dev_offset = 0x0ull, .count = readback.size() * sizeof(readback[0]) };
+    if (ioctl(fd, TCD_IOC_DMA_FROM_DEVICE, IOC_PARAM(from_dev_req))) {
+      fprintf(stderr, "dma from device failed.\n");
+      return false;
+    }
+  }
+
+  if (memcmp(readback.data(), pattern.data(), pattern.size() * sizeof(pattern[0])) != 0) {
+    fprintf(stderr, "DMA round trip failed - read pattern did not match written.\n");
+    result = false;
+  }
+
   return result;
 }
 
@@ -104,8 +141,7 @@ bool test_functionality(void) {
   	result = test_func_info(afd) && result;
   	result = test_func_live(afd) && result;
   	result = test_func_compute(afd) && result;
-  	result = test_func_dma_from_dev(afd) && result;
-  	result = test_func_dma_to_dev(afd) && result;
+  	result = test_func_dma_round_trip(afd) && result;
   }
   printf("\n");
   // individual accesses
@@ -114,8 +150,7 @@ bool test_functionality(void) {
    	result = test_func_info(open_tcd()) && result;
    	result = test_func_live(open_tcd()) && result;
    	result = test_func_compute(open_tcd()) && result;
-   	result = test_func_dma_from_dev(open_tcd()) && result;
-   	result = test_func_dma_to_dev(open_tcd()) && result;
+   	result = test_func_dma_round_trip(open_tcd()) && result;
   }
 
 	return result;

@@ -1,14 +1,22 @@
 #pragma once
 
-#include <unistd.h>
-#include <stdio.h>
-#include <cstring>
-#include <cstdint>
-#include <fcntl.h>
-#include <sys/ioctl.h>
-#include <sys/errno.h>
-
 #include <tiny_compute/tcd_ioctl.h>
+
+#include <fcntl.h>
+#include <stdio.h>
+#include <sys/errno.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
 // owns one descriptor; move-only so a copy can never close it twice
 struct AutoFD {
