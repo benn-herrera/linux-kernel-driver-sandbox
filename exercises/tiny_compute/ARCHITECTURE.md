@@ -62,12 +62,25 @@
 
 ## Roadmap
 
-- A multi-threaded test program exercising the per-device locks.
-- Multiple device instances with per-instance device nodes.
-- A C wrapper library over the ioctl ABI (`userspace/libtcd/`), consumed by
-  the test program and shaped for foreign-function binding.
-- A LuaJIT binding to that library through its FFI, running in the guest
-  (needs the dynamic-library initramfs tier; see the root ARCHITECTURE.md).
+The stack from driver to script is the priority: one host coordinating
+several accelerators through a library and a binding. In order:
+
+- Multiple device instances with per-instance device nodes
+  (`/dev/tiny_compute<N>` from an IDA-allocated number), a second `edu` on
+  the QEMU command line, and the test iterating over every node it finds.
+  First because every layer above carries the device identity.
+- A C wrapper library over the ioctl ABI (`userspace/libtcd/`), designed as
+  the foreign-function surface: opaque handle, fixed-width arguments,
+  errno-style results, no callbacks. Built as a shared object for the
+  binding and an archive for the static C++ program, which shrinks to a
+  smoke test through the library.
+- The dynamic-library initramfs tier (see the root ARCHITECTURE.md) with
+  LuaJIT from the build image, and a LuaJIT FFI binding to `libtcd`.
+- The torture suite in Lua against the binding: multi-process, since Lua
+  has no threads and coroutines are cooperative, N processes across all
+  devices, exercising `open`/`release` under contention and the
+  per-device locks. The one threaded case, two threads on one fd, stays in
+  the C++ program.
 - proper dmsg logging
 - A Rust port of the driver.
 - Driver-side device mocking to present additional design considerations to ABI and surfaces to userspace.
