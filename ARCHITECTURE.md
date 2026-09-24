@@ -124,7 +124,10 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `rust.config` sets `CONFIG_RUST=y`. Kconfig drops `CONFIG_RUST=y`
   silently when the toolchain check fails, so `kernel-config` verifies it
   with `scripts/config --state RUST`.
-- DMA_API_DEBUG added where a driver maps DMA.
+- `dma_api_debug.config` sets `CONFIG_DMA_API_DEBUG=y`: the kernel checks
+  every DMA mapping against the API's rules and reports misuse in `dmesg`
+  under the `DMA-API:` prefix. A test run's log should carry only the two
+  boot-time banner lines with that prefix.
 
 ## Boot
 
