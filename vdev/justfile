@@ -135,7 +135,7 @@ userspace-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/userspace-build" "{{OUT}}/userspace"
 
-[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test and this image's /usr/bin/luajit at /usr/bin, any OUT/driver/*.ko at /lib/modules, any OUT/userspace/* by what it is: a file starting with `#!` is a script and, like an ELF executable (per `file`), goes to /usr/bin and into the /etc/lkds/tests manifest; ELF shared objects go to /lib; anything else fails; OUT/userspace/include/, skipped by that classification, is staged whole to /usr/include/, preserving its per-exercise subdirectory; plus the loader at its PT_INTERP path and every library ldd resolves for luajit and the ELF files copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
+[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test and this image's /usr/bin/luajit at /usr/bin, any OUT/driver/*.ko at /lib/modules, any OUT/userspace/* by what it is: a file starting with `#!` is a script and, like an ELF executable (per `file`), goes to /usr/bin and into the /etc/lkds/tests manifest (executables first, then scripts); ELF shared objects go to /lib; anything else fails; OUT/userspace/include/, skipped by that classification, is staged whole to /usr/include/, preserving its per-exercise subdirectory; plus the loader at its PT_INTERP path and every library ldd resolves for luajit and the ELF files copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -169,7 +169,8 @@ initramfs:
   }
   function stage_userspace() {
     if [[ -d "{{OUT}}/userspace" ]]; then
-      staged=()
+      # executables run before scripts: the program is the smoke test, the script the long suite
+      execs=(); scripts=()
       for bin in "{{OUT}}/userspace"/*; do
         # headers are staged separately below; not a program, library or script
         [[ "$(basename "${bin}")" == include ]] && continue
@@ -185,13 +186,14 @@ initramfs:
           esac
         fi
         case "${kind}" in
-          script|exec) install -m 755 "${bin}" "${root}/usr/bin/"; staged+=("$(basename "${bin}")") ;;
+          exec) install -m 755 "${bin}" "${root}/usr/bin/"; execs+=("$(basename "${bin}")") ;;
+          script) install -m 755 "${bin}" "${root}/usr/bin/"; scripts+=("$(basename "${bin}")") ;;
           lib) install -m 755 "${bin}" "${root}/lib/" ;;
         esac
         [[ "${kind}" == script ]] || elfs+=("${bin}")
       done
       mkdir -p "${root}/etc/lkds"
-      printf '%s\n' "${staged[@]}" > "${root}/etc/lkds/tests"
+      printf '%s\n' "${execs[@]}" "${scripts[@]}" > "${root}/etc/lkds/tests"
       if [[ -d "{{OUT}}/userspace/include" ]]; then
         mkdir -p "${root}/usr/include"
         cp -r "{{OUT}}/userspace/include/." "${root}/usr/include/"

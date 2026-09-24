@@ -224,7 +224,8 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 - `/etc/lkds/tests` lists the basename of every executable and script
   `initramfs-vdev` staged from `out/userspace/`, one per line, and never a
   library nor `luajit`; it is written only when `out/userspace/` existed
-  at staging time.
+  at staging time. Executables come first, then scripts, each group in
+  name order, so the compiled smoke test runs before the scripted suite.
 
 ## Debugging
 
