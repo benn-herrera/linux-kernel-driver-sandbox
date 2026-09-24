@@ -118,7 +118,7 @@ kernel-build-vdev: machine-vdev
 kernel-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} kernel-clean
 
-[doc("stage a busybox root with vdev/initramfs/init, the out/driver/ modules, the out/userspace/ programs, libraries and lua scripts, and luajit, then pack it to out/initramfs.cpio.gz")]
+[doc("stage a busybox root with vdev/initramfs/init, the out/driver/ modules, the out/userspace/ programs, libraries, scripts and public headers, and luajit, then pack it to out/initramfs.cpio.gz")]
 initramfs-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} initramfs
   ls -l "{{OUT_DIR}}/initramfs.cpio.gz"
@@ -132,7 +132,7 @@ driver-vdev: machine-vdev
 driver-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} driver-clean
 
-[doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so and lua/*.lua land in out/userspace/")]
+[doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so, script/* and lib/*.h land in out/userspace/")]
 userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace
   ls -l "{{OUT_DIR}}/userspace/"

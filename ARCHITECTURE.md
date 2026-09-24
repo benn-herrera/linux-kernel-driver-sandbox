@@ -201,6 +201,11 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   (PIE included) is staged at `/usr/bin/`, an ELF shared object at
   `/lib/`, anything else fails the recipe. Otherwise the archive is built
   without userspace programs and says so on stderr.
+  `out/userspace/include/`, if present, is excluded from that
+  classification and staged whole to `/usr/include/`, preserving its
+  per-exercise subdirectory; headers are not listed in
+  `/etc/lkds/tests`. A script reads the exercise's API header from
+  `/usr/include/<name>/` at runtime.
 - Runtime closure: for `luajit` and every staged ELF executable and
   project library the recipe runs `ldd` in the build image, with
   `LD_LIBRARY_PATH` at
@@ -258,25 +263,30 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   the shared `exercises/cpp.mk`, honours `CC`, `CXX`, `OUT` and
   `DRIVER_INCLUDE`, and writes only under `OUT`. The products may be
   dynamic: a PIE executable `<name>` linking `lib<name>*.so` by `SONAME`;
-  the initramfs carries their runtime closure (see "Initramfs"). An
-  optional `exercises/<name>/userspace/lua/` holds `*.lua` scripts that
-  ship as-is, with no build step; one that starts with `#!/usr/bin/luajit`
-  runs as a test through `lkds-test` by its shebang. The contract is in
-  CONVENTIONS.md.
+  the initramfs carries their runtime closure (see "Initramfs"). Files
+  under an optional `exercises/<name>/userspace/script/` ship as-is, with
+  no build step, and run as tests through `lkds-test`; each must start
+  with a `#!` line naming its interpreter, and `/usr/bin/luajit` is the
+  interpreter the guest provides today. Such a script reads the
+  exercise's API header from `/usr/include/<name>/` at runtime. The
+  contract is in CONVENTIONS.md.
 - `just userspace-vdev` runs `make -C /work/exercises/<name>/userspace/lib`
   then `make -C /work/exercises/<name>/userspace/app`, each with `CC=clang
   CXX=clang++ OUT=/work/out/userspace-build/<name>
   DRIVER_INCLUDE=/work/exercises`, for the active exercise (failing if the
   exercise directory, its `lib/Makefile` or its `app/Makefile` is
   missing), then copies the executable `<name>` and every `lib*.so*` from
-  that tree, and every `exercises/<name>/userspace/lua/*.lua`, to
-  `out/userspace/`, which holds only what the initramfs ships (cleared
-  first). It does not depend on the kernel recipes.
+  that tree, every regular file under
+  `exercises/<name>/userspace/script/`, and every `lib/*.h` header (to
+  `out/userspace/include/<name>/`), to `out/userspace/`, which holds only
+  what the initramfs ships (cleared first). It does not depend on the
+  kernel recipes.
   `just userspace-clean-vdev` removes `out/userspace-build/` and
   `out/userspace/` whole, every exercise's intermediate tree included.
 - `just initramfs-vdev` places the executables and scripts at `/usr/bin/`
-  in the guest, which is on busybox's default `PATH`, and the libraries at
-  `/lib/`. `exercises/tiny_compute/userspace/` is the first test exercise.
+  in the guest, which is on busybox's default `PATH`, the libraries at
+  `/lib/`, and the headers at `/usr/include/<name>/`.
+  `exercises/tiny_compute/userspace/` is the first test exercise.
 
 ## Style tools
 

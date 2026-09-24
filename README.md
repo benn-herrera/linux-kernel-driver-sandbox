@@ -35,7 +35,7 @@ which describe it in full.
 **The exercises** are the driver work itself. Each exercise is one tree,
 `exercises/<name>/`: its own SPEC.md and ARCHITECTURE.md, `driver/` (the
 kernel module and its kbuild Makefile) and `userspace/` (the test program
-and library, each with a plain Makefile, plus optional `lua/` scripts).
+and library, each with a plain Makefile, plus optional `script/` files).
 The recipes build and test one exercise at a time, the one named in
 `active_exercise.just`.
 

@@ -1,6 +1,7 @@
-//
-// Tiny Compute Device Lib C API header
-//
+/*
+Tiny Compute Device Lib C API header
+!NOTE!: This file is kept luajit ffi friendly. nothing in macros makes it across the barrier.
+*/
 #pragma once
 
 #include <stdint.h>

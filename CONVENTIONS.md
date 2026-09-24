@@ -63,8 +63,12 @@
   its file name; the executable links a library by that name, never by
   path. Static linking is not required. Anything else written under `OUT`
   is intermediate. The Makefiles know no container or repository path.
-  `exercises/<name>/userspace/lua/*.lua` are staged as-is, without a build step,
-  and must start with `#!/usr/bin/luajit` to run as tests.
+  Files under `exercises/<name>/userspace/script/` are staged as-is,
+  without a build step, at `/usr/bin/` in the guest and run as tests; each
+  must start with a `#!` line naming its interpreter, and
+  `/usr/bin/luajit` is the interpreter the guest provides today. The
+  library's public headers, `lib/*.h`, are staged to `/usr/include/<name>/`
+  in the guest.
 - The active exercise is `EXERCISE` in `active_exercise.just` at the repo
   root, imported by both justfiles. Every build, stage, test and style recipe
   operates on that exercise only; `just EXERCISE=<name> <recipe>` overrides it

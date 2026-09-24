@@ -14,13 +14,23 @@
 - tcd_ioctl.h: userspace-facing ABI header
 - Makefile: kbuild format makefile fragment
 
-### Driver Test – exercises/tiny_compute/userspace
+### Userspace – exercises/tiny_compute/userspace
 
-- common.h: utility definitions and function prototypes for test program
-- main.cpp: entry point for test program that exercises the tiny_compute driver ABI
-- functionality.cpp: basic functionality tests (does it do the thing?)
-- resilience.cpp: adversarial usage tests (does it blow up if you kick it?)
-- Makefile: single line consumer of `../../../cpp.mk`, generic C++ userspace project Makefile
+Three consumers of the driver, each one layer up from the last:
+
+- lib/: `libtiny_compute.so`, the C wrapper library over the ioctl ABI
+  - tcdl_api.h: public C API, the foreign-function surface (namespace `tcdl_`/`TCDL_`)
+  - tcdl_api.cpp: implementation; the opaque handle wraps the device fd
+  - util.h: internal helpers
+  - Makefile: `LINK_TYPE := SO` plus `../../../cpp.mk`
+- app/: `tiny_compute`, the C++ test program, linked against the library
+  - common.h: utility definitions and function prototypes
+  - main.cpp: entry point
+  - tests.cpp: functionality tests through the library API
+  - Makefile: `LINK_TYPE := EXE` plus `../../../cpp.mk`
+- script/: LuaJIT scripts, staged as-is and run as tests
+  - test_tcdl.lua: FFI binding to `libtiny_compute.so` built by parsing the
+    staged `tcdl_api.h` at run time, and the tests written against it
 
 ## Project Design
 
@@ -53,39 +63,48 @@
       4 KiB buffer; the driver stages through coherent buffers and userspace
       never sees a bus address
 
+### Library
+
+- designed as a foreign-function surface first: opaque handle, fixed-width
+  arguments, enum results with explicit values, no callbacks, no varargs
+- the header is the binding. It is written so that a preprocessor-free
+  reader (LuaJIT `ffi.cdef`) accepts it once `#` lines and the visibility
+  macro are stripped: constants are enums, not macros; every struct is
+  declared with a typedef; comments are `/* */`
+- the handle is the device fd cast to a pointer, so the library carries no
+  state of its own and a handle costs nothing to copy
+- error mapping is one direction: errno from the ioctl to a `tcdl_result`;
+  the caller never sees errno
+
 ### Driver Test
 
+- the C++ program and the Lua script both go through the library; nothing
+  in userspace issues an ioctl except `tcdl_api.cpp`
 - exercise every ABI function
   - acquisition, info, liveness, compute, DMA round trip (pattern out and
     back through the device buffer, compared byte for byte)
-  - **NYI**: multi-threaded access
-- single and multi-device scenarios
-- single and multi-threaded usage patterns
+- two homes, split by what each language can do
+  - the C++ program: the smoke test through the library, and the one
+    threaded case, two threads on one fd (**NYI**)
+  - the Lua script: everything multi-device and multi-process, since Lua
+    has no threads and coroutines are cooperative; N processes across all
+    devices, the isolation check, and the adversarial phase
 - isolate testing into two phases
   - 'walk right down Main Street' (what's being done now)
   - **NYI**: 'be mean and nasty' aka adversarial usage patterns (coming soon to a horror show near you)
 
 ## Roadmap
 
-The stack from driver to script is the priority: one host coordinating
-several accelerators through a library and a binding. In order:
+The stack from driver to script, one host coordinating several accelerators
+through a library and a binding, is in place. Remaining, in order:
 
-- Multi-device isolation check in the test program: a DMA pattern written
-  to one device must not be readable from the other, and operations on the
-  two must not serialise on each other. The driver side is done; the test
-  expects the two instances the test machine boots.
-- A C wrapper library over the ioctl ABI (`userspace/libtcd/`), designed as
-  the foreign-function surface: opaque handle, fixed-width arguments,
-  errno-style results, no callbacks. Built as a shared object for the
-  binding and an archive for the static C++ program, which shrinks to a
-  smoke test through the library.
-- The dynamic-library initramfs tier (see the root ARCHITECTURE.md) with
-  LuaJIT from the build image, and a LuaJIT FFI binding to `libtcd`.
-- The torture suite in Lua against the binding: multi-process, since Lua
-  has no threads and coroutines are cooperative, N processes across all
-  devices, exercising `open`/`release` under contention and the
-  per-device locks. The one threaded case, two threads on one fd, stays in
-  the C++ program.
+- The torture suite in Lua against the binding, multi-process, across the
+  two instances the test machine boots: the isolation check (a DMA pattern
+  written to one device must not be readable from the other, and
+  operations on the two must not serialise on each other), then
+  `open`/`release` under contention and the per-device locks. The driver
+  side is done. The C++ program shrinks to a smoke test through the
+  library plus its one threaded case.
 - proper dmsg logging
 - A Rust port of the driver.
 - Driver-side device mocking to present additional design considerations to ABI and surfaces to userspace.
