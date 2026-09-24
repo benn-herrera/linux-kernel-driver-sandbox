@@ -1,16 +1,18 @@
 # generic Makefile for every userspace C/C++ project
-# usage: set LINK_TYPE to EXE or SO, then `include ../../cpp.mk`
+# usage: set LINK_TYPE to EXE or SO, then `include ../../../cpp.mk`
 #   EXE: builds $(OUT)/<exercise> and links lib<exercise>.so by name
 #   SO:  builds $(OUT)/lib<exercise>.so with a matching SONAME
-# <exercise> is the name of the directory containing this Makefile's directory.
+# <exercise> is the name of the directory two levels above this Makefile's
+# directory: exercises/<exercise>/userspace/{app,lib}/Makefile.
 ifeq ($(strip $(OUT)),)
-$(error OUT is not set: make OUT=<out_dir> DRIVER_INCLUDE=<drivers_dir>)
+$(error OUT is not set: make OUT=<out_dir> DRIVER_INCLUDE=<exercises_dir>)
 endif
 ifeq ($(strip $(DRIVER_INCLUDE)),)
-$(error DRIVER_INCLUDE is not set: make OUT=<out_dir> DRIVER_INCLUDE=<drivers_dir>)
+$(error DRIVER_INCLUDE is not set: make OUT=<out_dir> DRIVER_INCLUDE=<exercises_dir>)
 endif
 
-BASE := $(notdir $(abspath $(CURDIR)/..))
+# app/ or lib/ -> userspace/ -> <exercise>/
+BASE := $(notdir $(abspath $(CURDIR)/../..))
 
 ifeq ($(LINK_TYPE),SO)
 NAME := lib$(BASE).so

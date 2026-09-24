@@ -1,6 +1,6 @@
 #pragma once
 
-#include <tiny_compute/tcd_ioctl.h>
+#include <tiny_compute/driver/tcd_ioctl.h>
 
 #include <fcntl.h>
 #include <stdio.h>

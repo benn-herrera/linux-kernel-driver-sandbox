@@ -3,9 +3,12 @@
 
 set positional-arguments
 
+import '../active_exercise.just'
+
 KERNEL_VERSION := "7.2.7"
 KERNEL_SRC := "/kernel/linux-" + KERNEL_VERSION
 OUT := "/work/out"
+EXERCISE_DIR := "/work/exercises" / EXERCISE
 # clang/LLVM for every kbuild invocation: the kernel's Rust support builds with LLVM.
 MAKE := "make LLVM=1"
 
@@ -64,69 +67,75 @@ kernel-clean:
   fi
   {{MAKE}} -C "{{KERNEL_SRC}}" clean
 
-[doc("build every out-of-tree module under /work/drivers/*/ with M= against the kernel tree; .ko files go to OUT/modules/")]
-modules:
+# Fails unless the active exercise exists; the dependency of every exercise-scoped recipe.
+[private]
+exercise-check:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  [[ -d "{{EXERCISE_DIR}}" ]] || { printf "exercise '%s' not found under /work/exercises\n" "{{EXERCISE}}" >&2; exit 1; }
+
+[doc("build the active exercise's out-of-tree module, /work/exercises/EXERCISE/driver/, with M= against the kernel tree; .ko files go to OUT/driver/ (cleared first)")]
+driver: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
   shopt -s nullglob
   [[ -f "{{KERNEL_SRC}}/Module.symvers" ]] || { printf "%s/Module.symvers missing: run 'kernel-build' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
-  mkdir -p "{{OUT}}/modules"
-  rm -f "{{OUT}}/modules"/*.ko
+  driver="{{EXERCISE_DIR}}/driver"
+  [[ -f "${driver}/Makefile" ]] || { printf '%s/Makefile missing\n' "${driver}" >&2; exit 1; }
+  mkdir -p "{{OUT}}/driver"
+  rm -f "{{OUT}}/driver"/*.ko
+  mo="{{OUT}}/driver-build/{{EXERCISE}}"
+  mkdir -p "${mo}"
+  {{MAKE}} -C "{{KERNEL_SRC}}" M="${driver}" MO="${mo}" modules
   built=()
-  for dir in /work/drivers/*/; do
-    [[ -f "${dir}Makefile" ]] || continue
-    mo="{{OUT}}/modules-build/$(basename "${dir}")"
-    mkdir -p "${mo}"
-    {{MAKE}} -C "{{KERNEL_SRC}}" M="${dir%/}" MO="${mo}" modules
-    for ko in "${mo}"/*.ko; do
-      cp "${ko}" "{{OUT}}/modules/"
-      built+=("${ko##*/}")
-    done
+  for ko in "${mo}"/*.ko; do
+    cp "${ko}" "{{OUT}}/driver/"
+    built+=("${ko##*/}")
   done
-  printf 'built %s/modules: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
+  printf 'built %s/driver: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
 
-[doc("remove OUT/modules-build/ (the MO= build trees) and OUT/modules/")]
-modules-clean:
+[doc("remove OUT/driver-build/ (the MO= build trees) and OUT/driver/ for every exercise, not only the active one")]
+driver-clean:
   #!/usr/bin/env bash
   set -euo pipefail
-  rm -rf "{{OUT}}/modules-build" "{{OUT}}/modules"
+  rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
-[doc("build every exercise under /work/userspace/*/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/<name>/, the products OUT/userspace-build/<name>/<name> and every lib*.so* there are copied to OUT/userspace/")]
-userspace:
+[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus every /work/exercises/EXERCISE/userspace/lua/*.lua as-is, are copied to OUT/userspace/ (cleared first)")]
+userspace: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
   shopt -s nullglob
+  dir="{{EXERCISE_DIR}}/userspace"
+  [[ -f "${dir}/lib/Makefile" && -f "${dir}/app/Makefile" ]] || { printf '%s needs lib/Makefile and app/Makefile\n' "${dir}" >&2; exit 1; }
   rm -rf "{{OUT}}/userspace"
   mkdir -p "{{OUT}}/userspace"
-  built=()
-  for dir in /work/userspace/*/; do
-    [[ -f "${dir}/lib/Makefile" ]] || continue
-    name="$(basename "${dir}")"
-    build="{{OUT}}/userspace-build/${name}"
-    mkdir -p "${build}"
-    make -C "${dir%/}/lib" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/drivers
-    make -C "${dir%/}/app" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/drivers
-    [[ -x "${build}/${name}" ]] || { printf '%s did not produce %s\n' "${dir}app/Makefile" "${build}/${name}" >&2; exit 1; }
-    cp "${build}/${name}" "{{OUT}}/userspace/"
-    for lib in "${build}"/lib*.so*; do
-      cp "${lib}" "{{OUT}}/userspace/"
-    done
-    built+=("${name}")
+  build="{{OUT}}/userspace-build/{{EXERCISE}}"
+  mkdir -p "${build}"
+  make -C "${dir}/lib" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/exercises
+  make -C "${dir}/app" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/exercises
+  [[ -x "${build}/{{EXERCISE}}" ]] || { printf '%s/app/Makefile did not produce %s\n' "${dir}" "${build}/{{EXERCISE}}" >&2; exit 1; }
+  cp "${build}/{{EXERCISE}}" "{{OUT}}/userspace/"
+  for lib in "${build}"/lib*.so*; do
+    cp "${lib}" "{{OUT}}/userspace/"
   done
-  printf 'built %s/userspace: %s\n' "{{OUT}}" "${built[*]:-(none)}" >&2
+  for lua in "${dir}/lua"/*.lua; do
+    cp "${lua}" "{{OUT}}/userspace/"
+  done
+  printf 'built %s/userspace: %s\n' "{{OUT}}" "{{EXERCISE}}" >&2
 
-[doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/")]
+[doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/ for every exercise, not only the active one")]
 userspace-clean:
   #!/usr/bin/env bash
   set -euo pipefail
   rm -rf "{{OUT}}/userspace-build" "{{OUT}}/userspace"
 
-[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test at /usr/bin, any OUT/modules/*.ko at /lib/modules, any OUT/userspace/* by what `file` says it is: ELF executables at /usr/bin (recorded as the /etc/lkds/tests manifest), shared objects at /lib, plus the loader at its PT_INTERP path and every library ldd resolves for them copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
+[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test and this image's /usr/bin/luajit at /usr/bin, any OUT/driver/*.ko at /lib/modules, any OUT/userspace/* by what it is: a file starting with `#!` is a script and, like an ELF executable (per `file`), goes to /usr/bin and into the /etc/lkds/tests manifest; ELF shared objects go to /lib; anything else fails; plus the loader at its PT_INTERP path and every library ldd resolves for luajit and the ELF files copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
   busybox="$(command -v busybox)"
   file -b "${busybox}" | grep -q 'statically linked' || { printf '%s is not statically linked\n' "${busybox}" >&2; exit 1; }
+  [[ -x /usr/bin/luajit ]] || { printf "/usr/bin/luajit missing from the image: run 'image-vdev'\n" >&2; exit 1; }
   root="$(mktemp -d)"
   trap 'rm -rf "${root}"' EXIT
   mkdir -p "${root}/bin" "${root}/sbin" "${root}/proc" "${root}/sys" "${root}/dev"
@@ -135,61 +144,67 @@ initramfs:
   chmod 755 "${root}/init"
   # busybox links applets to its own resolved path; chroot makes that /bin/busybox, as the guest sees it.
   chroot "${root}" /bin/busybox --install -s /bin
-  if [[ -d "{{OUT}}/modules" ]]; then
+  if [[ -d "{{OUT}}/driver" ]]; then
     mkdir -p "${root}/lib/modules"
-    for ko in "{{OUT}}/modules"/*.ko; do
+    for ko in "{{OUT}}/driver"/*.ko; do
       [[ -f "${ko}" ]] && cp "${ko}" "${root}/lib/modules/"
     done
   else
-    printf '%s/modules absent; building initramfs without modules\n' "{{OUT}}" >&2
+    printf '%s/driver absent; building initramfs without modules\n' "{{OUT}}" >&2
   fi
-  mkdir -p "${root}/usr/bin"
+  mkdir -p "${root}/usr/bin" "${root}/lib"
   install -m 755 /work/vdev/initramfs/lkds-test "${root}/usr/bin/lkds-test"
+  # the guest's script interpreter: an executable that is not a test, so never in the manifest
+  install -m 755 /usr/bin/luajit "${root}/usr/bin/luajit"
+  elfs=(/usr/bin/luajit)
   if [[ -d "{{OUT}}/userspace" ]]; then
-    mkdir -p "${root}/lib"
     staged=()
-    elfs=()
     for bin in "{{OUT}}/userspace"/*; do
       [[ -f "${bin}" ]] || continue
+      if [[ "$(head -c 2 "${bin}")" == '#!' ]]; then
+        # a script names its interpreter in the shebang; it has no ldd closure of its own
+        install -m 755 "${bin}" "${root}/usr/bin/"; staged+=("$(basename "${bin}")")
+        continue
+      fi
       case "$(file -b "${bin}")" in
         ELF*" executable,"*) install -m 755 "${bin}" "${root}/usr/bin/"; staged+=("$(basename "${bin}")") ;;
         ELF*" shared object,"*) install -m 755 "${bin}" "${root}/lib/" ;;
-        *) printf '%s is neither an ELF executable nor a shared object\n' "${bin}" >&2; exit 1 ;;
+        *) printf '%s is neither a #! script, an ELF executable nor a shared object\n' "${bin}" >&2; exit 1 ;;
       esac
       elfs+=("${bin}")
-    done
-    # Runtime closure from the image that built them; LD_LIBRARY_PATH resolves the exercise's own libraries.
-    for elf in "${elfs[@]}"; do
-      deps="$(LD_LIBRARY_PATH="{{OUT}}/userspace" ldd "${elf}" 2>&1)" || {
-        [[ "${deps}" == *"not a dynamic executable"* ]] && continue
-        printf 'ldd %s failed: %s\n' "${elf}" "${deps}" >&2; exit 1
-      }
-      while IFS= read -r line; do
-        read -r name arrow target _ <<< "${line}"
-        if [[ "${arrow}" == "=>" ]]; then
-          [[ "${target}" == /* ]] || { printf '%s: %s\n' "${elf}" "${line}" >&2; exit 1; }
-          cp -L "${target}" "${root}/lib/"
-        elif [[ "${name}" == /* ]]; then
-          # the interpreter: the kernel opens it at exactly its PT_INTERP path
-          [[ "${name}" == /lib/* || "${name}" == /lib64/* ]] || { printf '%s: %s is outside /lib\n' "${elf}" "${name}" >&2; exit 1; }
-          mkdir -p "${root}$(dirname "${name}")"
-          cp -L "${name}" "${root}${name}"
-        elif [[ "${name}" != linux-vdso* ]]; then
-          printf '%s: unrecognised ldd line: %s\n' "${elf}" "${line}" >&2; exit 1
-        fi
-      done <<< "${deps}"
     done
     mkdir -p "${root}/etc/lkds"
     printf '%s\n' "${staged[@]}" > "${root}/etc/lkds/tests"
   else
     printf '%s/userspace absent; building initramfs without userspace programs\n' "{{OUT}}" >&2
   fi
+  # Runtime closure from the image that built them; LD_LIBRARY_PATH resolves the exercise's own libraries.
+  for elf in "${elfs[@]}"; do
+    deps="$(LD_LIBRARY_PATH="{{OUT}}/userspace" ldd "${elf}" 2>&1)" || {
+      [[ "${deps}" == *"not a dynamic executable"* ]] && continue
+      printf 'ldd %s failed: %s\n' "${elf}" "${deps}" >&2; exit 1
+    }
+    while IFS= read -r line; do
+      read -r name arrow target _ <<< "${line}"
+      if [[ "${arrow}" == "=>" ]]; then
+        [[ "${target}" == /* ]] || { printf '%s: %s\n' "${elf}" "${line}" >&2; exit 1; }
+        cp -L "${target}" "${root}/lib/"
+      elif [[ "${name}" == /* ]]; then
+        # the interpreter: the kernel opens it at exactly its PT_INTERP path
+        [[ "${name}" == /lib/* || "${name}" == /lib64/* ]] || { printf '%s: %s is outside /lib\n' "${elf}" "${name}" >&2; exit 1; }
+        mkdir -p "${root}$(dirname "${name}")"
+        cp -L "${name}" "${root}${name}"
+      elif [[ "${name}" != linux-vdso* ]]; then
+        printf '%s: unrecognised ldd line: %s\n' "${elf}" "${line}" >&2; exit 1
+      fi
+    done <<< "${deps}"
+  done
   cd "${root}"
   find . | cpio -o -H newc --quiet | gzip > "{{OUT}}/initramfs.cpio.gz"
   printf 'built %s/initramfs.cpio.gz (%s bytes)\n' "{{OUT}}" "$(stat -c %s "{{OUT}}/initramfs.cpio.gz")" >&2
 
 [doc("build the modules and userspace programs and pack the initramfs, in one container")]
-stage: modules userspace initramfs
+stage: driver userspace initramfs
 
 [doc("copy the kernel tree's .clang-format to OUT/clang-format for the host-side format recipe")]
 export-clang-format:
@@ -198,11 +213,13 @@ export-clang-format:
   [[ -f "{{KERNEL_SRC}}/.clang-format" ]] || { printf "%s/.clang-format missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
   cp -v "{{KERNEL_SRC}}/.clang-format" "{{OUT}}/clang-format"
 
-[doc("run the kernel tree's checkpatch.pl over every *.c and *.h under /work/drivers/NAME/ (default: all); nonzero on any error or warning")]
-checkpatch NAME="":
+[doc("run the kernel tree's checkpatch.pl over every *.c and *.h under the active exercise's /work/exercises/EXERCISE/driver/; nonzero on any error or warning")]
+checkpatch: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
   [[ -f "{{KERNEL_SRC}}/scripts/checkpatch.pl" ]] || { printf "%s/scripts/checkpatch.pl missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
-  find "/work/drivers/{{NAME}}" -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+  driver="{{EXERCISE_DIR}}/driver"
+  [[ -d "${driver}" ]] || { printf '%s: no such directory\n' "${driver}" >&2; exit 1; }
+  find "${driver}" -type f \( -name '*.c' -o -name '*.h' \) -print0 \
     | xargs -0 "{{KERNEL_SRC}}/scripts/checkpatch.pl" --no-tree --terse -f
   printf 'checkpatch: clean\n' >&2

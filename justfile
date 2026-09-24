@@ -1,5 +1,7 @@
 set positional-arguments
 
+import 'active_exercise.just'
+
 default:
   @just --list
 
@@ -11,10 +13,8 @@ MACHINE_MEMORY_MIB := "8192"
 MACHINE_DISK_GB := "60"
 IMAGE := "lkds-build"
 KERNEL_VOLUME := "lkds-kernel"
-DRIVERS_DIR := justfile_directory() / "drivers"
-USERSPACE_DIR := justfile_directory() / "userspace"
-OUT_DIR := justfile_directory() / "out"
-VDEV_DIR := justfile_directory() / "vdev"
+REPO_DIR := justfile_directory()
+OUT_DIR := REPO_DIR / "out"
 VTARGET_CPUS := "4"
 VTARGET_MEMORY := "2G"
 VTARGET_DEVICES := "edu,dma_mask=0xffffffff edu,dma_mask=0xffffffff"
@@ -26,9 +26,12 @@ VTARGET_QEMU := "just " + quote("VTARGET_CPUS=" + VTARGET_CPUS) + " " + quote("V
 VTARGET_TEST_LOG := OUT_DIR / "vtarget-test.log"
 
 # Each mount is shell-quoted here, so recipes interpolate MOUNTS unquoted.
-MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(DRIVERS_DIR + ":/work/drivers:ro") + " -v " + quote(USERSPACE_DIR + ":/work/userspace:ro") + " -v " + quote(OUT_DIR + ":/work/out") + " -v " + quote(VDEV_DIR + ":/work/vdev:ro")
+MOUNTS := "-v " + quote(KERNEL_VOLUME + ":/kernel") + " -v " + quote(REPO_DIR + ":/work:ro") + " -v " + quote(OUT_DIR + ":/work/out")
+# Command-line overrides never reach a nested just, so every nested just that reaches an exercise-scoped recipe
+# is passed the active exercise explicitly. Shell-quoted here, so recipes interpolate EXERCISE_ARG unquoted.
+EXERCISE_ARG := quote("EXERCISE=" + EXERCISE)
 # The in-container runner; the only container path named outside MOUNTS.
-VDEV_JUST := "just --justfile /work/vdev/justfile"
+VDEV_JUST := "just --justfile /work/vdev/justfile " + EXERCISE_ARG
 
 [doc("verify the host tools the loop needs are on PATH")]
 host-check:
@@ -86,14 +89,14 @@ guard-vdev:
 run-vdev +ARGS: guard-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  mkdir -p "{{DRIVERS_DIR}}" "{{USERSPACE_DIR}}" "{{OUT_DIR}}"
+  mkdir -p "{{OUT_DIR}}"
   podman run --rm --workdir /kernel {{MOUNTS}} "{{IMAGE}}" "$@"
 
 [doc("open an interactive bash shell in a fresh build container (machine must be running)")]
 shell-vdev: guard-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  mkdir -p "{{DRIVERS_DIR}}" "{{USERSPACE_DIR}}" "{{OUT_DIR}}"
+  mkdir -p "{{OUT_DIR}}"
   podman run --rm -it --workdir /kernel {{MOUNTS}} "{{IMAGE}}" bash
 
 # Workflow entry points: start the machine, then hand the work to vdev/justfile.
@@ -115,43 +118,45 @@ kernel-build-vdev: machine-vdev
 kernel-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} kernel-clean
 
-[doc("stage a busybox root with vdev/initramfs/init and pack it to out/initramfs.cpio.gz")]
+[doc("stage a busybox root with vdev/initramfs/init, the out/driver/ modules, the out/userspace/ programs, libraries and lua scripts, and luajit, then pack it to out/initramfs.cpio.gz")]
 initramfs-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} initramfs
   ls -l "{{OUT_DIR}}/initramfs.cpio.gz"
 
-[doc("build every out-of-tree module under drivers/ against the kernel tree; .ko files land in out/modules/")]
-modules-vdev: machine-vdev
-  just run-vdev {{VDEV_JUST}} modules
-  ls -l "{{OUT_DIR}}/modules/"
+[doc("build the active exercise's out-of-tree module, exercises/EXERCISE/driver/, against the kernel tree; .ko files land in out/driver/")]
+driver-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} driver
+  ls -l "{{OUT_DIR}}/driver/"
 
-[doc("remove out/modules-build/ (the MO= build trees) and out/modules/")]
-modules-clean-vdev: machine-vdev
-  just run-vdev {{VDEV_JUST}} modules-clean
+[doc("remove out/driver-build/ (the MO= build trees) and out/driver/ for every exercise, not only the active one")]
+driver-clean-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} driver-clean
 
-[doc("build every exercise under userspace/ with clang (lib/ then app/); executables and lib*.so land in out/userspace/")]
+[doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so and lua/*.lua land in out/userspace/")]
 userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace
   ls -l "{{OUT_DIR}}/userspace/"
 
-[doc("remove out/userspace-build/ (the intermediate trees) and out/userspace/")]
+[doc("remove out/userspace-build/ (the intermediate trees) and out/userspace/ for every exercise, not only the active one")]
 userspace-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace-clean
 
-[doc("run the kernel tree's checkpatch.pl over drivers/ (or one driver dir by name); fails on any error or warning")]
-checkpatch-vdev *ARGS: machine-vdev
-  just run-vdev {{VDEV_JUST}} checkpatch "$@"
+[doc("run the kernel tree's checkpatch.pl over the active exercise's exercises/EXERCISE/driver/; fails on any error or warning")]
+checkpatch-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} checkpatch
 
 [doc("copy the kernel's .clang-format to out/clang-format (no-op if present)")]
 export-clang-format-vdev *ARGS: machine-vdev
   @[[ -f "{{OUT_DIR}}/clang-format" ]] || just run-vdev {{VDEV_JUST}} export-clang-format "$@"
 
-[doc("Rewrite IN PLACE every *.c and *.h under ./drivers/*/ with clang-format and the kernel tree's .clang-format")]
+[doc("Rewrite IN PLACE every *.c and *.h under the active exercise's ./exercises/EXERCISE/driver/ with clang-format and the kernel tree's .clang-format")]
 format: export-clang-format-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  find ./drivers -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
-  echo "formatted all drivers and userspace c sources"
+  driver="./exercises/{{EXERCISE}}/driver"
+  [[ -d "${driver}" ]] || { printf "exercise '%s' not found under ./exercises\n" "{{EXERCISE}}" >&2; exit 1; }
+  find "${driver}" -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
+  printf 'formatted every driver c source under %s/\n' "${driver}"
 
 # Test machine: boots out/ on the host under QEMU. run-vtarget and test-vtarget share vtarget-qemu.
 
@@ -205,13 +210,13 @@ test-vtarget: host-check
 [doc("format module sources and check for kernel coding standard compliance")]
 precommit: format checkpatch-vdev
 
-[doc("build modules, userspace, initramfs in vdev")]
+[doc("build the active exercise's modules and userspace, then the initramfs, in vdev")]
 stage-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} stage
 
-[doc("one dev iteration: build modules, userspace and initramfs in vdev, then boot vtarget and run lkds-test")]
+[doc("one dev iteration: build the active exercise's modules and userspace and the initramfs in vdev, then boot vtarget and run lkds-test")]
 test: machine-vdev
-  @just stage-vdev
+  @just {{EXERCISE_ARG}} stage-vdev
   just test-vtarget
 
 [doc("install or update the agent and command set under .claude/")]

@@ -24,6 +24,7 @@ RUN apt-get update \
     libssl-dev \
     lld \
     llvm \
+    luajit \
     lz4 \
     python3 \
     rsync \

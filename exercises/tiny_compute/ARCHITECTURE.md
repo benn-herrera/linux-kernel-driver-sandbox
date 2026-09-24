@@ -2,7 +2,7 @@
 
 ## Project Layout
 
-### Driver Impl – drivers/tiny_compute
+### Driver Impl – exercises/tiny_compute/driver
 
 - common.h: device constants (macros and enums), structs, function prototypes
 - main.c: entry point
@@ -14,13 +14,13 @@
 - tcd_ioctl.h: userspace-facing ABI header
 - Makefile: kbuild format makefile fragment
 
-### Driver Test – userspace/tiny_compute
+### Driver Test – exercises/tiny_compute/userspace
 
 - common.h: utility definitions and function prototypes for test program
 - main.cpp: entry point for test program that exercises the tiny_compute driver ABI
 - functionality.cpp: basic functionality tests (does it do the thing?)
 - resilience.cpp: adversarial usage tests (does it blow up if you kick it?)
-- Makefile: single line consumer of `../cpp.mk`, generic C++ userspace project Makefile
+- Makefile: single line consumer of `../../../cpp.mk`, generic C++ userspace project Makefile
 
 ## Project Design
 

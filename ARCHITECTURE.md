@@ -17,36 +17,44 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 
 - Two justfiles, each executing where it is mounted (CONVENTIONS.md). The
   root `justfile` runs on the macOS host: machine lifecycle, image build,
-  the container bridge, and the workflow entry points. `vdev/justfile` is
-  bind-mounted read-only at `/work/vdev` and run by the `just` in the image;
-  it holds the kernel recipes and the `KERNEL_VERSION` pin.
+  the container bridge, and the workflow entry points. `vdev/justfile`,
+  reached through the read-only repository mount at `/work/vdev`, is run by
+  the `just` in the image; it holds the kernel recipes and the
+  `KERNEL_VERSION` pin. Both `import` `active_exercise.just` at the repo
+  root, which sets `EXERCISE`, the active exercise (CONVENTIONS.md); the
+  root reaches it by name, `vdev/justfile` as `../active_exercise.just`
+  through the same read-only mount.
 - `just run-vdev <cmd>` is the single bridge into the container: it fails
   with `dev box is not running: run 'just machine-vdev'` unless the machine
   is already running, then runs `<cmd>` in a fresh container with the
   `MOUNTS` set. It never starts the machine.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
-  `kernel-build-vdev`, `kernel-clean-vdev`, `modules-vdev`,
-  `modules-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
+  `kernel-build-vdev`, `kernel-clean-vdev`, `driver-vdev`,
+  `driver-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
   `initramfs-vdev`, `checkpatch-vdev`, `export-clang-format-vdev`) depend
   on `machine-vdev` and compose one line: `just run-vdev just --justfile
-  /work/vdev/justfile <name>`, where `<name>` is the root recipe's name
-  with the `-vdev` suffix removed; `checkpatch-vdev` passes its arguments
-  through. `format` runs on the host (see "Style tools"). The recipe dependency chain (build needs
-  config needs fetch) lives in `vdev/justfile`, so one container run
-  covers a workflow.
+  /work/vdev/justfile EXERCISE=<active> <name>`, where `<name>` is the root
+  recipe's name with the `-vdev` suffix removed. The `EXERCISE=` argument is
+  the pass-through a nested `just` needs (CONVENTIONS.md "Test machine"),
+  carried by the `VDEV_JUST` variable so a command-line override reaches
+  the container. `format` runs on the host (see "Style tools"). The recipe
+  dependency chain (build needs config needs fetch) lives in
+  `vdev/justfile`, so one container run covers a workflow.
 - `just test` is one development iteration: `stage` in `vdev/justfile`
-  (modules, userspace, initramfs, one container run) followed by
-  `test-vtarget`. Its exit status is the guest's `lkds-test` result.
+  (the active exercise's modules and userspace, then the initramfs, one
+  container run) followed by `test-vtarget`. Its nested `just stage-vdev`
+  carries the same `EXERCISE=` pass-through. Its exit status is the guest's
+  `lkds-test` result.
 - Neither justfile carries staleness logic of its own.
 - Staleness ownership is split by target: kbuild owns kernel and module
   staleness; the podman build owns image layer caching; the
   `machine-vdev` target checks live state (`podman machine inspect`), not
   timestamps.
-- The project's Makefiles are the kbuild Makefiles under `drivers/<name>/`,
-  needed for out-of-tree module builds (`make M=...`) and invoked from the
-  `modules` recipe in `vdev/justfile`, and the plain Makefiles under
-  `userspace/<name>/` invoked from its `userspace` recipe (see "Userspace
-  programs").
+- The project's Makefiles are the kbuild Makefiles under
+  `exercises/<name>/driver/`, needed for out-of-tree module builds
+  (`make M=...`) and invoked from the `driver` recipe in `vdev/justfile`,
+  and the plain Makefiles under `exercises/<name>/userspace/` invoked from
+  its `userspace` recipe (see "Userspace programs").
 
 ## Build host: Podman machine
 
@@ -64,8 +72,9 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `rustfmt`, `rust-clippy`) and bindgen 0.71 from trixie; GNU make, flex,
   bison, bc, libssl-dev, libelf-dev, libncurses-dev, python3, cpio, kmod,
   rsync, curl, busybox-static, gdb, pahole (dwarves), sparse, the
-  xz/zstd/lz4 compressors, `clang-format` (same major as clang), and
-  `just` (runs `vdev/justfile`).
+  xz/zstd/lz4 compressors, `clang-format` (same major as clang),
+  `luajit` (the guest's script interpreter, staged into the initramfs),
+  and `just` (runs `vdev/justfile`).
   `build-essential` remains in the image (GNU make, libc headers); with
   `LLVM=1` kbuild uses clang for both target and host objects.
 - Base image: `docker.io/library/debian:trixie-slim`. Built by
@@ -89,14 +98,12 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   volume.
 - The named volume `KERNEL_VOLUME` (`lkds-kernel`) is mounted at `/kernel`,
   the container's working directory. Podman creates it on first use.
-- Four host directories are bind-mounted: `drivers/` read-only at
-  `/work/drivers` (driver source), `userspace/` read-only at
-  `/work/userspace` (userspace program source), `OUT_DIR` (`out/`) at
-  `/work/out` (the only writable mount: build output handed to the host),
-  and `vdev/` read-only at `/work/vdev` (the in-container justfile).
-  `just run-vdev` and `just shell-vdev` create the first three on the host
-  before mounting; the mount set is the `MOUNTS` variable in the root
-  justfile.
+- Two host directories are bind-mounted: the repository root read-only at
+  `/work` (exercise sources, `vdev/justfile`, everything the container
+  reads) and `OUT_DIR` (`out/`) read-write at `/work/out` (the only
+  writable path: build output handed to the host). `just run-vdev` and
+  `just shell-vdev` create `out/` on the host before mounting; the mount
+  set is the `MOUNTS` variable in the root justfile.
 
 ## Kernel source and build
 
@@ -182,15 +189,21 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `sys`, `dev` directories in a container temp dir, then packs a gzipped
   newc cpio to `out/initramfs.cpio.gz`. Always rebuilds; independent of the
   kernel and module recipes.
-- If `out/modules/` exists, every `.ko` in it is staged at `/lib/modules/`;
+- If `out/driver/` exists, every `.ko` in it is staged at `/lib/modules/`;
   otherwise the archive is built without modules and says so on stderr.
-- If `out/userspace/` exists, every file in it is classified by `file`,
-  never by name: an ELF executable (PIE included) is staged at `/usr/bin/`,
-  an ELF shared object at `/lib/`, anything else fails the recipe.
-  Otherwise the archive is built without userspace programs and says so
-  on stderr.
-- Runtime closure: for every staged executable and project library the
-  recipe runs `ldd` in the build image, with `LD_LIBRARY_PATH` at
+- The image's `/usr/bin/luajit` is staged at `/usr/bin/luajit`, always,
+  with its runtime closure (below). It is the interpreter for the
+  exercises' scripts, not a test: it never appears in the manifest.
+- If `out/userspace/` exists, every file in it is classified by content,
+  never by name: a file whose first two bytes are `#!` is a script and is
+  staged at `/usr/bin/` mode 755 with no closure of its own (its shebang
+  names the interpreter); otherwise `file` decides: an ELF executable
+  (PIE included) is staged at `/usr/bin/`, an ELF shared object at
+  `/lib/`, anything else fails the recipe. Otherwise the archive is built
+  without userspace programs and says so on stderr.
+- Runtime closure: for `luajit` and every staged ELF executable and
+  project library the recipe runs `ldd` in the build image, with
+  `LD_LIBRARY_PATH` at
   `out/userspace/` so the exercise's own libraries resolve, and copies each
   `=>` target into `/lib/` (flat, dereferencing symlinks: glibc's default
   search covers `/lib`) and the interpreter to exactly its `PT_INTERP`
@@ -203,10 +216,10 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   always: loads every `.ko` staged at `/lib/modules/`, runs every command
   named in the `/etc/lkds/tests` manifest, and prints a one-line summary.
   Exits 0 if every test passed, 1 if any failed.
-- `/etc/lkds/tests` lists the basename of every executable
+- `/etc/lkds/tests` lists the basename of every executable and script
   `initramfs-vdev` staged from `out/userspace/`, one per line, and never a
-  library; it is written only when `out/userspace/` existed at staging
-  time.
+  library nor `luajit`; it is written only when `out/userspace/` existed
+  at staging time.
 
 ## Debugging
 
@@ -217,17 +230,21 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 
 ## Driver code
 
-- One module per directory: `drivers/<name>/` holds the sources and a
-  kbuild `Makefile` (`obj-m += <name>.o`). The kernel tree path and `M=`
-  come from the recipe, not the Makefile.
-- `just modules-vdev` runs `make -C KERNEL_SRC M=/work/drivers/<name>
-  MO=/work/out/modules-build/<name> modules` for every `drivers/*/` with a
-  `Makefile`, against the in-tree build in the volume; it fails naming
-  `kernel-build` if `Module.symvers` is absent. `MO=` sends every kbuild
-  artifact to the output tree, so `drivers/` is never written and is
-  mounted read-only. The resulting `.ko` files are copied to `out/modules/`
-  (stale `.ko` files cleared first). `just modules-clean-vdev` removes
-  `out/modules-build/` and `out/modules/`.
+- One module per exercise: `exercises/<name>/driver/` holds the sources
+  and a kbuild `Makefile` (`obj-m += <name>.o`). The kernel tree path and
+  `M=` come from the recipe, not the Makefile.
+- `just driver-vdev` runs `make -C KERNEL_SRC
+  M=/work/exercises/<name>/driver MO=/work/out/driver-build/<name>
+  modules` for the active exercise, against the in-tree build in the
+  volume; it fails with `exercise '<name>' not found under /work/exercises`
+  if the exercise directory is missing, if `driver/Makefile` is missing,
+  and naming `kernel-build` if `Module.symvers` is absent. `MO=` sends
+  every kbuild artifact to the output tree, so the source tree is never
+  written and is mounted read-only. The resulting `.ko` files are copied
+  to `out/driver/` (stale `.ko` files cleared first, so it holds only the
+  active exercise's). `just driver-clean-vdev` removes
+  `out/driver-build/` and `out/driver/` whole, every exercise's build
+  tree included.
 - `just initramfs-vdev` places the `.ko` files at `/lib/modules/` in the
   guest; load with `insmod /lib/modules/<name>.ko`, unload with `rmmod`.
   Modules are built for this kernel tree only, with no version
@@ -235,49 +252,58 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 
 ## Userspace programs
 
-- One exercise per directory: `userspace/<name>/lib/` holds the library
-  sources and `userspace/<name>/app/` the executable's, each with a plain
-  GNU Makefile (not kbuild) that includes the shared `userspace/cpp.mk`,
-  honours `CC`, `CXX`, `OUT` and `DRIVER_INCLUDE`, and writes only under
-  `OUT`. The products may be dynamic: a PIE executable `<name>` linking
-  `lib<name>*.so` by `SONAME`; the initramfs carries their runtime closure
-  (see "Initramfs"). The contract is in CONVENTIONS.md.
-- `just userspace-vdev` runs `make -C /work/userspace/<name>/lib` then
-  `make -C /work/userspace/<name>/app`, each with `CC=clang CXX=clang++
-  OUT=/work/out/userspace-build/<name> DRIVER_INCLUDE=/work/drivers`, for
-  every `userspace/*/` with a `lib/Makefile`, then copies the executable
-  `<name>` and every `lib*.so*` from that tree to `out/userspace/`, which
-  holds only what the initramfs ships (cleared first). It does not depend
-  on the kernel recipes. `just userspace-clean-vdev` removes
-  `out/userspace-build/` and `out/userspace/`.
-- `just initramfs-vdev` places the executables at `/usr/bin/` in the
-  guest, which is on busybox's default `PATH`, and the libraries at
-  `/lib/`. `userspace/tiny_compute/` is the first test exercise.
+- One userspace tree per exercise: `exercises/<name>/userspace/lib/` holds
+  the library sources and `exercises/<name>/userspace/app/` the
+  executable's, each with a plain GNU Makefile (not kbuild) that includes
+  the shared `exercises/cpp.mk`, honours `CC`, `CXX`, `OUT` and
+  `DRIVER_INCLUDE`, and writes only under `OUT`. The products may be
+  dynamic: a PIE executable `<name>` linking `lib<name>*.so` by `SONAME`;
+  the initramfs carries their runtime closure (see "Initramfs"). An
+  optional `exercises/<name>/userspace/lua/` holds `*.lua` scripts that
+  ship as-is, with no build step; one that starts with `#!/usr/bin/luajit`
+  runs as a test through `lkds-test` by its shebang. The contract is in
+  CONVENTIONS.md.
+- `just userspace-vdev` runs `make -C /work/exercises/<name>/userspace/lib`
+  then `make -C /work/exercises/<name>/userspace/app`, each with `CC=clang
+  CXX=clang++ OUT=/work/out/userspace-build/<name>
+  DRIVER_INCLUDE=/work/exercises`, for the active exercise (failing if the
+  exercise directory, its `lib/Makefile` or its `app/Makefile` is
+  missing), then copies the executable `<name>` and every `lib*.so*` from
+  that tree, and every `exercises/<name>/userspace/lua/*.lua`, to
+  `out/userspace/`, which holds only what the initramfs ships (cleared
+  first). It does not depend on the kernel recipes.
+  `just userspace-clean-vdev` removes `out/userspace-build/` and
+  `out/userspace/` whole, every exercise's intermediate tree included.
+- `just initramfs-vdev` places the executables and scripts at `/usr/bin/`
+  in the guest, which is on busybox's default `PATH`, and the libraries at
+  `/lib/`. `exercises/tiny_compute/userspace/` is the first test exercise.
 
 ## Style tools
 
-- `just checkpatch-vdev [name]` runs the kernel tree's
+- `just checkpatch-vdev` runs the kernel tree's
   `scripts/checkpatch.pl --no-tree --terse -f` over every `*.c` and `*.h`
-  under `drivers/*/`, or under `drivers/<name>/` only. Its exit status is
-  checkpatch's own: nonzero on any error or warning. It fails naming
-  `kernel-fetch` when the tree is absent.
+  under the active exercise's `exercises/<name>/driver/` (a missing
+  exercise fails with `exercise '<name>' not found under /work/exercises`).
+  Its exit status is checkpatch's own: nonzero on any error or warning. It
+  fails naming `kernel-fetch` when the tree is absent.
 - `just format` runs on the host: the Homebrew `clang-format` with the
   kernel tree's `.clang-format`, exported to `out/clang-format` by
   `just export-clang-format-vdev` (a prerequisite, no-op once present),
-  over every `*.c` and `*.h` under `drivers/` and `userspace/`, so both
-  sides of an exercise share kernel style. It rewrites files in place. It
+  over every `*.c` and `*.h` under the active exercise's
+  `exercises/<name>/driver/`. It rewrites files in place. It
   runs on the host because a rewrite from inside the container replaces
   the file with root's umask and drops the group-write bit the IDE needs.
 
 ## Repo layout
 
-- `justfile`, `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`
-  (mounted at `/work/vdev`), `Containerfile`, the project documents,
-  `drivers/` (mounted at `/work/drivers`; `drivers/tiny_compute/` is the first
-  user exercise driver), `userspace/` (mounted at
-  `/work/userspace`; `userspace/tiny_compute/` is the driver test), `out/`
-  (gitignored build output, mounted at `/work/out`), `.claude-temp/`
-  (gitignored scratch).
+- The repository root is mounted read-only at `/work`: `justfile`,
+  `active_exercise.just` (the `EXERCISE` selection both justfiles import),
+  `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`,
+  `Containerfile`, the project documents, `exercises/cpp.mk` and one
+  `exercises/<name>/` tree per exercise (`SPEC.md`, `ARCHITECTURE.md`,
+  `driver/`, `userspace/`; `tiny_compute` is the first), `out/`
+  (gitignored build output, mounted read-write at `/work/out`),
+  `.claude-temp/` (gitignored scratch).
 
 ## Explicitly out of scope
 

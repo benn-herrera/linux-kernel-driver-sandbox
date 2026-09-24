@@ -45,24 +45,32 @@
   `agent-user`. A host path can be bind-mounted only if `agent-user` has
   read and search permission on every directory from `/Users` down to it;
   traverse-only on an ancestor makes the mount fail with permission denied.
-- `/work/drivers`, `/work/userspace` and `/work/vdev` are read-only inside
-  the container; `/work/out` is the only writable mount. A recipe that
-  assembles files stages them in a container-local temp dir and writes only
-  to `/work/out`. Module builds pass `MO=` so kbuild's artifacts land there
-  too.
+- The repository is mounted read-only at `/work` inside the container;
+  `/work/out` is the only writable path. A recipe that assembles files
+  stages them in a container-local temp dir and writes only to `/work/out`.
+  Module builds pass `MO=` so kbuild's artifacts land there too.
 - Kernel configuration choices live in `vdev/kernel-config/*.config`
   fragments merged over defconfig and debug.config by `kernel-config`.
   `.config` is never edited by hand; a change to a fragment is followed by
   `kernel-config-vdev` and a rebuild.
-- An exercise's userspace tree, `userspace/<name>/`, builds through plain
-  Makefiles (not kbuild fragments) that take `CC`, `CXX`, `OUT` and
-  `DRIVER_INCLUDE` (the directory holding `drivers/`, for the UAPI
-  headers) and write only under `OUT`. It produces the executable
+- An exercise's userspace tree, `exercises/<name>/userspace/`, builds
+  through plain Makefiles (not kbuild fragments) that take `CC`, `CXX`,
+  `OUT` and `DRIVER_INCLUDE` (the `exercises/` directory, so the UAPI
+  headers resolve as `<name>/driver/*.h`) and write only under `OUT`. It
+  produces the executable
   `$(OUT)/<name>`, named after the exercise directory, and optionally
   shared libraries `$(OUT)/lib<name>*.so` each carrying a `SONAME` equal to
   its file name; the executable links a library by that name, never by
   path. Static linking is not required. Anything else written under `OUT`
   is intermediate. The Makefiles know no container or repository path.
+  `exercises/<name>/userspace/lua/*.lua` are staged as-is, without a build step,
+  and must start with `#!/usr/bin/luajit` to run as tests.
+- The active exercise is `EXERCISE` in `active_exercise.just` at the repo
+  root, imported by both justfiles. Every build, stage, test and style recipe
+  operates on that exercise only; `just EXERCISE=<name> <recipe>` overrides it
+  for one run. Several exercises in one boot would contend for the same `edu`
+  devices, so running more than one is not supported until device-to-driver
+  assignment exists.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs
@@ -70,7 +78,7 @@
 
 ## Test machine
 
-- `out/initramfs.cpio.gz` is a snapshot. After `modules-vdev`, run
+- `out/initramfs.cpio.gz` is a snapshot. After `driver-vdev`, run
   `initramfs-vdev` before `run-vtarget`, or the guest loads the previous
   build of the module.
 - `out/Image` comes only from `kernel-build-vdev`; `stage` and `test` do
@@ -86,4 +94,6 @@
 - A command-line variable override (`just VAR=value recipe`) does not
   reach a `just` invoked from inside a recipe. A root recipe that invokes
   `just` recursively passes every overridable variable it depends on
-  explicitly as `VAR=value` arguments, the way `VTARGET_QEMU` does.
+  explicitly as `VAR=value` arguments, the way `VTARGET_QEMU` does. On the
+  command line, options precede overrides: `just --dry-run VAR=value
+  recipe`; `just` reads anything after the first override as a recipe name.

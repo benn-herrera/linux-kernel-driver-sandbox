@@ -18,7 +18,7 @@ be re-arranged to work.
   - image defined by `./Containerfile`
   - builds a Debian kernel with Rust enabled (once)
   - builds driver projects (C and/or Rust)
-  - builds userspace test applications (any project that builds a statically linked executable)
+  - builds userspace test applications, shared libraries and Lua scripts; the initramfs carries the loader and libraries they need
 - vtarget: QEMU-run virtual ARM64 test target
   - boots the Debian image built by vdev (`./out/Image`), minimal ramfs/busybox setup
   - drivers and userspace programs built on vdev are available following boot
@@ -32,10 +32,12 @@ kernel build, the initramfs, and the QEMU boot. It is owned by the project
 documents at the repo root — THESIS.md, ARCHITECTURE.md, CONVENTIONS.md —
 which describe it in full.
 
-**The exercises** are the driver work itself. Each exercise is a triplet:
-`exercises/<name>/` holds the exercise's own SPEC.md and ARCHITECTURE.md,
-`drivers/<name>/` holds the kernel module and its kbuild Makefile, and
-`userspace/<name>/` holds a static test program with a plain Makefile.
+**The exercises** are the driver work itself. Each exercise is one tree,
+`exercises/<name>/`: its own SPEC.md and ARCHITECTURE.md, `driver/` (the
+kernel module and its kbuild Makefile) and `userspace/` (the test program
+and library, each with a plain Makefile, plus optional `lua/` scripts).
+The recipes build and test one exercise at a time, the one named in
+`active_exercise.just`.
 
 ## Getting started
 
@@ -51,7 +53,7 @@ brew install just podman qemu clang-format
 just machine-vdev
 just image-vdev
 just kernel-build-vdev   # first run: 10-15 minutes, fetches the kernel tarball
-just modules-vdev
+just driver-vdev
 just userspace-vdev
 just initramfs-vdev
 just run-vtarget         # exit with Ctrl-A X
