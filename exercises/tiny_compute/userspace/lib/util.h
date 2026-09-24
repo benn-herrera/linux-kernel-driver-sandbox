@@ -48,5 +48,3 @@ struct AutoFD {
 private:
   int fd = -1;
 };
-
-#define IOC_PARAM(V) ((unsigned long)&V)
