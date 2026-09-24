@@ -71,7 +71,7 @@ Three consumers of the driver, each one layer up from the last:
   reader (LuaJIT `ffi.cdef`) accepts it once `#` lines and the visibility
   macro are stripped: constants are enums, not macros; every struct is
   declared with a typedef; comments are `/* */`
-- the handle is the device fd cast to a pointer, so the library carries no
+- the handle is the device fd xored with a constant cast to a pointer, so the library carries no
   state of its own and a handle costs nothing to copy
 - error mapping is one direction: errno from the ioctl to a `tcdl_result`;
   the caller never sees errno
