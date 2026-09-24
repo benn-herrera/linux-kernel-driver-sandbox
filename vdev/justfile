@@ -135,6 +135,40 @@ userspace-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/userspace-build" "{{OUT}}/userspace"
 
+[doc("generate OUT/compile_commands.json for the active exercise: the module's entries from the kbuild .cmd files under OUT/driver-build/EXERCISE via the kernel tree's gen_compile_commands.py, plus the userspace entries from the clang -MJ fragments under OUT/userspace-build/EXERCISE; for clangd-vdev on the host")]
+compile-commands: exercise-check
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mo="{{OUT}}/driver-build/{{EXERCISE}}"
+  [[ -d "${mo}" ]] || { printf "%s missing: run 'driver' first\n" "${mo}" >&2; exit 1; }
+  build="{{OUT}}/userspace-build/{{EXERCISE}}"
+  shopt -s nullglob
+  frags=("${build}"/*.o.json)
+  (( ${#frags[@]} > 0 )) || { printf "%s has no *.o.json fragments: run 'userspace' first\n" "${build}" >&2; exit 1; }
+  tmp="$(mktemp -d)"
+  trap 'rm -rf "${tmp}"' EXIT
+  python3 "{{KERNEL_SRC}}/scripts/clang-tools/gen_compile_commands.py" -d "${mo}" -o "${tmp}/kernel.json"
+  n="$(python3 - "${tmp}/kernel.json" "${build}" "{{OUT}}/compile_commands.json" <<'EOF'
+  import glob
+  import json
+  import sys
+
+  kernel_json, build, out_path = sys.argv[1:4]
+  with open(kernel_json) as f:
+      entries = json.load(f)
+  for frag in sorted(glob.glob(f"{build}/*.o.json")):
+      with open(frag) as f:
+          text = f.read().rstrip()
+      if text.endswith(','):
+          text = text[:-1]
+      entries.append(json.loads(text))
+  with open(out_path, 'w') as f:
+      json.dump(entries, f, indent=1)
+  print(len(entries))
+  EOF
+  )"
+  printf 'wrote %s/compile_commands.json: %s entries\n' "{{OUT}}" "${n}" >&2
+
 [doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test and this image's /usr/bin/luajit at /usr/bin, any OUT/driver/*.ko at /lib/modules, any OUT/userspace/* by what it is: a file starting with `#!` is a script and, like an ELF executable (per `file`), goes to /usr/bin and into the /etc/lkds/tests manifest (executables first, then scripts); ELF shared objects go to /lib; anything else fails; OUT/userspace/include/, skipped by that classification, is staged whole to /usr/include/, preserving its per-exercise subdirectory; plus the loader at its PT_INTERP path and every library ldd resolves for luajit and the ELF files copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
@@ -236,8 +270,8 @@ initramfs:
   stage_closure
   pack
 
-[doc("build the modules and userspace programs and pack the initramfs, in one container")]
-stage: driver userspace initramfs
+[doc("build the modules and userspace programs and pack the initramfs, in one container, and the compile_commands.json")]
+stage: driver userspace compile-commands initramfs
 
 [doc("copy the kernel tree's .clang-format to OUT/clang-format for the host-side format recipe")]
 export-clang-format:

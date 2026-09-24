@@ -31,7 +31,8 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
   `kernel-build-vdev`, `kernel-clean-vdev`, `driver-vdev`,
   `driver-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
-  `initramfs-vdev`, `checkpatch-vdev`, `export-clang-format-vdev`) depend
+  `compile-commands-vdev`, `initramfs-vdev`, `checkpatch-vdev`,
+  `export-clang-format-vdev`) depend
   on `machine-vdev` and compose one line: `just run-vdev just --justfile
   /work/vdev/justfile EXERCISE=<active> <name>`, where `<name>` is the root
   recipe's name with the `-vdev` suffix removed. The `EXERCISE=` argument is
@@ -41,8 +42,8 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   dependency chain (build needs config needs fetch) lives in
   `vdev/justfile`, so one container run covers a workflow.
 - `just test` is one development iteration: `stage` in `vdev/justfile`
-  (the active exercise's modules and userspace, then the initramfs, one
-  container run) followed by `test-vtarget`. Its nested `just stage-vdev`
+  (the active exercise's modules and userspace, the compile database, then
+  the initramfs, one container run) followed by `test-vtarget`. Its nested `just stage-vdev`
   carries the same `EXERCISE=` pass-through. Its exit status is the guest's
   `lkds-test` result.
 - Neither justfile carries staleness logic of its own.
@@ -72,7 +73,8 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `rustfmt`, `rust-clippy`) and bindgen 0.71 from trixie; GNU make, flex,
   bison, bc, libssl-dev, libelf-dev, libncurses-dev, python3, cpio, kmod,
   rsync, curl, busybox-static, gdb, pahole (dwarves), sparse, the
-  xz/zstd/lz4 compressors, `clang-format` (same major as clang),
+  xz/zstd/lz4 compressors, `clang-format` and `clangd` (same major as
+  clang; see "Editor language server"),
   `luajit` (the guest's script interpreter, staged into the initramfs),
   and `just` (runs `vdev/justfile`).
   `build-essential` remains in the image (GNU make, libc headers); with
@@ -305,6 +307,59 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   runs on the host because a rewrite from inside the container replaces
   the file with root's umask and drops the group-write bit the IDE needs.
 
+## Editor language server
+
+- The kernel headers, the generated config headers and the clang that
+  built the module all live in the container, so clangd runs there and the
+  host editor's LSP client talks to it over stdio. `just clangd-vdev`
+  starts one: `podman run -i` (stdin attached, which `run-vdev` lacks)
+  with the `MOUNTS` set, running the image's `clangd` with
+  `--compile-commands-dir=/work/out` and `--path-mappings=<repo>=/work`,
+  so every path the editor sends is translated to the container view and
+  every path clangd returns is translated back. Extra arguments go to
+  clangd. It requires the machine to be running and never starts it.
+- `out/compile_commands.json` is produced by the `compile-commands` recipe
+  in `vdev/justfile` (`just compile-commands-vdev` on the host; `stage`,
+  and so `just test`, runs it after `driver` and `userspace`). Module
+  entries come from the kbuild `.cmd` files under
+  `out/driver-build/<name>/` through the kernel tree's
+  `scripts/clang-tools/gen_compile_commands.py`; userspace entries come
+  from the per-object fragments `exercises/cpp.mk` has clang emit with
+  `-MJ` under `out/userspace-build/<name>/`. The recipe fails naming
+  `driver` or `userspace` when either input is absent. Make does not
+  track `cpp.mk` as a prerequisite, so a change to its flags needs
+  `just userspace-clean-vdev` before the fragments reflect it.
+- Paths under `/kernel` have no host counterpart: a diagnostic or a
+  go-to-definition into a kernel header returns a container path the
+  host cannot open. That is the one gap; closing it would mean a host
+  bind mount for the kernel tree, which "Storage" rules out for build
+  speed.
+- The editor runs as the primary user and the Podman machine belongs to
+  `agent-user` (CONVENTIONS.md), so the launcher crosses accounts. The
+  editor's LSP client is configured with the command
+  `sudo -n -H -u agent-user /opt/homebrew/bin/just --justfile
+  <repo>/justfile clangd-vdev` in place of `clangd`. `-H` is load-bearing:
+  macOS sudo keeps the caller's `HOME`, and podman refuses to run with a
+  `~/.config` it does not own. For Zed that is
+  `.zed/settings.json` at the repo root, `lsp.clangd.binary` with `path`
+  and `arguments`; the justfile path there is absolute because Zed
+  substitutes no workspace variable into it. The file names the host's
+  account and checkout path, so it is gitignored and README.md carries
+  the template. The same file pins
+  `language_servers` for C and C++ to `clangd` and excludes
+  `sourcekit-lsp`: with the Swift extension installed, Zed otherwise hands
+  C files to Xcode's `sourcekit-lsp`, which spawns Xcode's clangd with no
+  compile database, and the `clangd` binary setting never applies. The
+  absolute `just` path is
+  deliberate: a GUI-launched editor does not inherit the shell's Homebrew
+  `PATH`, and for the same reason the root justfile prepends
+  `/opt/homebrew/bin` to `PATH` for every recipe, so `podman` resolves
+  inside `guard-vdev`. The sudoers rule that lets `-n` succeed is host
+  state the primary user sets by hand (CONVENTIONS.md "Build
+  environment").
+- clangd's background index lands in `out/.cache/clangd/`, beside the
+  compile database.
+
 ## Repo layout
 
 - The repository root is mounted read-only at `/work`: `justfile`,
@@ -314,7 +369,8 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `exercises/<name>/` tree per exercise (`SPEC.md`, `ARCHITECTURE.md`,
   `driver/`, `userspace/`; `tiny_compute` is the first), `out/`
   (gitignored build output, mounted read-write at `/work/out`),
-  `.claude-temp/` (gitignored scratch).
+  `.zed/settings.json` (gitignored, Zed's clangd launcher, see "Editor
+  language server"), `.claude-temp/` (gitignored scratch).
 
 ## Explicitly out of scope
 

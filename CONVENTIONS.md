@@ -75,6 +75,16 @@
   for one run. Several exercises in one boot would contend for the same `edu`
   devices, so running more than one is not supported until device-to-driver
   assignment exists.
+- C and C++ language intelligence in the editor comes from the image's
+  clangd through `just clangd-vdev`, never from a host clangd: only the
+  container has the kernel headers and the compiler the module is built
+  with. `out/compile_commands.json` is a build product of `stage`, so it
+  is as current as the last `just test` or `compile-commands-vdev`. The
+  editor runs as the primary user, so its launcher runs the recipe as
+  `agent-user` under `sudo -n -H` (`-H` because podman needs the target
+  user's `HOME`); the sudoers rule that permits that one
+  command is host state the primary user sets by hand, like a Homebrew
+  install.
 - Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
   Changing them does not resize an existing machine: remove it with
   `podman machine rm` and run `just machine-vdev` again. No target runs

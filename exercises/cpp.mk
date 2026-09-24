@@ -4,6 +4,7 @@
 #   SO:  builds $(OUT)/lib<exercise>.so with a matching SONAME
 # <exercise> is the name of the directory two levels above this Makefile's
 # directory: exercises/<exercise>/userspace/{app,lib}/Makefile.
+# Each object also gets a compile_commands fragment, $(OUT)/<obj>.o.json.
 ifeq ($(strip $(OUT)),)
 $(error OUT is not set: make OUT=<out_dir> DRIVER_INCLUDE=<exercises_dir>)
 endif
@@ -45,11 +46,11 @@ $(OUT)/$(NAME): $(OBJS) $(LINK_DEPS)
 
 $(OUT)/%.o: %.c
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CFLAGS) -MJ $@.json -c -o $@ $<
 
 $(OUT)/%.o: %.cpp
 	@mkdir -p $(OUT)
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MJ $@.json -c -o $@ $<
 
 clean:
-	rm -f $(OUT)/$(NAME) $(OBJS)
+	rm -f $(OUT)/$(NAME) $(OBJS) $(OBJS:%=%.json)

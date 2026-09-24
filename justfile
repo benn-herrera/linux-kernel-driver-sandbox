@@ -2,6 +2,9 @@ set positional-arguments
 
 import 'active_exercise.just'
 
+# Homebrew's bin for every recipe: a GUI-launched editor reaching clangd-vdev has no Homebrew on its PATH.
+export PATH := "/opt/homebrew/bin:" + env("PATH")
+
 default:
   @just --list
 
@@ -80,8 +83,13 @@ image-vdev: machine-vdev
 guard-vdev:
   #!/usr/bin/env bash
   set -euo pipefail
-  if [[ "$(podman machine inspect --format '{{{{.State}}' "{{MACHINE}}" 2>/dev/null)" != "running" ]]; then
-    printf "dev box is not running: run 'just machine-vdev'\n" >&2
+  command -v podman >/dev/null || { printf 'podman not on PATH (%s)\n' "${PATH}" >&2; exit 1; }
+  if ! state="$(podman machine inspect --format '{{{{.State}}' "{{MACHINE}}" 2>&1)"; then
+    printf 'podman machine inspect failed as %s (HOME=%s): %s\n' "$(id -un)" "${HOME}" "${state}" >&2
+    exit 1
+  fi
+  if [[ "${state}" != "running" ]]; then
+    printf "dev box is not running (%s): run 'just machine-vdev'\n" "${state}" >&2
     exit 1
   fi
 
@@ -140,6 +148,17 @@ userspace-vdev: machine-vdev
 [doc("remove out/userspace-build/ (the intermediate trees) and out/userspace/ for every exercise, not only the active one")]
 userspace-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace-clean
+
+[doc("generate out/compile_commands.json on the dev box (see vdev/justfile compile-commands)")]
+compile-commands-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} compile-commands
+
+[doc("run the image's clangd over stdio for a host editor's LSP client, with out/compile_commands.json and host<->container path mapping; machine must be running; extra args go to clangd")]
+clangd-vdev *ARGS: guard-vdev
+  #!/usr/bin/env bash
+  set -euo pipefail
+  mkdir -p "{{OUT_DIR}}"
+  exec podman run --rm -i --workdir /work {{MOUNTS}} "{{IMAGE}}" clangd --compile-commands-dir=/work/out "--path-mappings={{REPO_DIR}}=/work" "$@"
 
 [doc("run the kernel tree's checkpatch.pl over the active exercise's exercises/EXERCISE/driver/; fails on any error or warning")]
 checkpatch-vdev: machine-vdev

@@ -81,6 +81,53 @@ driver sources. `just --list` is the authoritative recipe
 list; ARCHITECTURE.md explains what each piece does and how they fit
 together.
 
+### Editor setup
+
+Code intelligence for driver and userspace sources comes from clangd
+running inside the build container (`just clangd-vdev`), fed by
+`out/compile_commands.json`, which `just test` regenerates.
+The editor's clangd client is pointed at that recipe in place of the
+`clangd` binary, run as `agent-user` because the Podman machine is
+theirs:
+
+```
+sudo -n -H -u agent-user /opt/homebrew/bin/just --justfile /Users/<your-user>/projects/linux-kernel-driver-sandbox/justfile clangd-vdev
+```
+
+That configuration names your account and your checkout path, so it is
+local and gitignored. For Zed, create `.zed/settings.json` at the repo
+root (the `language_servers` lines keep the Swift extension's
+sourcekit-lsp from claiming C files):
+
+```json
+{
+  "languages": {
+    "C": { "language_servers": ["clangd", "!sourcekit-lsp", "..."] },
+    "C++": { "language_servers": ["clangd", "!sourcekit-lsp", "..."] }
+  },
+  "lsp": {
+    "clangd": {
+      "binary": {
+        "path": "/usr/bin/sudo",
+        "arguments": ["-n", "-H", "-u", "agent-user", "/opt/homebrew/bin/just",
+                      "--justfile", "/Users/<your-user>/projects/linux-kernel-driver-sandbox/justfile",
+                      "clangd-vdev"]
+      }
+    }
+  }
+}
+```
+
+Allow that one command passwordless in sudoers
+(`sudo visudo -f /etc/sudoers.d/lkds`):
+
+```
+<your-user> ALL=(agent-user) NOPASSWD: /opt/homebrew/bin/just --justfile /Users/<your-user>/projects/linux-kernel-driver-sandbox/justfile clangd-vdev
+```
+
+Go-to-definition into kernel headers returns a `/kernel/...` path the
+host cannot open; everything within the repo resolves.
+
 ## Documents
 
 THESIS.md states the intent behind the project, ARCHITECTURE.md describes

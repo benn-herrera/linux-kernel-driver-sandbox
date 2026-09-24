@@ -10,6 +10,7 @@ RUN apt-get update \
     ca-certificates \
     clang \
     clang-format \
+    clangd \
     cpio \
     curl \
     dwarves \
