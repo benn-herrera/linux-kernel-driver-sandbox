@@ -1,6 +1,6 @@
 # README – linux-kernel-driver-sandbox
 
-A sandbox for learning Linux kernel driver development by doing the it.
+A sandbox for learning Linux kernel driver development by doing it.
 The human writes the kernel and test code. Agent assistance is limited to project setup and review. Otherwise, what's the point?
 
 ## Platform
