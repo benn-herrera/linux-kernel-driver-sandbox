@@ -33,6 +33,8 @@
 	(TCD_DEVICE_CAP_COMPUTE | TCD_DEVICE_CAP_DMA_READ | \
 	 TCD_DEVICE_CAP_DMA_WRITE)
 
+#define TCD_DEVICE_NAME_BASE "tiny_compute"
+
 // structures
 
 // exactly 24 bytes.

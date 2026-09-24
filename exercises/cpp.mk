@@ -28,7 +28,7 @@ else
 $(error LINK_TYPE must be EXE or SO)
 endif
 
-COMMON_FLAGS := -g -Wall -Wextra $(PIC) -I$(DRIVER_INCLUDE) -I..
+COMMON_FLAGS := -g -fvisibility=hidden -Wall -Wextra $(PIC) -I$(DRIVER_INCLUDE) -I..
 CFLAGS := --std=c17 $(COMMON_FLAGS)
 CXXFLAGS := --std=c++20 $(COMMON_FLAGS)
 
