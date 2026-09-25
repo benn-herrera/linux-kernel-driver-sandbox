@@ -2,7 +2,7 @@ import re
 import unittest
 
 from api_gen import emit_c, emit_lua, model, naming
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, MINIMAL, expected_constants, load, mutate, param_lists
+from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, MINIMAL, expected_constants, load, mutate, param_lists
 
 
 class Cdef(unittest.TestCase):
@@ -30,7 +30,7 @@ class Cdef(unittest.TestCase):
             param_lists(emit_c.header(self.api, source_name="x"), r"XY_API xy_status "),
         )
         for t in self.api.typed_consts:
-            self.assertIn(f"typedef int32_t xy_{t.name};", cdef)
+            self.assertIn(f"typedef {C_BASE_TYPES[t.base_type]} xy_{t.name};", cdef)
         for decl in ("struct xy_port_opaque;", "struct xy_link_opaque;", "struct xy_stats {", "struct xy_wrap {"):
             self.assertIn(decl, cdef)
 
@@ -57,6 +57,16 @@ class Constants(unittest.TestCase):
         literals = re.findall(r'^M\.(\w+) = (-?0x[0-9a-f]+|-?[0-9]+|"[^"]*")$', self.text, re.M)
         found = {k: (v[1:-1] if v.startswith('"') else int(v, 0)) for k, v in literals}
         self.assertEqual(found, expected_constants(self.api))
+
+    def test_group_docstring_is_a_comment_above_its_constants(self) -> None:
+        lines = self.text.splitlines()
+        for group in (*self.api.bit_const_groups, *self.api.const_groups):
+            first = next(i for i, line in enumerate(lines) if line.startswith(f"M.{group.entries[0].key.upper()} = "))
+            with self.subTest(first=group.entries[0].key):
+                if group.docstring:
+                    self.assertEqual(lines[first - 1], f"-- {group.docstring}")
+                else:
+                    self.assertTrue(lines[first - 1].startswith("M."), lines[first - 1])
 
     def test_loads_the_named_library(self) -> None:
         self.assertIn('ffi.load("libxy.so")', self.text)
@@ -140,14 +150,14 @@ class Classes(unittest.TestCase):
 
 class Refusals(unittest.TestCase):
     def test_constant_and_class_name_clash_is_rejected(self) -> None:
-        text = FIXTURE.replace("max_units = 16", "io = 16")
-        api = load(text.replace('dtor = "destroy_port"', 'dtor = "destroy_port"\nclass = "i_o"'))  # both M.IO
+        text = mutate(FIXTURE, "max_units = 16", "io = 16")
+        api = load(mutate(text, 'dtor = "destroy_port"', 'dtor = "destroy_port"\nclass = "i_o"'))  # both M.IO
         with self.assertRaises(model.DefinitionError):
             emit_lua.module(api, source_name="x", library="libxy.so")
 
     def test_no_error_to_str_with_two_return_enums(self) -> None:
-        text = FIXTURE.replace('[function.spend]\nreturn = "status"', '[function.spend]\nreturn = "other"')
-        text = text.replace("[opaque_ref.port]", "[typed_const.other]\nfine = 0\n\n[opaque_ref.port]")
+        text = mutate(FIXTURE, '[function.spend]\n_return = "status"', '[function.spend]\n_return = "other"')
+        text = mutate(text, "[opaque_ref.port]", "[typed_const.other]\nfine = 0\n\n[opaque_ref.port]")
         text = emit_lua.module(load(text), source_name="x", library="libxy.so")
         self.assertNotIn("error_to_str", text)
         self.assertIn("function M.other_to_str(value)", text)

@@ -1,7 +1,7 @@
 """The C header, and the declaration text the Lua module hands to ffi.cdef."""
 
 from api_gen import naming
-from api_gen.model import Api, Function, OpaqueRef, Param, Struct, TypedConst
+from api_gen.model import Api, BitConstGroup, Function, OpaqueRef, Param, Struct, TypedConst
 
 
 def c_type(api: Api, type_name: str) -> str:
@@ -70,11 +70,14 @@ def header(api: Api, *, source_name: str) -> str:
 
 
 def cdef(api: Api) -> str:
-    """The declaration text the Lua module hands to ffi.cdef: an int32_t typedef for
-    each typed enum (not its body, since the Lua module carries constants as literals),
+    """The declaration text the Lua module hands to ffi.cdef: a typedef of its base type
+    for each typed enum (not its body, since the Lua module carries constants as literals),
     opaque and struct declarations, and function declarations with no visibility macro.
     """
-    typedefs = [f"typedef int32_t {naming.type_name(api.namespace, t.name)};\n" for t in api.typed_consts]
+    typedefs = [
+        f"typedef {naming.BASE_C_TYPES[t.base_type]} {naming.type_name(api.namespace, t.name)};\n"
+        for t in api.typed_consts
+    ]
     return "\n".join(typedefs + [declarations(api, function_prefix="", constants=False)])
 
 
@@ -83,14 +86,14 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
     blocks = []
     if constants:
         blocks.append(_version_enum(api))
-        if api.bit_consts:
-            blocks.append(_bit_enum(api))
-        if api.consts:
-            blocks.append(
-                _anonymous_enum(
-                    [(naming.const_name(ns, c.key), int_literal(c.value, c.format), c.docstring) for c in api.consts]
-                )
+        blocks += [_comment_line(g.docstring) + _bit_enum(api, g) for g in api.bit_const_groups]
+        blocks += [
+            _comment_line(g.docstring)
+            + _anonymous_enum(
+                [(naming.const_name(ns, c.key), int_literal(c.value, c.format), c.docstring) for c in g.entries]
             )
+            for g in api.const_groups
+        ]
         blocks += [_typed_enum(api, t) for t in api.typed_consts]
         if api.string_consts:
             blocks.append(
@@ -129,7 +132,7 @@ def _version_enum(api: Api) -> str:
     return _anonymous_enum([(naming.version_const(api.namespace), value, None)])
 
 
-def _bit_enum(api: Api) -> str:
+def _bit_enum(api: Api, group: BitConstGroup) -> str:
     ns = api.namespace
     return _anonymous_enum(
         [
@@ -138,7 +141,7 @@ def _bit_enum(api: Api) -> str:
                 f"(1u << {c.bit})" if c.bit is not None else " | ".join(naming.const_name(ns, p) for p in c.parts),
                 c.docstring,
             )
-            for c in api.bit_consts
+            for c in group.entries
         ]
     )
 

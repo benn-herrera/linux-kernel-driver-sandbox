@@ -84,6 +84,15 @@ class Declarations(unittest.TestCase):
         self.assertIn("XY_FEAT_AB = XY_FEAT_A | XY_FEAT_B", self.text)
         self.assertIn("XY_FEAT_ALL = XY_FEAT_AB", self.text)
 
+    def test_each_constant_group_is_one_enum_under_its_docstring(self) -> None:
+        lines = self.text.splitlines()
+        for group in (*self.api.bit_const_groups, *self.api.const_groups):
+            first = next(i for i, line in enumerate(lines) if line.startswith(f"  XY_{group.entries[0].key.upper()} = "))
+            with self.subTest(first=group.entries[0].key):
+                self.assertEqual(lines[first - 1], "enum {")
+                self.assertEqual(lines[first - 2], f"/* {group.docstring} */" if group.docstring else "")
+                self.assertEqual(lines[first + len(group.entries)], "};")
+
     def test_constant_blocks_precede_types_in_spec_order(self) -> None:
         markers = (
             "XY_API_VERSION", "XY_FEAT_A =", "XY_MAX_UNITS", "enum xy_status", "static const char XY_PRODUCT",

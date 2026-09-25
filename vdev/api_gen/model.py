@@ -13,7 +13,6 @@ from pathlib import Path
 
 from api_gen import naming
 
-RESERVED_KEYS = frozenset({"docstring", "return"})
 RESERVED_NAMES = frozenset(
     (
         # C
@@ -39,6 +38,7 @@ BUILTIN_TYPES = frozenset({"u32", "u64", "memory"})
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
 FORMATS = ("dec", "hex")
+GROUP_PROPERTIES = frozenset({"_docstring", "_base_type"})
 
 
 class DefinitionError(Exception):
@@ -63,6 +63,20 @@ class EnumEntry:
 
 
 @dataclass(frozen=True)
+class BitConstGroup:
+    docstring: str | None
+    base_type: str  # a key of naming.BASE_C_TYPES
+    entries: tuple[BitConst, ...]
+
+
+@dataclass(frozen=True)
+class ConstGroup:
+    docstring: str | None
+    base_type: str  # a key of naming.BASE_C_TYPES
+    entries: tuple[EnumEntry, ...]  # an enum entry's shape, without the enum
+
+
+@dataclass(frozen=True)
 class StringConst:
     key: str
     value: str  # holds no '"', '\' or newline, so it is a valid C and Lua literal as-is
@@ -74,6 +88,7 @@ class TypedConst:
     name: str
     entries: tuple[EnumEntry, ...]
     docstring: str | None
+    base_type: str  # a key of naming.BASE_C_TYPES
 
 
 @dataclass(frozen=True)
@@ -135,14 +150,24 @@ class Api:
     namespace: str
     version: tuple[int, int, int, int]
     library: str | None
-    bit_consts: tuple[BitConst, ...]
-    consts: tuple[EnumEntry, ...]  # [untyped_const]: an enum entry's shape, without the enum
+    bit_const_groups: tuple[BitConstGroup, ...]
+    const_groups: tuple[ConstGroup, ...]
     string_consts: tuple[StringConst, ...]
     typed_consts: tuple[TypedConst, ...]
     opaque_refs: tuple[OpaqueRef, ...]
     structs: tuple[Struct, ...]
     functions: tuple[Function, ...]
     driver_data: DriverData | None
+
+    @property
+    def bit_consts(self) -> tuple[BitConst, ...]:
+        """Every untyped_bit_const entry across the groups, in document order."""
+        return tuple(c for g in self.bit_const_groups for c in g.entries)
+
+    @property
+    def consts(self) -> tuple[EnumEntry, ...]:
+        """Every untyped_const entry across the groups, in document order."""
+        return tuple(c for g in self.const_groups for c in g.entries)
 
     def kind(self, type_name: str) -> str:
         """One of "builtin", "enum", "opaque", "struct" for a validated type name."""
@@ -198,9 +223,14 @@ def from_dict(data: Mapping) -> Api:
     if library is not None:
         _quote_free(library, "general.library")
 
-    bit_consts = _bit_consts(_table(data, "untyped_bit_const"))
-    consts = tuple(
-        _int_entry(key, entry, f"untyped_const.{key}") for key, entry in _table(data, "untyped_const").items()
+    bit_const_groups = _bit_const_groups(_groups(data, "untyped_bit_const"))
+    const_groups = tuple(
+        ConstGroup(
+            doc,
+            base_type,
+            tuple(_int_entry(key, entry, f"untyped_const.{key}", base_type=base_type) for key, entry in members),
+        )
+        for doc, base_type, members in _groups(data, "untyped_const")
     )
     string_consts = tuple(
         _string_const(key, entry) for key, entry in _table(data, "string_const").items()
@@ -244,14 +274,14 @@ def from_dict(data: Mapping) -> Api:
         namespace=namespace,
         version=tuple(version),
         library=library,
-        bit_consts=bit_consts,
-        consts=consts,
+        bit_const_groups=bit_const_groups,
+        const_groups=const_groups,
         string_consts=string_consts,
         typed_consts=typed_consts,
         opaque_refs=tuple(opaque_refs),
         structs=tuple(structs),
         functions=functions,
-        driver_data=_driver_data(data.get("driver_data"), {c.key for c in bit_consts}),
+        driver_data=_driver_data(data.get("driver_data"), {c.key for g in bit_const_groups for c in g.entries}),
     )
     _check_unique_identifiers(api)
     return api
@@ -262,8 +292,8 @@ def _is_int(value: object) -> bool:
 
 
 def _identifier(name: str, where: str, *, reserved: frozenset[str] = RESERVED_NAMES) -> str:
-    if name in RESERVED_KEYS:
-        raise DefinitionError(f"{where}: '{name}' is a reserved key, not a member name")
+    if name.startswith("_"):
+        raise DefinitionError(f"{where}: '{name}': a key beginning with '_' is a property, not a name")
     if not _IDENTIFIER.match(name):
         raise DefinitionError(f"{where}: '{name}' is not an identifier")
     if name in reserved:
@@ -284,6 +314,37 @@ def _table(data: Mapping, key: str) -> dict:
     return value
 
 
+def _groups(data: Mapping, key: str) -> list[tuple[str | None, str, list[tuple[str, object]]]]:
+    """(docstring, base type, members) for each table of the array `[[key]]`."""
+    groups = data.get(key, [])
+    if isinstance(groups, dict):
+        raise DefinitionError(f"[{key}] is now an array of tables: write each group as [[{key}]]")
+    if not isinstance(groups, list) or not all(isinstance(g, dict) for g in groups):
+        raise DefinitionError(f"[[{key}]] must be an array of tables")
+    result = []
+    for i, body in enumerate(groups):
+        where = f"{key}[{i}]"
+        props, members = _split(body, GROUP_PROPERTIES, where)
+        if not members:
+            raise DefinitionError(f"{where}: has no entries")
+        result.append((_docstring(props.get("_docstring"), f"{where}._docstring"), _base_type(props, where), members))
+    return result
+
+
+def _split(body: dict, properties: frozenset[str], where: str) -> tuple[dict, list[tuple[str, object]]]:
+    """A described item's `_`-prefixed properties, and its members in document order."""
+    props = {k: v for k, v in body.items() if k.startswith("_")}
+    _reject_unknown(props, properties, where)
+    return props, [(k, v) for k, v in body.items() if not k.startswith("_")]
+
+
+def _base_type(props: Mapping, where: str) -> str:
+    value = props.get("_base_type", "i32")
+    if not isinstance(value, str) or value not in naming.BASE_C_TYPES:
+        raise DefinitionError(f"{where}._base_type must be one of {', '.join(naming.BASE_C_TYPES)}")
+    return value
+
+
 def _named_tables(table: dict, category: str) -> list[tuple[str, dict]]:
     result = []
     for name, body in table.items():
@@ -295,14 +356,14 @@ def _named_tables(table: dict, category: str) -> list[tuple[str, dict]]:
     return result
 
 
-def _docstring(body: Mapping, where: str) -> str | None:
-    doc = body.get("docstring")
+def _docstring(doc: object, where: str) -> str | None:
+    """`doc` validated as the docstring found at `where`."""
     if doc is None:
         return None
     if not isinstance(doc, str):
-        raise DefinitionError(f"{where}.docstring must be a string")
+        raise DefinitionError(f"{where} must be a string")
     if "*/" in doc or "]]" in doc:
-        raise DefinitionError(f"{where}.docstring must not contain '*/' or ']]'")
+        raise DefinitionError(f"{where} must not contain '*/' or ']]'")
     return doc
 
 
@@ -324,41 +385,50 @@ def _unwrap_value(entry: object, where: str) -> tuple[object, str | None, str]:
     if not isinstance(entry, dict):
         return entry, None, "dec"
     _reject_unknown(entry, {"value", "docstring", "format"}, where)
-    return entry.get("value"), _docstring(entry, where), _format(entry, where)
+    return entry.get("value"), _docstring(entry.get("docstring"), f"{where}.docstring"), _format(entry, where)
 
 
-def _bit_consts(table: dict) -> tuple[BitConst, ...]:
-    consts: list[BitConst] = []
-    for key, entry in table.items():
-        where = f"untyped_bit_const.{key}"
-        _identifier(key, where)
-        entry, doc, fmt = _unwrap_value(entry, where)
-        if _is_int(entry):
-            if not 0 <= entry <= 30:
-                raise DefinitionError(f"{where}: bit index must be 0..30 (enumerators must fit int)")
-            consts.append(BitConst(key, entry, (), doc, fmt))
-        elif isinstance(entry, list) and entry and all(isinstance(p, str) for p in entry):
-            defined = {c.key for c in consts}
-            for part in entry:
-                if part not in defined:
-                    raise DefinitionError(
-                        f"{where}: composes unknown constant '{part}' "
-                        "(only earlier untyped_bit_const entries)"
-                    )
-            consts.append(BitConst(key, None, tuple(entry), doc, fmt))
-        else:
-            raise DefinitionError(
-                f"{where}: must be a bit index, a non-empty list of constant names, "
-                "or {value=..., docstring=...}"
-            )
-    return tuple(consts)
+def _bit_const_groups(
+    groups: list[tuple[str | None, str, list[tuple[str, object]]]]
+) -> tuple[BitConstGroup, ...]:
+    """A composed mask may name an entry of any earlier group, so the groups are read as one sequence."""
+    defined: set[str] = set()
+    result = []
+    for group_doc, base_type, members in groups:
+        consts = []
+        for key, entry in members:
+            where = f"untyped_bit_const.{key}"
+            _identifier(key, where)
+            entry, doc, fmt = _unwrap_value(entry, where)
+            if _is_int(entry):
+                if not 0 <= entry <= 30:
+                    raise DefinitionError(f"{where}: bit index must be 0..30 (enumerators must fit int)")
+                consts.append(BitConst(key, entry, (), doc, fmt))
+            elif isinstance(entry, list) and entry and all(isinstance(p, str) for p in entry):
+                for part in entry:
+                    if part not in defined:
+                        raise DefinitionError(
+                            f"{where}: composes unknown constant '{part}' "
+                            "(only earlier untyped_bit_const entries)"
+                        )
+                consts.append(BitConst(key, None, tuple(entry), doc, fmt))
+            else:
+                raise DefinitionError(
+                    f"{where}: must be a bit index, a non-empty list of constant names, "
+                    "or {value=..., docstring=...}"
+                )
+            defined.add(key)
+        result.append(BitConstGroup(group_doc, base_type, tuple(consts)))
+    return tuple(result)
 
 
-def _int_entry(key: str, entry: object, where: str) -> EnumEntry:
+def _int_entry(key: str, entry: object, where: str, *, base_type: str) -> EnumEntry:
     _identifier(key, where)
     value, doc, fmt = _unwrap_value(entry, where)
     if not _is_int(value) or not _INT32_MIN <= value <= _INT32_MAX:
         raise DefinitionError(f"{where}: value must be an integer in the int32 range")
+    if base_type == "u32" and value < 0:
+        raise DefinitionError(f"{where}: value must not be negative: its _base_type is u32")
     return EnumEntry(key, value, doc, fmt)
 
 
@@ -368,7 +438,7 @@ def _string_const(key: str, entry: object) -> StringConst:
     doc = None
     if isinstance(entry, dict):
         _reject_unknown(entry, {"value", "docstring"}, where)
-        entry, doc = entry.get("value"), _docstring(entry, where)
+        entry, doc = entry.get("value"), _docstring(entry.get("docstring"), f"{where}.docstring")
     if not isinstance(entry, str):
         raise DefinitionError(f"{where}: must be a string or {{value=..., docstring=...}}")
     if any(c in entry for c in '"\\\n'):
@@ -377,14 +447,13 @@ def _string_const(key: str, entry: object) -> StringConst:
 
 
 def _typed_const(name: str, body: dict) -> TypedConst:
-    entries = [
-        _int_entry(key, entry, f"typed_const.{name}.{key}")
-        for key, entry in body.items()
-        if key != "docstring"
-    ]
+    where = f"typed_const.{name}"
+    props, members = _split(body, GROUP_PROPERTIES, where)
+    base_type = _base_type(props, where)
+    entries = [_int_entry(key, entry, f"{where}.{key}", base_type=base_type) for key, entry in members]
     if not entries:
-        raise DefinitionError(f"typed_const.{name}: has no entries")
-    return TypedConst(name, tuple(entries), _docstring(body, f"typed_const.{name}"))
+        raise DefinitionError(f"{where}: has no entries")
+    return TypedConst(name, tuple(entries), _docstring(props.get("_docstring"), f"{where}._docstring"), base_type)
 
 
 def _opaque_ref(name: str, body: dict) -> OpaqueRef:
@@ -397,7 +466,9 @@ def _opaque_ref(name: str, body: dict) -> OpaqueRef:
     if not isinstance(class_name, str) or not _IDENTIFIER.match(class_name):
         raise DefinitionError(f"{where}.class must be an identifier")
     _identifier(class_name, f"{where}.class")
-    return OpaqueRef(name, _docstring(body, where), body.get("ctor"), body.get("dtor"), class_name)
+    return OpaqueRef(
+        name, _docstring(body.get("docstring"), f"{where}.docstring"), body.get("ctor"), body.get("dtor"), class_name
+    )
 
 
 def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Function]) -> None:
@@ -445,10 +516,9 @@ def _check_type(type_name: str, type_names: dict[str, str], where: str) -> None:
 
 
 def _struct(name: str, body: dict, type_names: dict[str, str], *, defined_structs: set[str]) -> Struct:
+    props, members = _split(body, frozenset({"_docstring"}), f"struct.{name}")
     fields = []
-    for key, entry in body.items():
-        if key == "docstring":
-            continue
+    for key, entry in members:
         where = f"struct.{name}.{key}"
         _identifier(key, where)
         type_name, attrs = _member_type(entry, where)
@@ -458,10 +528,10 @@ def _struct(name: str, body: dict, type_names: dict[str, str], *, defined_struct
             raise DefinitionError(f"{where}: 'memory' is not a field type")
         if type_names.get(type_name) == "struct" and type_name not in defined_structs:
             raise DefinitionError(f"{where}: struct '{type_name}' must be defined before it is used")
-        fields.append(Field(key, type_name, _docstring(attrs, where)))
+        fields.append(Field(key, type_name, _docstring(attrs.get("docstring"), f"{where}.docstring")))
     if not fields:
         raise DefinitionError(f"struct.{name}: has no fields")
-    return Struct(name, tuple(fields), _docstring(body, f"struct.{name}"))
+    return Struct(name, tuple(fields), _docstring(props.get("_docstring"), f"struct.{name}._docstring"))
 
 
 def _flag(attrs: Mapping, key: str, where: str) -> bool:
@@ -475,17 +545,16 @@ def _function(
     name: str, body: dict, type_names: dict[str, str], enums: Mapping[str, TypedConst]
 ) -> Function:
     where = f"function.{name}"
-    returns = body.get("return")
+    props, members = _split(body, frozenset({"_docstring", "_return"}), where)
+    returns = props.get("_return")
     if not isinstance(returns, str):
-        raise DefinitionError(f"{where}: missing 'return' naming a typed_const")
+        raise DefinitionError(f"{where}: missing '_return' naming a typed_const")
     if returns not in enums:
-        raise DefinitionError(f"{where}.return: unknown typed_const '{returns}'")
+        raise DefinitionError(f"{where}._return: unknown typed_const '{returns}'")
     if not any(e.value == 0 for e in enums[returns].entries):
-        raise DefinitionError(f"{where}.return: typed_const '{returns}' has no zero-valued entry for success")
+        raise DefinitionError(f"{where}._return: typed_const '{returns}' has no zero-valued entry for success")
     params = []
-    for key, entry in body.items():
-        if key in RESERVED_KEYS:
-            continue
+    for key, entry in members:
         pwhere = f"{where}.{key}"
         _identifier(key, pwhere, reserved=RESERVED_NAMES | GENERATED_LOCALS)
         type_name, attrs = _member_type(entry, pwhere)
@@ -509,7 +578,7 @@ def _function(
                 inref,
                 _flag(attrs, "nullsafe", pwhere),
                 size,
-                _docstring(attrs, pwhere),
+                _docstring(attrs.get("docstring"), f"{pwhere}.docstring"),
             )
         )
     by_name = {p.name: p for p in params}
@@ -526,7 +595,7 @@ def _function(
         if p.size in buffer_of:
             raise DefinitionError(f"{where}.{p.name}.size: '{p.size}' is already the size of '{buffer_of[p.size]}'")
         buffer_of[p.size] = p.name
-    return Function(name, returns, tuple(params), _docstring(body, where))
+    return Function(name, returns, tuple(params), _docstring(props.get("_docstring"), f"{where}._docstring"))
 
 
 def _driver_data(body: object, bit_keys: set[str]) -> DriverData | None:

@@ -1,7 +1,8 @@
+import re
 import unittest
 
-from api_gen import emit_cpp_wrapper, model
-from api_gen.tests.support import FIXTURE, load
+from api_gen import emit_cpp_wrapper, model, naming
+from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, load, mutate
 
 
 def wrapper(text: str = FIXTURE) -> str:
@@ -29,21 +30,46 @@ class Wrapper(unittest.TestCase):
         self.assertNotIn("xy_spend", self.text)
 
     def test_no_dtor_no_release(self) -> None:
-        text = wrapper(FIXTURE.replace('dtor = "destroy_port"\n', ""))
+        text = wrapper(mutate(FIXTURE, 'dtor = "destroy_port"\n', ""))
         self.assertNotIn("~Port", text)
         self.assertNotIn("release()", text)
         self.assertIn("  Status destroy_port() {\n", text)
 
 
+class BaseTypes(unittest.TestCase):
+    def setUp(self) -> None:
+        self.api = load(KITCHEN_SINK)
+        self.text = wrapper(KITCHEN_SINK)
+
+    def test_group_constants_take_the_group_base_type_under_its_docstring(self) -> None:
+        types = {name: c_type for c_type, name in re.findall(r"^inline constexpr (\w+) (\w+) = ", self.text, re.M)}
+        self.assertEqual(types.pop("API_VERSION"), "uint32_t")
+        expected = {}
+        lines = self.text.splitlines()
+        for group in (*self.api.bit_const_groups, *self.api.const_groups):
+            base = C_BASE_TYPES[group.base_type]
+            expected |= {c.key.upper(): base for c in group.entries}
+            key = group.entries[0].key.upper()
+            first = lines.index(f"inline constexpr {base} {key} = XY_{key};")
+            self.assertEqual(lines[first - 1], f"// {group.docstring}" if group.docstring else "")
+        self.assertEqual(types, expected)
+
+    def test_enum_class_underlying_type_is_the_base_type(self) -> None:
+        for t in self.api.typed_consts:
+            self.assertIn(
+                f"enum class [[nodiscard]] {naming.upper_camel(t.name)} : {C_BASE_TYPES[t.base_type]} {{\n", self.text
+            )
+
+
 class Refusals(unittest.TestCase):
     def test_member_collision_is_an_error(self) -> None:
         with self.assertRaises(model.DefinitionError) as caught:
-            wrapper(FIXTURE.replace("[function.send]", "[function.release]"))
+            wrapper(mutate(FIXTURE, "[function.send]", "[function.release]"))
         self.assertIn("C++ wrapper: class Port: release would be defined more than once", str(caught.exception))
 
     def test_namespace_collision_is_an_error(self) -> None:
         with self.assertRaises(model.DefinitionError) as caught:
-            wrapper(FIXTURE.replace("[untyped_const]\n", "[untyped_const]\nx = 1\n") + '\n[struct.x]\nv = "u32"\n')
+            wrapper(mutate(FIXTURE, "[[untyped_const]]\n", "[[untyped_const]]\nx = 1\n") + '\n[struct.x]\nv = "u32"\n')
         self.assertIn("C++ wrapper: namespace xy: X would be defined more than once", str(caught.exception))
 
 

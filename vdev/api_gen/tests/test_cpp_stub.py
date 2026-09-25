@@ -2,7 +2,7 @@ import re
 import unittest
 
 from api_gen import emit_c, emit_cpp_stub, model
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, param_lists
+from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate, param_lists
 
 STATUS_ERRORS = 'err_busy = { value = 9, docstring = "try later" }\nerr_other = { value = 0x7fffffff, format = "hex" }\n'
 
@@ -47,7 +47,7 @@ class Stub(unittest.TestCase):
 
     def test_no_nonzero_entry_is_an_error(self) -> None:
         with self.assertRaises(model.DefinitionError) as caught:
-            stub(FIXTURE.replace(STATUS_ERRORS, ""))
+            stub(mutate(FIXTURE, STATUS_ERRORS, ""))
         self.assertIn("cannot pick a failure result for the stub", str(caught.exception))
 
 

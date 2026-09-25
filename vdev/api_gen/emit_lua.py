@@ -14,12 +14,14 @@ def module(api: Api, *, source_name: str, library: str) -> str:
         f'\nlocal lib = ffi.load("{library}")\n\nlocal M = {{}}\n\n',
     ]
 
-    constants = _constant_literals(api)
+    sections = _constant_sections(api)
     classes = {naming.upper_camel(o.class_name) for o in api.opaque_refs if o.ctor is not None}
-    clash = next((name for name, _ in constants if name in classes), None)
+    clash = next((name for _, literals in sections for name, _ in literals if name in classes), None)
     if clash is not None:
         raise DefinitionError(f"Lua module: M.{clash} would be both a constant and a class")
-    out += [f"M.{name} = {value}\n" for name, value in constants]
+    for doc, literals in sections:
+        out += [f"-- {line}\n" for line in (doc or "").splitlines()]
+        out += [f"M.{name} = {value}\n" for name, value in literals]
 
     for typed in api.typed_consts:
         names = "".join(
@@ -57,18 +59,24 @@ def _bit_const_values(api: Api) -> dict[str, int]:
     return values
 
 
-def _constant_literals(api: Api) -> list[tuple[str, str]]:
-    """Every constant's (name, Lua literal), in the same order the C header defines them."""
+def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]]]:
+    """Every constant's (name, Lua literal), in the same order the C header defines them,
+    as (docstring, literals) sections: one per constant group, the rest undocumented."""
     name = naming.lua_const_name
     bit_values = _bit_const_values(api)
-    literals = [(name(naming.VERSION_KEY), _version_literal(api))]
-    literals += [(name(c.key), emit_c.int_literal(bit_values[c.key], c.format)) for c in api.bit_consts]
-    literals += [(name(c.key), emit_c.int_literal(c.value, c.format)) for c in api.consts]
-    literals += [
-        (name(e.key), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries
+    sections = [(None, [(name(naming.VERSION_KEY), _version_literal(api))])]
+    sections += [
+        (g.docstring, [(name(c.key), emit_c.int_literal(bit_values[c.key], c.format)) for c in g.entries])
+        for g in api.bit_const_groups
     ]
-    literals += [(name(c.key), f'"{c.value}"') for c in api.string_consts]
-    return literals
+    sections += [
+        (g.docstring, [(name(c.key), emit_c.int_literal(c.value, c.format)) for c in g.entries])
+        for g in api.const_groups
+    ]
+    rest = [(name(e.key), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
+    rest += [(name(c.key), f'"{c.value}"') for c in api.string_consts]
+    sections.append((None, rest))
+    return sections
 
 
 def _cdef(text: str) -> str:

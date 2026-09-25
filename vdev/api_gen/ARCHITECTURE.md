@@ -17,9 +17,9 @@ definition ──load/validate──▶ Api (frozen dataclasses) ──▶ emitt
 
 ## The model
 
-`Api` is a frozen dataclass tree: `BitConst`, plain constants as `EnumEntry`, `StringConst`, `TypedConst` of `EnumEntry`, `OpaqueRef`, `Struct` of `Field`, `Function` of `Param`, and an optional `DriverData`. Tuples throughout, in document order. `Api.kind()` answers the one question every emitter asks, which category a type name belongs to, from the validated tree rather than by re-checking.
+`Api` is a frozen dataclass tree: `BitConstGroup` of `BitConst`, `ConstGroup` of plain constants as `EnumEntry`, `StringConst`, `TypedConst` of `EnumEntry`, `OpaqueRef`, `Struct` of `Field`, `Function` of `Param`, and an optional `DriverData`. Tuples throughout, in document order. Each group carries its docstring and base type, for the emitters that render one block per group; `Api.bit_consts` and `Api.consts` are every entry across the groups in order, for everything that treats constants one by one: literal values, composition, uniqueness, pins. `Api.kind()` answers the one question every emitter asks, which category a type name belongs to, from the validated tree rather than by re-checking.
 
-Normalisation happens on the way in. The union forms SPEC.md allows, a bare type string or an inline table, both become the same `Param` or `Field`; a bare integer or a `{ value, format, docstring }` table both become the same `EnumEntry`. Emitters see one shape.
+Normalisation happens on the way in. A described item's `_` properties are split from its members first, so no member check ever sees a property. The union forms SPEC.md allows, a bare type string or an inline table, both become the same `Param` or `Field`; a bare integer or a `{ value, format, docstring }` table both become the same `EnumEntry`. Emitters see one shape.
 
 Order is document order because `tomllib` builds insertion-ordered dicts, a guarantee Python makes since 3.7 that the TOML specification does not. The loader's docstring states the reliance; it is the one place the project depends on it.
 

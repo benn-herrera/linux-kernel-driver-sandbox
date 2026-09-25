@@ -18,20 +18,25 @@ def wrapper(api: Api, *, source_name: str, stem: str) -> str:
         f"namespace {ns} {{\n",
     ]
     classes = [o for o in api.opaque_refs if o.ctor is not None]
-    uint_keys = [naming.VERSION_KEY] + [c.key for c in api.bit_consts] + [c.key for c in api.consts]
+    const_keys = [naming.VERSION_KEY] + [c.key for c in (*api.bit_consts, *api.consts, *api.string_consts)]
     _check_unique(
-        [naming.lua_const_name(k) for k in uint_keys + [c.key for c in api.string_consts]]
+        [naming.lua_const_name(k) for k in const_keys]
         + [naming.upper_camel(n) for n in [t.name for t in api.typed_consts] + [s.name for s in api.structs]]
         + [naming.upper_camel(o.class_name) for o in classes],
         f"C++ wrapper: namespace {ns}",
     )
 
-    out.append("\n")
-    out += [f"inline constexpr uint32_t {naming.lua_const_name(k)} = {naming.const_name(ns, k)};\n" for k in uint_keys]
-    out += [
-        f"inline constexpr const char* {naming.lua_const_name(c.key)} = {naming.const_name(ns, c.key)};\n"
-        for c in api.string_consts
+    def constant(c_type: str, key: str) -> str:
+        return f"inline constexpr {c_type} {naming.lua_const_name(key)} = {naming.const_name(ns, key)};\n"
+
+    runs = [constant("uint32_t", naming.VERSION_KEY)]
+    runs += [
+        _comment(g.docstring) + "".join(constant(naming.BASE_C_TYPES[g.base_type], c.key) for c in g.entries)
+        for g in (*api.bit_const_groups, *api.const_groups)
     ]
+    if api.string_consts:
+        runs.append("".join(constant("const char*", c.key) for c in api.string_consts))
+    out += ["\n" + run for run in runs]
     out += [_enum(api, t.name) for t in api.typed_consts]
     if api.structs:
         out.append("\n" + "".join(f"using {naming.upper_camel(s.name)} = {naming.type_name(ns, s.name)};\n" for s in api.structs))
@@ -60,7 +65,7 @@ def _enum(api: Api, name: str) -> str:
         f'    case {cls}::{k}: return "{naming.lua_const_name(e.key)}";\n' for k, e in by_value.values()
     )
     return (
-        f"\nenum class [[nodiscard]] {cls} : int32_t {{\n{entries}}};\n\n"
+        f"\nenum class [[nodiscard]] {cls} : {naming.BASE_C_TYPES[typed.base_type]} {{\n{entries}}};\n\n"
         f"inline const char* to_string({cls} value) {{\n  switch (value) {{\n{cases}"
         f"  }}\n  return \"UNKNOWN_{name.upper()}\";\n}}\n"
     )
@@ -201,4 +206,4 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
 
 
 def _comment(doc: str | None) -> str:
-    return f"// {doc}\n" if doc else ""
+    return "".join(f"// {line}\n" for line in doc.splitlines()) if doc else ""

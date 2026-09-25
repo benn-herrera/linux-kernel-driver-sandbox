@@ -8,25 +8,32 @@ A userspace API is stated once, in a definition file, and every artifact a consu
 
 ## The definition
 
-One TOML file, `<stem>.adef.toml`. `<stem>` names every output. The file holds these tables, each optional unless stated:
+One TOML file, `<stem>.adef.toml`. `<stem>` names every output.
+
+In a table that describes an item — an enum, a struct, a function, or a constant group — a key beginning with `_` is a property of the item and every other key is a member. The properties are `_docstring` (documents the item), `_return` (functions only) and `_base_type` (enums and constant groups only). The attributes of an entry written as an inline table (`value`, `type`, `format`, `docstring`, `outref`, `inref`, `nullsafe`, `size`) are plain keys.
+
+The file holds these tables, each optional unless stated:
 
 - `[general]` (required): `namespace` (an identifier; the prefix for everything generated), `version` (four integers 0..255, encoded most-significant first into one 32-bit value; the first byte is 0..127 so the constant fits `int`), `library` (the shared object file name the script binding loads; a plain file name, no quotes or backslashes). There is no name field: the file stem names every output.
-- `[untyped_bit_const]`: constants that are bit flags. An integer value is a bit index, 0..30 so the flag fits `int`. A list of strings names earlier entries whose flags are combined into a mask. Either may be wrapped as `{ value = ..., format = "hex"|"dec", docstring = "..." }`; `format` chooses how the number is spelled where a literal is emitted, decimal by default.
-- `[untyped_const]`: plain integer constants, no composition. Entries are integers fitting a 32-bit signed value, optionally wrapped as `{ value = ..., format = "hex"|"dec", docstring = "..." }`.
+- `[[untyped_bit_const]]`: an array of groups of constants that are bit flags. Each group is a table with an optional `_docstring`, an optional `_base_type`, and at least one entry. An integer value is a bit index, 0..30 so the flag fits `int`. A list of strings names entries, of this group or an earlier one, whose flags are combined into a mask. Either may be wrapped as `{ value = ..., format = "hex"|"dec", docstring = "..." }`; `format` chooses how the number is spelled where a literal is emitted, decimal by default.
+- `[[untyped_const]]`: an array of groups of plain integer constants, no composition, with the same group properties. Entries are integers fitting a 32-bit signed value, optionally wrapped as `{ value = ..., format = "hex"|"dec", docstring = "..." }`.
 - `[string_const]`: string constants. Entries are strings, optionally wrapped as `{ value = "...", docstring = "..." }`; a value contains no `"`, `\` or newline.
-- `[typed_const.<enum>]`: an enumeration. Entries are integers fitting a 32-bit signed value, optionally wrapped as `{ value = ..., format = "hex"|"dec", docstring = "..." }`. A `docstring` key at the table level documents the enum.
-- `[opaque_ref.<name>]`: a handle type whose representation is the implementation's secret. Attributes: `docstring`; and for bindings with object semantics, `ctor`, the function that produces the handle (it has exactly one `outref` of this type), `dtor`, the function that releases it (its only parameter is this type by value; requires `ctor`), and `class`, the object's name in those bindings, written idiom-free (lowercase identifier; default the ref's name). Each binding applies its own casing.
-- `[struct.<name>]`: fields in document order, each a type string or `{ type = "...", docstring = "..." }`. A `docstring` key documents the struct.
-- `[function.<name>]`: `return` (a `typed_const` enum name whose entries include the value 0, required), `docstring`, then parameters in document order, each a type string or an inline table with `type` and attributes: `outref` (written by the callee), `inref` (read by the callee; for `memory`, pointer-to-const), `nullsafe` (documentation: the caller may pass null), `docstring`, and for `memory` parameters `size`, naming the sibling parameter that holds the byte count.
+- `[typed_const.<enum>]`: an enumeration, with an optional `_docstring` and `_base_type`. Entries are integers fitting a 32-bit signed value, optionally wrapped as `{ value = ..., format = "hex"|"dec", docstring = "..." }`.
+- `[opaque_ref.<name>]`: a handle type whose representation is the implementation's secret. It has no members, so its keys are plain attributes, usually written as an inline table under `[opaque_ref]`: `docstring`; and for bindings with object semantics, `ctor`, the function that produces the handle (it has exactly one `outref` of this type), `dtor`, the function that releases it (its only parameter is this type by value; requires `ctor`), and `class`, the object's name in those bindings, written idiom-free (lowercase identifier; default the ref's name). Each binding applies its own casing.
+- `[struct.<name>]`: an optional `_docstring`, then fields in document order, each a type string or `{ type = "...", docstring = "..." }`.
+- `[function.<name>]`: `_return` (a `typed_const` enum name whose entries include the value 0, required), an optional `_docstring`, then parameters in document order, each a type string or an inline table with `type` and attributes: `outref` (written by the callee), `inref` (read by the callee; for `memory`, pointer-to-const), `nullsafe` (documentation: the caller may pass null), `docstring`, and for `memory` parameters `size`, naming the sibling parameter that holds the byte count.
 - `[driver_data]`: `header`, the driver's UAPI header path relative to the exercises directory (no quotes or backslashes), and `[driver_data.const_pins]`, mapping an `untyped_bit_const` key to the driver macro it must equal.
+
+`_base_type` is `"i32"` (the default) or `"u32"`, and chooses the fixed-width type the C++ wrapper and the Lua FFI declarations give an enum or a group's constants. The C header spells every constant as an enumerator whatever the base type, so values still fit `int` under `u32`; `u32` adds that no value is negative.
 
 Rules a definition must satisfy:
 
 - Types are `u32`, `u64`, `memory`, or a name from `typed_const`, `opaque_ref` or `struct`. Those three categories share one namespace; a name in two of them is an error, as is shadowing a builtin.
-- `docstring` and `return` are reserved: no parameter, field or entry may use them as its name. Every name is a C identifier that is neither a C, C++ nor Lua keyword; no parameter is named `self`, `result`, `lib`, `M`, `ffi` or `indent`, the locals the generated code binds.
-- A composed constant names only entries defined before it. A pin names an existing `untyped_bit_const` entry. Constant names are unique across the bit constants, the plain and string constants, every enum, and the version constant; the C identifiers of enums, opaque refs and their tags, structs and functions are unique together.
+- An unknown `_` property is an error naming it, and no name begins with `_`. `[untyped_const]` and `[untyped_bit_const]` written as single tables are an error: each is an array of tables, `[[...]]`. A group has at least one entry.
+- Every name is a C identifier that is neither a C, C++ nor Lua keyword; no parameter is named `self`, `result`, `lib`, `M`, `ffi` or `indent`, the locals the generated code binds.
+- A composed constant names only entries defined before it, in its own group or an earlier one. A pin names an existing `untyped_bit_const` entry. Constant names are unique across every constant group, the string constants, every enum, and the version constant; the C identifiers of enums, opaque refs and their tags, structs and functions are unique together.
 - Docstrings contain neither `*/` nor `]]`.
-- Order is meaning: parameters and fields appear in every output in the order written.
+- Order is meaning: parameters, fields and constant groups appear in every output in the order written.
 - A ctor has no memory outref: the bindings cache every other outref of the ctor on the object, and a buffer has no owner there.
 
 ## Naming
@@ -42,6 +49,7 @@ With namespace `ns`, upper-cased `NS`:
 | struct `s` | `struct ns_s`, typedef `ns_s` |
 | function `f` | `ns_f` |
 | in C++: enum `e`, entry `k`, struct `s`, class `c` | `ns::E`, `E::K`, `ns::S`, `ns::C` (UpperCamel) |
+| `_base_type` `i32`, `u32` | `int32_t`, `uint32_t` in the C++ wrapper and the Lua FFI declarations |
 | visibility macros | `NS_C_API`, `NS_API`, with `NS_IMPL` as the implementation's define |
 
 ## Outputs
@@ -52,15 +60,15 @@ Every output starts with a banner naming its source and saying it is generated. 
 
 - For a consumer, includes only `<stdint.h>`. Its preprocessor content is: `#pragma once`, that include, the two blocks defining `NS_C_API` (`extern "C"` under C++) and `NS_API` (`NS_C_API` plus default visibility when `NS_IMPL` is defined), and the implementation-only blocks below. No macro is used in any declaration except `NS_API` before each function.
 - One block at the end of the file under `#if defined(NS_IMPL)`, and so only in the implementation's build: an include of `<assert.h>` and of the driver header named in `driver_data.header`, then one file-scope `static_assert(NS_KEY == DRIVER_MACRO, "...")` per pin. The library failing to compile is the ABI check; a consumer never sees the driver header. Absent `[driver_data]`, the block is not emitted.
-- Constants are enums: the version in an anonymous enum, the bit constants in an anonymous enum with single bits as `(1u << n)` and masks as `A | B`, the plain constants in an anonymous enum, each typed enum with explicit values and a typedef. String constants are `static const char NS_KEY[] = "...";`, so the header stays macro-free.
+- Constants are enums: the version in an anonymous enum, each bit constant group in an anonymous enum with single bits as `(1u << n)` and masks as `A | B`, each plain constant group in an anonymous enum, each typed enum with explicit values and a typedef. String constants are `static const char NS_KEY[] = "...";`, so the header stays macro-free.
 - Each opaque ref is an incomplete struct and a pointer typedef. Each struct has its fields in order with a typedef.
 - Functions are declared in document order. Type mapping: `u32` → `uint32_t`, `u64` → `uint64_t`, an enum or struct by its typedef, an opaque ref by value as its typedef; `inref` of a non-memory type `T` → `const T*`; `outref` of a non-memory type `T` → `T*`; `memory` → `const void*` when `inref`, `void*` when `outref`.
-- Docstrings become `/* */` comments: above an enum, struct, opaque ref or function, trailing an enum entry or struct field; a parameter's docstring joins its function's comment as `name: text`.
+- Docstrings become `/* */` comments: above an enum (a constant group's included), struct, opaque ref or function, trailing an enum entry or struct field; a parameter's docstring joins its function's comment as `name: text`.
 - The header is not a binding input. The Lua module carries its own FFI declarations, rendered from the same definition, so nothing parses the header at run time and the implementation-only blocks may hold whatever the check needs.
 
 ### `include/<exercise>/<stem>.hpp` — the header-only C++ wrapper
 
-A C++20 header beside the C header, including it and nothing but the standard library, inside `namespace <ns>`. Constants are `inline constexpr` under their unprefixed names; each enum is an `enum class` over the C values with UpperCamel entries and a `to_string`; each struct is an alias of the C typedef. Each opaque ref with a `ctor` is a class named from `class` in UpperCamel, move-only (move assignment releases the current handle first): `create(...)` takes the `ctor`'s non-`outref` parameters and returns the class by value, with the call's result written through an optional out-pointer; on failure the object is falsy (null handle, value-initialised members), so `if (!dev)` is the check and no optional is involved; every other `ctor` outref is a private member read through a const accessor named after its parameter, `dev.info()`; the destructor and `release()` call the `dtor`; one method per function, other than the `ctor` and `dtor`, whose first parameter is the opaque by value, returning the enum and taking `memory` parameters as the C header does, pointer and count in the definition's order. Results are `[[nodiscard]]`. An opaque by value is the C handle type; an enum `inref` or `outref` is the C typedef. Casts are functional-style, C names unqualified, fixed-width integers spelled as the C header spells them. No exceptions, no allocation.
+A C++20 header beside the C header, including it and nothing but the standard library, inside `namespace <ns>`. Constants are `inline constexpr` under their unprefixed names: the version `uint32_t`, each constant group one run typed by its base type under its `_docstring` as a `//` line, string constants `const char*`; each enum is an `enum class` over the C values with its base type as the underlying type, UpperCamel entries and a `to_string`; each struct is an alias of the C typedef. Each opaque ref with a `ctor` is a class named from `class` in UpperCamel, move-only (move assignment releases the current handle first): `create(...)` takes the `ctor`'s non-`outref` parameters and returns the class by value, with the call's result written through an optional out-pointer; on failure the object is falsy (null handle, value-initialised members), so `if (!dev)` is the check and no optional is involved; every other `ctor` outref is a private member read through a const accessor named after its parameter, `dev.info()`; the destructor and `release()` call the `dtor`; one method per function, other than the `ctor` and `dtor`, whose first parameter is the opaque by value, returning the enum and taking `memory` parameters as the C header does, pointer and count in the definition's order. Results are `[[nodiscard]]`. An opaque by value is the C handle type; an enum `inref` or `outref` is the C typedef. Casts are functional-style, C names unqualified, fixed-width integers spelled as the C header spells them. No exceptions, no allocation.
 
 ### `stub/<stem>.cpp` — the implementation stub
 
@@ -70,8 +78,8 @@ A C++ translation unit to copy into `lib/` once when starting an implementation,
 
 A module returned from `require`, needing no file at run time:
 
-- Its `ffi.cdef` text holds only what calls need: `typedef int32_t ns_e;` for each enum, the opaque and struct declarations, and the functions without `NS_API`. No constants are declared to the FFI.
-- Every constant is a Lua literal, `M.KEY`, with the same value the header gives it: the module is the namespace, so the `NS_` prefix is not repeated. Composed masks are computed; strings are string literals; the version is one 32-bit value.
+- Its `ffi.cdef` text holds only what calls need: `typedef int32_t ns_e;` for each enum (`uint32_t` under `_base_type = "u32"`), the opaque and struct declarations, and the functions without `NS_API`. No constants are declared to the FFI.
+- Every constant is a Lua literal, `M.KEY`, with the same value the header gives it: the module is the namespace, so the `NS_` prefix is not repeated. Composed masks are computed; strings are string literals; the version is one 32-bit value. A constant group's `_docstring` is a `--` comment line above its literals.
 - `M.<enum>_to_str(value)` maps a value to its unprefixed constant name (two entries with one value map to the later name); `M.error_to_str` is the same alias for the one enum every function returns, and is absent when functions return different enums.
 - `M.raw.<f>` is the FFI function for each function.
 - For each opaque ref with a `ctor`, a class `M.<Class>`, the `class` attribute in UpperCamel with no namespace prefix:

@@ -41,7 +41,7 @@ def _failure(api: Api, fn: Function) -> str:
     chosen = chosen or next((e for e in entries if e.value != 0), None)
     if chosen is None:
         raise DefinitionError(
-            f"function.{fn.name}.return: typed_const '{fn.returns}' has no nonzero entry: "
+            f"function.{fn.name}._return: typed_const '{fn.returns}' has no nonzero entry: "
             "cannot pick a failure result for the stub"
         )
     return naming.const_name(api.namespace, chosen.key)

@@ -18,12 +18,12 @@ namespace = "xy"
 version = [1, 2, 3, 4]
 library = "libxy.so"
 
-[untyped_bit_const]
+[[untyped_bit_const]]
 feat_a = 0
 feat_b = { value = 3, docstring = "the b feature" }
 feat_ab = { value = ["feat_a", "feat_b"], format = "hex" }
 
-[untyped_const]
+[[untyped_const]]
 max_units = 16
 magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
 
@@ -32,7 +32,7 @@ product = "xy widget"
 vendor = { value = "acme", docstring = "who made it" }
 
 [typed_const.status]
-docstring = "call outcome"
+_docstring = "call outcome"
 ok = 0
 err_busy = { value = 9, docstring = "try later" }
 err_other = { value = 0x7fffffff, format = "hex" }
@@ -48,25 +48,25 @@ count = { type = "u32", docstring = "items seen" }
 bytes = "u64"
 
 [function.open_port]
-return = "status"
+_return = "status"
 unit = "u32"
 pport = { type = "port", outref = true }
 pstats = { type = "stats", outref = true, nullsafe = true }
 generation = { type = "u32", outref = true }
 
 [function.destroy_port]
-docstring = "release the port"
-return = "status"
+_docstring = "release the port"
+_return = "status"
 hport = "port"
 
 [function.send]
-return = "status"
+_return = "status"
 hport = "port"
 buf = { type = "memory", inref = true, size = "len", docstring = "bytes to send" }
 len = "u64"
 
 [function.spend]
-return = "status"
+_return = "status"
 htoken = "token"
 
 [driver_data]
@@ -83,23 +83,32 @@ namespace = "xy"
 version = [1, 2, 3, 4]
 library = "libxy.so"
 
-[untyped_bit_const]
+[[untyped_bit_const]]
+_docstring = "feature flags"
 feat_a = 0
 feat_b = { value = 3, docstring = "the b feature" }
 feat_ab = { value = ["feat_a", "feat_b"], format = "hex" }
+
+[[untyped_bit_const]]
+_base_type = "u32"
 feat_all = ["feat_ab"]
 
-[untyped_const]
+[[untyped_const]]
+_docstring = "limits"
 max_units = 16
-magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
 neg = { value = -5, format = "hex" }
+
+[[untyped_const]]
+_docstring = "wire values"
+_base_type = "u32"
+magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
 
 [string_const]
 product = "xy widget"
 vendor = { value = "acme", docstring = "who made it" }
 
 [typed_const.status]
-docstring = "call outcome"
+_docstring = "call outcome"
 ok = 0
 err_busy = { value = 9, docstring = "try later" }
 err_other = { value = 0x7fffffff, format = "hex" }
@@ -107,6 +116,7 @@ err_again = 9
 err_unsupported = 12
 
 [typed_const.mode]
+_base_type = "u32"
 fine = 0
 slow = 1
 
@@ -122,7 +132,7 @@ ctor = "open_link"
 class = "data_link"
 
 [struct.stats]
-docstring = "counters"
+_docstring = "counters"
 count = { type = "u32", docstring = "items seen" }
 bytes = "u64"
 
@@ -131,7 +141,7 @@ inner = "stats"
 n = "u32"
 
 [function.open_port]
-return = "status"
+_return = "status"
 unit = "u32"
 pport = { type = "port", outref = true }
 pstats = { type = "stats", outref = true, nullsafe = true }
@@ -139,28 +149,28 @@ generation = { type = "u32", outref = true }
 pwrap = { type = "wrap", outref = true }
 
 [function.destroy_port]
-docstring = "release the port"
-return = "status"
+_docstring = "release the port"
+_return = "status"
 hport = "port"
 
 [function.send]
-return = "status"
+_return = "status"
 hport = "port"
 buf = { type = "memory", inref = true, size = "len", docstring = "bytes to send" }
 len = "u64"
 
 [function.spend]
-return = "status"
+_return = "status"
 htoken = "token"
 
 [function.recv]
-return = "status"
+_return = "status"
 hport = "port"
 pdst = { type = "memory", outref = true, size = "n" }
 n = "u32"
 
 [function.configure]
-return = "status"
+_return = "status"
 hport = "port"
 cfg = { type = "stats", inref = true }
 limit = { type = "u32", inref = true }
@@ -168,24 +178,27 @@ mode = "mode"
 who = "token"
 
 [function.stats_of]
-return = "status"
+_return = "status"
 hport = "port"
 out = { type = "stats", outref = true }
 pcount = { type = "u32", outref = true }
 plink = { type = "link", outref = true }
 
 [function.open_link]
-return = "status"
+_return = "status"
 plink = { type = "link", outref = true }
 
 [function.reset]
-return = "status"
+_return = "status"
 
 [driver_data]
 header = "xy/driver/xy_ioctl.h"
 [driver_data.const_pins]
 feat_a = "XYD_FEAT_A"
 """
+
+# SPEC.md's `_base_type` spellings, stated independently of naming.BASE_C_TYPES.
+C_BASE_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
 
 MINIMAL = '[general]\nnamespace = "xy"\nversion = [0,0,0,1]\n'
 

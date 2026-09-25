@@ -1,6 +1,8 @@
 """Target-language names derived from an API namespace and definition keys."""
 
 BUILTIN_C_TYPES = {"u32": "uint32_t", "u64": "uint64_t"}
+# A constant group's or enum's `_base_type`, first the default, and its fixed-width C spelling.
+BASE_C_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
 VERSION_KEY = "api_version"
 
 
