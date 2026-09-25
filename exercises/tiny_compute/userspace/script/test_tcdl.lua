@@ -72,13 +72,14 @@ if dev.info.dma_buf_size ~= 0 and dev.info.dma_alignment ~= 0 then
         test_dma_vals[#test_dma_vals + 1] = string.format("%x", i % 16)
     end
     local test_dma_str = table.concat(test_dma_vals, "")
+    local test_misaligned = "0"
     test_dma_vals = nil
     success, err = dev:dma_to_device(0x00, test_dma_str)
     printf("dma_to_device(0x00, \"%s\") -> %s(%s)", test_dma_str, tcdl.error_to_str(err), err)
     result = result and success and err == nil
 
     success, err = dev:dma_to_device(0x00, "0")
-    printf("should fail with ERR_MISALIGNED: dma_to_device(0x00, \"0\") -> %s(%s)", tcdl.error_to_str(err), err)
+    printf("should fail with ERR_MISALIGNED: dma_to_device(0x00, \"%s\") -> %s(%s)", test_misaligned, tcdl.error_to_str(err), err)
     result = result and (not success) and err == tcdl.ERR_MISALIGNED
 
     success, err = dev:dma_to_device(0x01, test_dma_str)
@@ -90,11 +91,11 @@ if dev.info.dma_buf_size ~= 0 and dev.info.dma_alignment ~= 0 then
     result = result and success == test_dma_str and err == nil
 
     success, err = dev:dma_from_device(0x00, 1)
-    printf("should fail with ERR_MISALIGNED: dma_from_device(0x00, 1) -> %s(%s)", tcdl.error_to_str(err), err)
+    printf("should fail with ERR_MISALIGNED: dma_from_device(0x00, %d) -> %s %s(%s)", #test_misaligned, success, tcdl.error_to_str(err), err)
     result = result and (not success) and err == tcdl.ERR_MISALIGNED
 
     success, err = dev:dma_from_device(0x01, #test_dma_str)
-    printf("should fail with ERR_MISALIGNED: dma_from_device(0x01, %d) -> %s(%s)", #test_dma_str, tcdl.error_to_str(err), err)
+    printf("should fail with ERR_MISALIGNED: dma_from_device(0x01, %d) -> %s %s(%s)", #test_dma_str, success, tcdl.error_to_str(err), err)
     result = result and (not success) and err == tcdl.ERR_MISALIGNED
 else
     printf("invalid dma_buf_size(%s) and/or dma_alignment(%s) - both must be non-zero.",
