@@ -43,3 +43,9 @@ The end-to-end check is the project's own loop: `just test` generates from the r
 
 - A new output is a new `emit_*.py` taking the `Api`, plus one call in `__main__.py` and one path under the output directory that mirrors where it will be staged. `emit_cpp_stub.py` and `emit_cpp_wrapper.py` are the worked examples; a Rust stub is the next of that shape.
 - A per-API hooks module beside the definition is reserved for peculiarities. Its interface is deliberately undefined until the first real case shows what it needs; the model is plain data so a hook can adjust it without the generator knowing why.
+
+## On deck
+
+- `_gen_name` on an entry: overrides the generated name where it must begin with `_`, which the naming rule otherwise forbids because a leading underscore marks metadata. Not needed yet.
+- One frozen base for the model tree carrying `name` and `docstring`, so the tree has no `key`/`name` split and the emitters' comment and naming helpers are total over it; the three group classes become one with `docstring`, `base_type` and `entries`. No output change; the suite is the test.
+- Validate-then-emit per emitter: each emitter exposes `validate(api)` returning every objection and `emit(api)`; `__main__` runs every `validate`, reports all objections at once with the emitter named, and only then emits. Language facts leave the model: C keywords to `emit_c`, C++ keywords to the wrapper and stub, Lua keywords and the generated locals to `emit_lua`, each in its own `validate`, with the model keeping only the identifier rule. All-or-none output already holds; this fixes the one-objection-per-run reporting and ends the emitter-side checks being a documented exception.
