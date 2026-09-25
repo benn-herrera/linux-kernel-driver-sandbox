@@ -13,10 +13,10 @@ from api_gen import __main__ as api_gen_main
 from api_gen import model
 
 FIXTURE = """
-[general]
-namespace = "xy"
-version = [1, 2, 3, 4]
-library = "libxy.so"
+[_general]
+_namespace = "xy"
+_version = [1, 2, 3, 4]
+_library = "libxy.so"
 
 [[untyped_bit_const]]
 feat_a = 0
@@ -68,19 +68,19 @@ buf = { _type = "memory", _ref = "in", _count = "u64", _docstring = "bytes to se
 _return = "status"
 htoken = "token"
 
-[driver_data]
-header = "xy/driver/xy_ioctl.h"
-[driver_data.const_pins]
+[_driver_data]
+_header = "xy/driver/xy_ioctl.h"
+[_driver_data.const_pins]
 feat_a = "XYD_FEAT_A"
 """
 
 # FIXTURE with every feature the compiled checks exercise; fake_xy.cpp, check_xy.lua and
 # consumer_xy.cpp are written against it.
 KITCHEN_SINK = """
-[general]
-namespace = "xy"
-version = [1, 2, 3, 4]
-library = "libxy.so"
+[_general]
+_namespace = "xy"
+_version = [1, 2, 3, 4]
+_library = "libxy.so"
 
 [[untyped_bit_const]]
 _docstring = "feature flags"
@@ -195,16 +195,16 @@ plink = { _type = "link", _ref = "out" }
 [function.reset]
 _return = "status"
 
-[driver_data]
-header = "xy/driver/xy_ioctl.h"
-[driver_data.const_pins]
+[_driver_data]
+_header = "xy/driver/xy_ioctl.h"
+[_driver_data.const_pins]
 feat_a = "XYD_FEAT_A"
 """
 
 # SPEC.md's `_base_type` spellings, stated independently of naming.BASE_C_TYPES.
 C_BASE_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
 
-MINIMAL = '[general]\nnamespace = "xy"\nversion = [0,0,0,1]\n'
+MINIMAL = '[_general]\n_namespace = "xy"\n_version = [0,0,0,1]\n'
 
 IN_CONTAINER = Path("/work/vdev").is_dir()
 CONTAINER_ONLY_REASON = "compiled and executed checks run only in the build container; run `just api-gen-test-vdev`"

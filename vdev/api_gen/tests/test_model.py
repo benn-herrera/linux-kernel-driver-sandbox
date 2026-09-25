@@ -93,8 +93,8 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 1"), "no zero-valued entry")
 
     def test_quoted_library_rejected(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'library = "libxy.so"', 'library = "lib\\"xy.so"'), "must not contain")
-        self.assert_error(mutate(FIXTURE, 'header = "xy/', 'header = "xy\\\\'), "must not contain")
+        self.assert_error(mutate(FIXTURE, '_library = "libxy.so"', '_library = "lib\\"xy.so"'), "must not contain")
+        self.assert_error(mutate(FIXTURE, '_header = "xy/', '_header = "xy\\\\'), "must not contain")
 
     def test_bit_index_range(self) -> None:
         self.assert_error(mutate(FIXTURE, "_value = 3,", "_value = 31,"), "bit index must be 0..30")
@@ -206,10 +206,22 @@ class ModelErrors(unittest.TestCase):
         self.assertEqual(load().functions[2].params[1].count_type, "u64")
 
     def test_missing_general(self) -> None:
-        self.assert_error("[function]\n", "missing [general] table")
+        self.assert_error("[function]\n", "missing [_general] table")
 
     def test_general_name_is_rejected(self) -> None:
-        self.assert_error(mutate(FIXTURE, "[general]\n", '[general]\nname = "xy_api"\n'), "file name is the output stem")
+        self.assert_error(mutate(FIXTURE, "[_general]\n", '[_general]\nname = "xy_api"\n'), "file name is the output stem")
+
+    def test_old_root_table_spellings_are_unknown(self) -> None:
+        self.assert_error(mutate(FIXTURE, "[_general]", "[general]"), "unknown table(s) [general]")
+        self.assert_error(mutate(FIXTURE, "[_driver_data]", "[driver_data]"), "unknown table(s) [driver_data]")
+
+    def test_old_general_key_spellings_are_unknown(self) -> None:
+        self.assert_error(mutate(FIXTURE, "_namespace = ", "namespace = "), "_general: unknown key(s) namespace")
+        self.assert_error(mutate(FIXTURE, "_version = ", "version = "), "_general: unknown key(s) version")
+        self.assert_error(mutate(FIXTURE, "_library = ", "library = "), "_general: unknown key(s) library")
+
+    def test_old_driver_data_key_spelling_is_unknown(self) -> None:
+        self.assert_error(mutate(FIXTURE, "_header = ", "header = "), "_driver_data: unknown key(s) header")
 
     def test_unknown_format(self) -> None:
         self.assert_error(mutate(FIXTURE, '_format = "hex" }\n\n[opaque', '_format = "oct" }\n\n[opaque'), "_format must be one of")

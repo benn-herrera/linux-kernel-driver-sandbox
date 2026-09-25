@@ -35,7 +35,7 @@ class Pins(unittest.TestCase):
         self.assertRegex(block, r"static_assert\(XY_FEAT_A == XYD_FEAT_A, \"[^\"]+\"\);")
 
     def test_abi_pins_absent_without_driver_data(self) -> None:
-        text = emit_c.header(load(FIXTURE[: FIXTURE.index("[driver_data]")]), source_name="xy_api.adef.toml")
+        text = emit_c.header(load(FIXTURE[: FIXTURE.index("[_driver_data]")]), source_name="xy_api.adef.toml")
         self.assertNotIn("ABI pins", text)
         self.assertNotIn("static_assert", text)
 

@@ -45,7 +45,7 @@ def _generate_main(argv: list[str]) -> int:
     )
     parser.add_argument(
         "--library",
-        help="shared library file name the Lua module loads (default: general.library)",
+        help="shared library file name the Lua module loads (default: _general._library)",
     )
     args = parser.parse_args(argv)
 
@@ -61,7 +61,7 @@ def _generate_main(argv: list[str]) -> int:
         library = args.library or api.library
         if library is None:
             raise model.DefinitionError(
-                "no library for the Lua module: pass --library or set general.library"
+                "no library for the Lua module: pass --library or set _general._library"
             )
         header_path, wrapper_path, lua_path, stub_path = output_paths(stem=stem, exercise=args.exercise)
         outputs = {

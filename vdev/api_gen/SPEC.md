@@ -10,7 +10,7 @@ A userspace API is stated once, in a definition file, and every artifact a consu
 
 One TOML file, `<stem>.adef.toml`. `<stem>` names every output.
 
-Every metadata key begins with `_`, at every level; every other key is a member name (a constant, field or parameter), and no member name begins with `_`. `[general]` and `[driver_data]` describe no item and keep plain keys.
+Every key that is not a name begins with `_`, at every level: every other key is a member name (a constant, field or parameter), and no member name begins with `_`. `[_general]` and `[_driver_data]` describe no item, so every one of their own keys is a `_`-prefixed property too; `[_driver_data.const_pins]` is a member map, and its keys are names.
 
 - Item properties: `_docstring` (documents the item), `_return` (functions only), `_base_type` (enums and constant groups only), and on an opaque ref `_class`, `_ctor`, `_dtor`.
 - Entry attributes: on a constant `_value`, `_docstring`, and for an integer `_format`; on a struct field `_type`, `_docstring`; on a parameter `_type`, `_ref`, `_count`, `_optional`, `_docstring`.
@@ -22,7 +22,7 @@ Every metadata key begins with `_`, at every level; every other key is a member 
 
 The file holds these tables, each optional unless stated; any other top-level table is an error:
 
-- `[general]` (required): `namespace` (an identifier; the prefix for everything generated), `version` (four integers 0..255, encoded most-significant first into one 32-bit value; the first byte is 0..127 so the constant fits `int`), `library` (the shared object file name the script binding loads; a plain file name, no quotes or backslashes). There is no name field: the file stem names every output.
+- `[_general]` (required): `_namespace` (an identifier; the prefix for everything generated), `_version` (four integers 0..255, encoded most-significant first into one 32-bit value; the first byte is 0..127 so the constant fits `int`), `_library` (the shared object file name the script binding loads; a plain file name, no quotes or backslashes). There is no name field: the file stem names every output.
 - `[[untyped_bit_const]]`: an array of groups of constants that are bit flags. Each group has an optional `_docstring`, an optional `_base_type`, and at least one entry. An integer value is a bit index, 0..30 so the flag fits `int`. A list of strings names entries, of this group or an earlier one, whose flags are combined into a mask.
 - `[[untyped_const]]`: an array of groups of plain integer constants, no composition, with the same group properties. Values are integers fitting a 32-bit signed value.
 - `[string_const]`: string constants. Values are strings containing no `"`, `\` or newline.
@@ -30,7 +30,7 @@ The file holds these tables, each optional unless stated; any other top-level ta
 - `[opaque_ref.<name>]`: a handle type whose representation is the implementation's secret. It has no members, only properties: `_docstring`; and for bindings with object semantics, `_ctor`, the function that produces the handle (it has exactly one parameter of this type with `_ref = "out"`), `_dtor`, the function that releases it (its only parameter is this type by value; requires `_ctor`), and `_class`, the object's name in those bindings, written idiom-free (lowercase identifier; default the ref's name). Each binding applies its own casing.
 - `[struct.<name>]`: an optional `_docstring`, then fields in document order.
 - `[function.<name>]`: `_return` (a `typed_const` enum name whose entries include the value 0, required), an optional `_docstring`, then parameters in document order. A `memory` parameter `p` becomes, in the C header and every output that mirrors it, an adjacent pair: the pointer `p`, then its byte count `p_count` of the `_count` type. The definition does not write the count; a numeric parameter written beside a buffer is just another parameter.
-- `[driver_data]`: `header`, the driver's UAPI header path relative to the exercises directory (no quotes or backslashes), and `[driver_data.const_pins]`, mapping an `untyped_bit_const` key to the driver macro it must equal.
+- `[_driver_data]`: `_header`, the driver's UAPI header path relative to the exercises directory (no quotes or backslashes), and `[_driver_data.const_pins]`, mapping an `untyped_bit_const` key to the driver macro it must equal.
 
 `_base_type` is `"i32"` (the default) or `"u32"`, and chooses the fixed-width type the C++ wrapper and the Lua FFI declarations give an enum or a group's constants. The C header spells every constant as an enumerator whatever the base type, so values still fit `int` under `u32`; `u32` adds that no value is negative.
 
@@ -52,7 +52,7 @@ With namespace `ns`, upper-cased `NS`:
 | definition | generated |
 |---|---|
 | bit, plain, string constant or enum entry `key` | `NS_KEY` in C; `KEY` in a module-scoped binding |
-| `general.version` | `NS_API_VERSION` |
+| `_general._version` | `NS_API_VERSION` |
 | enum `e` | `enum ns_e`, typedef `ns_e` |
 | opaque ref `h` | `struct ns_h_opaque`, typedef `ns_h` (a pointer) |
 | struct `s` | `struct ns_s`, typedef `ns_s` |
@@ -69,7 +69,7 @@ Every output starts with a banner naming its source and saying it is generated. 
 ### `include/<exercise>/<stem>.h` — the C header
 
 - For a consumer, includes only `<stdint.h>`. Its preprocessor content is: `#pragma once`, that include, the two blocks defining `NS_C_API` (`extern "C"` under C++) and `NS_API` (`NS_C_API` plus default visibility when `NS_IMPL` is defined), and the implementation-only blocks below. No macro is used in any declaration except `NS_API` before each function.
-- One block at the end of the file under `#if defined(NS_IMPL)`, and so only in the implementation's build: an include of `<assert.h>` and of the driver header named in `driver_data.header`, then one file-scope `static_assert(NS_KEY == DRIVER_MACRO, "...")` per pin. The library failing to compile is the ABI check; a consumer never sees the driver header. Absent `[driver_data]`, the block is not emitted.
+- One block at the end of the file under `#if defined(NS_IMPL)`, and so only in the implementation's build: an include of `<assert.h>` and of the driver header named in `_driver_data._header`, then one file-scope `static_assert(NS_KEY == DRIVER_MACRO, "...")` per pin. The library failing to compile is the ABI check; a consumer never sees the driver header. Absent `[_driver_data]`, the block is not emitted.
 - Constants are enums: the version in an anonymous enum, each bit constant group in an anonymous enum with single bits as `(1u << n)` and masks as `A | B`, each plain constant group in an anonymous enum, each typed enum with explicit values and a typedef. String constants are `static const char NS_KEY[] = "...";`, so the header stays macro-free.
 - Each opaque ref is an incomplete struct and a pointer typedef. Each struct has its fields in order with a typedef.
 - Functions are declared in document order. Type mapping: `u32` → `uint32_t`, `u64` → `uint64_t`, an enum or struct by its typedef, an opaque ref by value as its typedef; a non-memory type `T` with `_ref = "in"` → `const T*`, with `"out"` or `"inout"` → `T*`; `memory` → `const void*` when `"in"`, `void*` when `"out"` or `"inout"`, followed by `uint32_t` or `uint64_t` `p_count` as its `_count` says.
@@ -103,7 +103,7 @@ A module returned from `require`, needing no file at run time:
 
 ## Invocation
 
-Two modes. Generation: `python3 -m api_gen <definition> --generated <dir> --exercise <name> [--library <file>]`. `--library` overrides `general.library`; one of them must be present for the Lua module. Exit status 0 on success with one line on stderr naming what was written; 2 on any definition error, with the message `api_gen: <definition>: <what is wrong>`, and nothing written. Every output is always written; staleness is the build's concern.
+Two modes. Generation: `python3 -m api_gen <definition> --generated <dir> --exercise <name> [--library <file>]`. `--library` overrides `_general._library`; one of them must be present for the Lua module. Exit status 0 on success with one line on stderr naming what was written; 2 on any definition error, with the message `api_gen: <definition>: <what is wrong>`, and nothing written. Every output is always written; staleness is the build's concern.
 
 Dependencies: `python3 -m api_gen gendeps <definition>` prints make text to stdout for exactly one definition (one per exercise is the rule): `GENERATED :=` listing the outputs as `$(GEN)/...` paths with `$(BASE)` for the exercise directory, and one grouped-target rule (`$(GENERATED) &: definition`, GNU make 4.3 or later) making every output by running the generation mode with `--generated $(GEN) --exercise $(BASE)`. The including makefile defines `GEN`, `BASE` and `API_GEN`. The definition is not read; only its name matters, and the output paths come from the same code the generation mode writes to, so a build file never spells them.
 

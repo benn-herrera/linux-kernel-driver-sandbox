@@ -56,7 +56,7 @@ class Generate(unittest.TestCase):
     def test_missing_library_exits_2_with_nothing_written(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             definition = Path(tmp) / "xy_api.adef.toml"
-            definition.write_text(mutate(FIXTURE, 'library = "libxy.so"\n', ""), encoding="utf-8")
+            definition.write_text(mutate(FIXTURE, '_library = "libxy.so"\n', ""), encoding="utf-8")
             generated = Path(tmp) / "generated"
             code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "tiny_compute"])
             self.assertEqual(code, 2)

@@ -40,8 +40,8 @@ _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
 FORMATS = ("dec", "hex")
 REFS = ("in", "out", "inout")
 TABLES = frozenset(
-    {"general", "untyped_bit_const", "untyped_const", "string_const", "typed_const", "opaque_ref", "struct", "function",
-     "driver_data"}
+    {"_general", "untyped_bit_const", "untyped_const", "string_const", "typed_const", "opaque_ref", "struct", "function",
+     "_driver_data"}
 )
 GROUP_PROPERTIES = frozenset({"_docstring", "_base_type"})
 OPAQUE_PROPERTIES = frozenset({"_docstring", "_class", "_ctor", "_dtor"})
@@ -209,31 +209,31 @@ def from_dict(data: Mapping) -> Api:
     unknown = sorted(set(data) - TABLES)
     if unknown:
         raise DefinitionError(f"unknown table(s) {', '.join(f'[{k}]' for k in unknown)}")
-    general = data.get("general")
+    general = data.get("_general")
     if not isinstance(general, dict):
-        raise DefinitionError("missing [general] table")
+        raise DefinitionError("missing [_general] table")
     if "name" in general:
-        raise DefinitionError("general: unknown key name (the definition's file name is the output stem)")
-    _reject_unknown(general, {"namespace", "version", "library"}, "general")
+        raise DefinitionError("_general: unknown key name (the definition's file name is the output stem)")
+    _reject_unknown(general, {"_namespace", "_version", "_library"}, "_general")
 
-    namespace = general.get("namespace")
+    namespace = general.get("_namespace")
     if not isinstance(namespace, str) or not _IDENTIFIER.match(namespace):
-        raise DefinitionError("general.namespace must be an identifier string")
-    _identifier(namespace, "general.namespace")
-    version = general.get("version")
+        raise DefinitionError("_general._namespace must be an identifier string")
+    _identifier(namespace, "_general._namespace")
+    version = general.get("_version")
     if not (
         isinstance(version, list)
         and len(version) == 4
         and all(_is_int(v) and 0 <= v <= 255 for v in version)
     ):
-        raise DefinitionError("general.version must be a list of 4 integers in 0..255")
+        raise DefinitionError("_general._version must be a list of 4 integers in 0..255")
     if version[0] > 127:
-        raise DefinitionError("general.version: first byte must be 0..127 (enumerators must fit int)")
-    library = general.get("library")
+        raise DefinitionError("_general._version: first byte must be 0..127 (enumerators must fit int)")
+    library = general.get("_library")
     if library is not None and not isinstance(library, str):
-        raise DefinitionError("general.library must be a string")
+        raise DefinitionError("_general._library must be a string")
     if library is not None:
-        _quote_free(library, "general.library")
+        _quote_free(library, "_general._library")
 
     bit_const_groups = _bit_const_groups(_groups(data, "untyped_bit_const"))
     const_groups = tuple(
@@ -293,7 +293,7 @@ def from_dict(data: Mapping) -> Api:
         opaque_refs=tuple(opaque_refs),
         structs=tuple(structs),
         functions=functions,
-        driver_data=_driver_data(data.get("driver_data"), {c.key for g in bit_const_groups for c in g.entries}),
+        driver_data=_driver_data(data.get("_driver_data"), {c.key for g in bit_const_groups for c in g.entries}),
     )
     _check_unique_identifiers(api)
     return api
@@ -599,18 +599,18 @@ def _driver_data(body: object, bit_keys: set[str]) -> DriverData | None:
     if body is None:
         return None
     if not isinstance(body, dict):
-        raise DefinitionError("[driver_data] must be a table")
-    _reject_unknown(body, {"header", "const_pins"}, "driver_data")
-    header = body.get("header")
+        raise DefinitionError("[_driver_data] must be a table")
+    _reject_unknown(body, {"_header", "const_pins"}, "_driver_data")
+    header = body.get("_header")
     if not isinstance(header, str):
-        raise DefinitionError("driver_data.header must be a string")
-    _quote_free(header, "driver_data.header")
+        raise DefinitionError("_driver_data._header must be a string")
+    _quote_free(header, "_driver_data._header")
     pins_table = body.get("const_pins", {})
     if not isinstance(pins_table, dict):
-        raise DefinitionError("driver_data.const_pins must be a table")
+        raise DefinitionError("_driver_data.const_pins must be a table")
     pins = []
     for key, macro in pins_table.items():
-        where = f"driver_data.const_pins.{key}"
+        where = f"_driver_data.const_pins.{key}"
         if key not in bit_keys:
             raise DefinitionError(f"{where}: pins undefined untyped_bit_const '{key}'")
         if not isinstance(macro, str) or not _IDENTIFIER.match(macro):
