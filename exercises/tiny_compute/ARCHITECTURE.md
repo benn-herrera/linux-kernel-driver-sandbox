@@ -84,7 +84,7 @@ The API definition, then three consumers of the driver, each one layer up from t
 
 The stack from driver to script, one host coordinating several accelerators through a library and a binding, is in place. Remaining, in order:
 
-- The API generator's emitters: C header, ABI pin unit, Lua base module, then the header-only C++ wrapper (RAII device ownership with a cached `tcdl_info`) that the test program shrinks onto. The wiring is in place with a stub that writes empty placeholders; the switch-over retires the hand-written header and the `gsub` normalizer in the Lua binding.
+- DONE 2026-09-25: the API generator's emitters, C header with ABI pins, Lua module, header-only C++ wrapper and implementation stub; the test program runs on the wrapper and the Lua test on the module.
 - The torture suite in Lua against the binding, multi-process, across the two instances the test machine boots: the isolation check (a DMA pattern written to one device must not be readable from the other, and operations on the two must not serialise on each other), then `open`/`release` under contention and the per-device locks. The driver side is done. The C++ program shrinks to a smoke test through the library plus its one threaded case.
 - proper dmsg logging
 - A Rust port of the driver.
