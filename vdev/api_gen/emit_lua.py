@@ -4,13 +4,6 @@ per opaque ref that names a constructor."""
 from api_gen import emit_c, naming
 from api_gen.model import Api, DefinitionError, Function, OpaqueRef, Param
 
-# Lua keywords plus the names generated code binds itself; a parameter named
-# one of these would shadow or break the generated function.
-_LUA_RESERVED = frozenset(
-    "and break do else elseif end false for function goto if in local nil not or "
-    "repeat return then true until while self result lib M ffi".split()
-)
-
 
 def module(api: Api, *, source_name: str, library: str) -> str:
     ns = api.namespace
@@ -21,11 +14,16 @@ def module(api: Api, *, source_name: str, library: str) -> str:
         f'\nlocal lib = ffi.load("{library}")\n\nlocal M = {{}}\n\n',
     ]
 
-    out += [f"M.{name} = {value}\n" for name, value in _constant_literals(api)]
+    constants = _constant_literals(api)
+    classes = {naming.upper_camel(o.class_name) for o in api.opaque_refs if o.ctor is not None}
+    clash = next((name for name, _ in constants if name in classes), None)
+    if clash is not None:
+        raise DefinitionError(f"Lua module: M.{clash} would be both a constant and a class")
+    out += [f"M.{name} = {value}\n" for name, value in constants]
 
     for typed in api.typed_consts:
         names = "".join(
-            f'    [M.{c}] = "{c}",\n' for c in (naming.const_name(ns, e.key) for e in typed.entries)
+            f'    [M.{c}] = "{c}",\n' for c in (naming.lua_const_name(e.key) for e in typed.entries)
         )
         out.append(
             f"\nlocal {typed.name}_names = {{\n{names}}}\n"
@@ -45,9 +43,7 @@ def module(api: Api, *, source_name: str, library: str) -> str:
 
 
 def _version_literal(api: Api) -> str:
-    shifts = (24, 16, 8, 0)
-    value = sum(b << s for b, s in zip(api.version, shifts))
-    return f"0x{value:08x}"
+    return f"0x{api.version_value():08x}"
 
 
 def _bit_const_values(api: Api) -> dict[str, int]:
@@ -63,72 +59,92 @@ def _bit_const_values(api: Api) -> dict[str, int]:
 
 def _constant_literals(api: Api) -> list[tuple[str, str]]:
     """Every constant's (name, Lua literal), in the same order the C header defines them."""
-    ns = api.namespace
+    name = naming.lua_const_name
     bit_values = _bit_const_values(api)
-    literals = [(naming.version_const(ns), _version_literal(api))]
+    literals = [(name(naming.VERSION_KEY), _version_literal(api))]
+    literals += [(name(c.key), emit_c.int_literal(bit_values[c.key], c.format)) for c in api.bit_consts]
+    literals += [(name(c.key), emit_c.int_literal(c.value, c.format)) for c in api.consts]
     literals += [
-        (naming.const_name(ns, c.key), emit_c.int_literal(bit_values[c.key], c.format))
-        for c in api.bit_consts
+        (name(e.key), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries
     ]
-    literals += [
-        (naming.const_name(ns, e.key), emit_c.int_literal(e.value, e.format))
-        for t in api.typed_consts
-        for e in t.entries
-    ]
+    literals += [(name(c.key), f'"{c.value}"') for c in api.string_consts]
     return literals
 
 
 def _cdef(text: str) -> str:
-    level = 0
-    while f"]{'=' * level}]" in text:
-        level += 1
-    eq = "=" * level
-    return f"ffi.cdef[{eq}[\n{text}]{eq}]\n"
+    return f"ffi.cdef[[\n{text}]]\n"
 
 
 def _doc_lines(fn: Function) -> str:
-    docs = [fn.docstring] if fn.docstring else []
-    docs += [f"{p.name}: {p.docstring}" for p in fn.params if p.docstring]
-    return "".join(f"-- {line}\n" for doc in docs for line in doc.splitlines())
+    return "".join(f"-- {line}\n" for doc in fn.docs() for line in doc.splitlines())
 
 
 def _ok_const(api: Api, fn: Function) -> str:
     typed = next(t for t in api.typed_consts if t.name == fn.returns)
-    ok = next((e for e in typed.entries if e.value == 0), None)
-    if ok is None:
-        raise DefinitionError(f"Lua module: typed_const.{fn.returns} has no entry with value 0 for success")
-    return naming.const_name(api.namespace, ok.key)
-
-
-def _check_lua_names(fn: Function) -> None:
-    for p in fn.params:
-        if p.name in _LUA_RESERVED:
-            raise DefinitionError(f"Lua module: function.{fn.name}.{p.name}: name is reserved in the Lua module")
-        if p.type == "memory" and p.size is None:
-            raise DefinitionError(f"Lua module: function.{fn.name}.{p.name}: a memory parameter needs 'size'")
+    ok = next(e for e in typed.entries if e.value == 0)
+    return naming.lua_const_name(ok.key)
 
 
 def _is_opaque_value(param: Param, opaque: str) -> bool:
     return param.type == opaque and not (param.outref or param.inref)
 
 
-def _lua_value(api: Api, type_name: str, expr: str) -> str:
-    """u32 and enum values become Lua numbers; anything else (u64 included) stays cdata."""
-    numeric = type_name == "u32" or api.kind(type_name) == "enum"
-    return f"tonumber({expr})" if numeric else expr
+def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> str:
+    """u32 and enum values become Lua numbers, a struct a table of its fields converted
+    the same way (nested structs included); u64 and opaque values stay cdata. `indent`
+    is the indentation of the line the expression starts on."""
+    kind = api.kind(type_name)
+    if kind == "struct":
+        fields = next(s for s in api.structs if s.name == type_name).fields
+        inner = indent + "    "
+        body = "".join(
+            f"{inner}{f.name} = {_lua_value(api, f.type, f'{expr}.{f.name}', indent=inner)},\n" for f in fields
+        )
+        return f"{{\n{body}{indent}}}"
+    return f"tonumber({expr})" if type_name == "u32" or kind == "enum" else expr
+
+
+def _box(api: Api, type_name: str) -> str:
+    """The ffi.new type for a value the C side reaches through a pointer: a struct
+    itself, anything else a one-element array."""
+    c_type = emit_c.c_type(api, type_name)
+    return c_type if api.kind(type_name) == "struct" else f"{c_type}[1]"
+
+
+def _copy_in(api: Api, p: Param) -> str:
+    """A non-memory inref arrives as a Lua value (a table or cdata for a struct) and is
+    copied into cdata the C call can point at; empty for any other parameter."""
+    if not p.inref or p.type == "memory":
+        return ""
+    return f'    local {p.name} = ffi.new("{_box(api, p.type)}", {p.name})\n'
+
+
+def _use_guard(opaque: OpaqueRef) -> str:
+    """The assert every non-dtor method on the class begins with: using the object
+    after release, or of a class whose opaque has no dtor to release it at all, is a
+    caller bug, not a library result."""
+    class_display = naming.upper_camel(opaque.class_name)
+    reason = f"used after {opaque.dtor}" if opaque.dtor is not None else "has no handle"
+    return f'assert(self._handle ~= nil, "{class_display} {reason}")'
 
 
 def _class(api: Api, opaque: OpaqueRef) -> str:
-    cls = f"M.{naming.lua_class(api.namespace, opaque.class_name)}"
+    cls = f"M.{naming.upper_camel(opaque.class_name)}"
     ctor = next(f for f in api.functions if f.name == opaque.ctor)
     methods = [
         f
         for f in api.functions
         if f.name not in (opaque.ctor, opaque.dtor) and f.params and _is_opaque_value(f.params[0], opaque.name)
     ]
+    method_names = [f.name for f in methods]
+    if opaque.dtor is not None:
+        method_names.append(opaque.dtor)
     out = [f"\n{cls} = {{}}\n{cls}.__index = {cls}\n"]
-    out.append(_constructor(api, ctor, opaque, cls=cls, method_names=[f.name for f in methods]))
-    out += [_method(api, fn, cls=cls) for fn in methods]
+    out.append(_constructor(api, ctor, opaque, cls=cls, method_names=method_names))
+    guard = _use_guard(opaque)
+    out += [_method(api, fn, cls=cls, guard=guard) for fn in methods]
+    if opaque.dtor is not None:
+        out.append(_release(api, next(f for f in api.functions if f.name == opaque.dtor), cls=cls))
     return "".join(out)
 
 
@@ -142,6 +158,7 @@ def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str],
         elif not p.outref:
             args.append(p.name)
             call.append(p.name)
+            allocs.append(_copy_in(api, p))
         elif p.type == "memory":
             allocs.append(f'    local {p.name} = ffi.new("uint8_t[?]", {p.size})\n')
             call.append(p.name)
@@ -155,27 +172,22 @@ def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str],
 
 def _call(api: Api, fn: Function, call: list[str]) -> str:
     c_name = naming.function_name(api.namespace, fn.name)
-    return (
-        f"    local result = lib.{c_name}({', '.join(call)})\n"
-        f"    if result ~= M.{_ok_const(api, fn)} then\n        return nil, result\n    end\n"
-    )
+    return f"    local result = lib.{c_name}({', '.join(call)})\n" + _result_check(api, fn)
+
+
+def _result_check(api: Api, fn: Function) -> str:
+    return f"    if result ~= M.{_ok_const(api, fn)} then\n        return nil, result\n    end\n"
 
 
 def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_names: list[str]) -> str:
     """`new`, which caches every outref other than the handle on the object under its
     parameter name."""
-    _check_lua_names(fn)
     handle = next(p for p in fn.params if p.type == opaque.name and p.outref)
-    # (param, struct fields or None for a scalar) for each cached outref
-    cached = []
-    for p in fn.params:
-        if not p.outref or p is handle:
-            continue
-        if p.type == "memory":
-            raise DefinitionError(f"Lua module: function.{fn.name}.{p.name}: a constructor cannot cache a memory outref")
-        struct = next((s for s in api.structs if s.name == p.type), None)
-        cached.append((p, struct.fields if struct else None))
-    members = ["new", "_handle", *method_names, *(p.name for p, _ in cached)]
+    cached = [p for p in fn.params if p.outref and p is not handle]
+    memory = next((p for p in cached if p.type == "memory"), None)
+    if memory is not None:
+        raise DefinitionError(f"Lua module: function.{fn.name}.{memory.name}: a constructor cannot cache a memory outref")
+    members = ["new", "_handle", *method_names, *(p.name for p in cached)]
     duplicate = next((m for m in members if members.count(m) > 1), None)
     if duplicate is not None:
         raise DefinitionError(f"Lua module: {cls}.{duplicate} would be defined more than once")
@@ -183,33 +195,43 @@ def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_
     args, call, _, _ = _marshal(api, fn.params)
     out = [_doc_lines(fn), f"function {cls}.new({', '.join(args)})\n"]
     for p in fn.params:
-        if p.outref:
-            shape = "" if api.kind(p.type) == "struct" else "[1]"
-            out.append(f'    local {p.name} = ffi.new("{emit_c.c_type(api, p.type)}{shape}")\n')
+        out.append(f'    local {p.name} = ffi.new("{_box(api, p.type)}")\n' if p.outref else _copy_in(api, p))
     out.append(_call(api, fn, call))
     handle_value = f"{handle.name}[0]"
     if opaque.dtor is not None:
         handle_value = f"ffi.gc({handle_value}, lib.{naming.function_name(api.namespace, opaque.dtor)})"
     out.append(f"    local self = setmetatable({{}}, {cls})\n    self._handle = {handle_value}\n")
-    for p, fields in cached:
-        if fields is None:
-            out.append(f"    self.{p.name} = {_lua_value(api, p.type, f'{p.name}[0]')}\n")
-            continue
-        copy = "".join(
-            f"        {f.name} = {_lua_value(api, f.type, f'{p.name}.{f.name}')},\n" for f in fields
-        )
-        out.append(f"    self.{p.name} = {{\n{copy}    }}\n")
+    for p in cached:
+        value = p.name if api.kind(p.type) == "struct" else f"{p.name}[0]"
+        out.append(f"    self.{p.name} = {_lua_value(api, p.type, value)}\n")
     out.append("    return self, nil\nend\n")
     return "\n" + "".join(out)
 
 
-def _method(api: Api, fn: Function, *, cls: str) -> str:
-    _check_lua_names(fn)
+def _method(api: Api, fn: Function, *, cls: str, guard: str) -> str:
     args, call, allocs, rets = _marshal(api, fn.params[1:])
     rets = rets or ["true"]
     return (
         f"\n{_doc_lines(fn)}function {cls}.{fn.name}({', '.join(['self', *args])})\n"
+        f"    {guard}\n"
         + "".join(allocs)
         + _call(api, fn, ["self._handle", *call])
         + f"    return {', '.join(rets)}, nil\nend\n"
+    )
+
+
+def _release(api: Api, dtor: Function, *, cls: str) -> str:
+    """The dtor as an explicit method: detaches the GC finalizer if one is attached,
+    releases whatever _handle holds (a nil handle reaches the library as NULL, and the
+    library answers), and drops the handle whatever the result."""
+    return (
+        f"\n{_doc_lines(dtor)}function {cls}.{dtor.name}(self)\n"
+        "    local handle = self._handle\n"
+        "    if handle ~= nil then\n"
+        "        ffi.gc(handle, nil)\n"
+        "    end\n"
+        f"    local result = lib.{naming.function_name(api.namespace, dtor.name)}(handle)\n"
+        "    self._handle = nil\n"
+        + _result_check(api, dtor)
+        + "    return true, nil\nend\n"
     )

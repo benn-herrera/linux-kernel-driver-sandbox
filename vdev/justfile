@@ -100,7 +100,7 @@ driver-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
-[doc("generate the active exercise's userspace API artifacts: make -C /work/exercises/EXERCISE/userspace/api_def with exercises/gen.mk, which runs vdev/api_gen for every *.adef.toml newer than its outputs under OUT/userspace-build/EXERCISE/generated/; outputs land under generated/include/EXERCISE/ and generated/binding/; no-op with a note when the exercise has no api_def/Makefile")]
+[doc("generate the active exercise's userspace API artifacts: make -C /work/exercises/EXERCISE/userspace/api_def with exercises/gen.mk, which runs vdev/api_gen for every *.adef.toml newer than its outputs under OUT/userspace-build/EXERCISE/generated/; outputs land under generated/include/EXERCISE/ (the C header and the header-only C++ wrapper), generated/binding/ (the Lua module) and generated/stub/ (the implementation stub, never staged); no-op with a note when the exercise has no api_def/Makefile")]
 generate: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail

@@ -1,5 +1,6 @@
 [general]
-# the file stem (tcdl_api) names every output
+# the file stem (in this case tcdl_api) names every output.
+#
 # for languages with namespace features, used as namespace
 # for those without used as prefix for functions, variables, etc. capitalized or upper-cased as  needed for idioms.
 namespace = "tcdl"
@@ -8,6 +9,8 @@ version = [0, 5, 0, 0]
 # shared library the script bindings load
 library = "libtiny_compute.so"
 
+# unused in this API def, but there is an [untyped_const] which the same
+# except that the values are literals instead of shifts.
 [untyped_bit_const]
 cap_compute = 0
 cap_dma_read = 1
@@ -31,7 +34,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
 
 [opaque_ref]
   # ctor/dtor/class: bindings with object semantics wrap the handle in a class built on these
-  handle = { ctor = "create_device", dtor = "destroy_device", class = "Device", docstring = "all device operation api calls require a handle." }
+  handle = { ctor = "create_device", dtor = "destroy_device", class = "device", docstring = "all device operation api calls require a handle." }
 
 [struct]
   [struct.info]

@@ -74,19 +74,31 @@ def cdef(api: Api) -> str:
     each typed enum (not its body, since the Lua module carries constants as literals),
     opaque and struct declarations, and function declarations with no visibility macro.
     """
-    blocks = [f"typedef int32_t {naming.type_name(api.namespace, t.name)};\n" for t in api.typed_consts]
-    blocks += [_opaque(api, o) for o in api.opaque_refs]
-    blocks += [_struct(api, s) for s in api.structs]
-    if api.functions:
-        blocks.append("".join(_function(api, f, "") for f in api.functions))
-    return "\n".join(blocks)
+    typedefs = [f"typedef int32_t {naming.type_name(api.namespace, t.name)};\n" for t in api.typed_consts]
+    return "\n".join(typedefs + [declarations(api, function_prefix="", constants=False)])
 
 
-def declarations(api: Api, *, function_prefix: str) -> str:
-    blocks = [_version_enum(api)]
-    if api.bit_consts:
-        blocks.append(_bit_enum(api))
-    blocks += [_typed_enum(api, t) for t in api.typed_consts]
+def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> str:
+    ns = api.namespace
+    blocks = []
+    if constants:
+        blocks.append(_version_enum(api))
+        if api.bit_consts:
+            blocks.append(_bit_enum(api))
+        if api.consts:
+            blocks.append(
+                _anonymous_enum(
+                    [(naming.const_name(ns, c.key), int_literal(c.value, c.format), c.docstring) for c in api.consts]
+                )
+            )
+        blocks += [_typed_enum(api, t) for t in api.typed_consts]
+        if api.string_consts:
+            blocks.append(
+                "".join(
+                    f'static const char {naming.const_name(ns, c.key)}[] = "{c.value}";{_trailing(c.docstring)}\n'
+                    for c in api.string_consts
+                )
+            )
     blocks += [_opaque(api, o) for o in api.opaque_refs]
     blocks += [_struct(api, s) for s in api.structs]
     if api.functions:
@@ -102,30 +114,43 @@ def _trailing(doc: str | None) -> str:
     return f" /* {doc} */" if doc else ""
 
 
+def _anonymous_enum(entries: list[tuple[str, str, str | None]]) -> str:
+    """`enum { ... };` from (name, value text, docstring) entries."""
+    lines = "".join(
+        f"  {name} = {value}{',' if i < len(entries) - 1 else ''}{_trailing(doc)}\n"
+        for i, (name, value, doc) in enumerate(entries)
+    )
+    return "enum {\n" + lines + "};\n"
+
+
 def _version_enum(api: Api) -> str:
     shifts = (24, 16, 8, 0)
     value = " | ".join(f"(0x{b:02x} << {s})" for b, s in zip(api.version, shifts))
-    return f"enum {{\n  {naming.version_const(api.namespace)} = {value}\n}};\n"
+    return _anonymous_enum([(naming.version_const(api.namespace), value, None)])
 
 
 def _bit_enum(api: Api) -> str:
     ns = api.namespace
-    lines = []
-    for i, c in enumerate(api.bit_consts):
-        if c.bit is not None:
-            value = f"(1u << {c.bit})"
-        else:
-            value = " | ".join(naming.const_name(ns, p) for p in c.parts)
-        comma = "," if i < len(api.bit_consts) - 1 else ""
-        lines.append(f"  {naming.const_name(ns, c.key)} = {value}{comma}{_trailing(c.docstring)}\n")
-    return "enum {\n" + "".join(lines) + "};\n"
+    return _anonymous_enum(
+        [
+            (
+                naming.const_name(ns, c.key),
+                f"(1u << {c.bit})" if c.bit is not None else " | ".join(naming.const_name(ns, p) for p in c.parts),
+                c.docstring,
+            )
+            for c in api.bit_consts
+        ]
+    )
 
 
 def _typed_enum(api: Api, typed: TypedConst) -> str:
     ns = api.namespace
     name = naming.type_name(ns, typed.name)
+    entries = typed.entries
     lines = "".join(
-        f"  {naming.const_name(ns, e.key)} = {int_literal(e.value, e.format)},{_trailing(e.docstring)}\n" for e in typed.entries
+        f"  {naming.const_name(ns, e.key)} = {int_literal(e.value, e.format)}"
+        f"{',' if i < len(entries) - 1 else ''}{_trailing(e.docstring)}\n"
+        for i, e in enumerate(entries)
     )
     return f"{_comment_line(typed.docstring)}enum {name} {{\n{lines}}};\ntypedef enum {name} {name};\n"
 
@@ -151,9 +176,7 @@ def _struct(api: Api, struct: Struct) -> str:
 
 
 def _function(api: Api, fn: Function, prefix: str) -> str:
-    docs = [fn.docstring] if fn.docstring else []
-    docs += [f"{p.name}: {p.docstring}" for p in fn.params if p.docstring]
     params = ", ".join(f"{param_type(api, p)} {p.name}" for p in fn.params) or "void"
     returns = c_type(api, fn.returns)
     name = naming.function_name(api.namespace, fn.name)
-    return f"{_comment_line(' '.join(docs))}{prefix}{returns} {name}({params});\n"
+    return f"{_comment_line(' '.join(fn.docs()))}{prefix}{returns} {name}({params});\n"

@@ -1,129 +1,67 @@
 # CONVENTIONS – linux-kernel-driver-sandbox
 
-## Decision practice
+Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 
-- Stay on the most-travelled path: the default toolchain, the default
-  configuration, the documented workflow. Step off it only as a deliberate
-  learning choice, and only after the default path has been visited
-  successfully.
-- One new choice at a time. A choice is not made until the consequences of
-  the previous one have been explored and understood.
+## Decisions
+
+- Take the most-travelled path: default toolchain, default configuration, documented workflow.
+- Step off it only as a deliberate learning choice, and only after the default path has worked.
+- One new choice at a time: make the next only once the previous one's consequences are explored and understood.
 
 ## Naming
 
-- Exercise, driver directory, file and module names use snake_case, so the
-  spelling in the tree matches what `lsmod`, sysfs and stack traces show.
-  Hyphens appear only where the kernel requires them: compatible strings
-  and device tree names.
-- A recipe executes where its justfile is mounted. The root `justfile` runs
-  on the macOS host and never names a container path outside its mount
-  specifications. `vdev/justfile` is mounted into the build container and
-  runs there; it never names a host path or a host tool. The root composes
-  workflows from host recipes and `run-vdev`; the module does the work.
-  `machine-vdev` and `machine-stop-vdev` manage the Podman VM from the
-  host; the suffix names what they act on.
+- Exercise, driver directory, file and module names are snake_case, matching what `lsmod`, sysfs and stack traces show.
+- Hyphens only where the kernel requires them: compatible strings and device tree names.
+- A recipe's suffix names what it acts on, not where it runs: `machine-vdev` and `machine-stop-vdev` run on the host and act on the Podman VM.
 
-## Style
+## Runner
 
-- Driver and userspace sources follow kernel coding style. `format` (on
-  the host) applies it; `checkpatch-vdev` must be clean before a driver
-  change is considered done.
+- A recipe runs where its justfile is mounted: the root `justfile` on the macOS host, `vdev/justfile` in the build container.
+- The root `justfile` knows the container's layout only through its mount targets: `MOUNTS`, the `VDEV_JUST` runner path, and the path mapping `clangd-vdev` passes. `vdev/justfile` names no host path or host tool.
+- The root composes workflows from host recipes and `run-vdev`; `vdev/justfile` does the work.
+- The active exercise is `EXERCISE` in `active_exercise.just`; every build, stage, test and style recipe acts on it alone, and the `*-clean-vdev` recipes remove every exercise's tree. `just EXERCISE=<name> <recipe>` overrides it for one run.
+- One exercise per boot, until device-to-driver assignment exists.
+- Overrides do not reach a nested `just`: a root recipe that invokes `just` passes every overridable variable it depends on as `VAR=value`, as `VTARGET_QEMU` does.
+- Options precede overrides on the command line: `just --dry-run VAR=value recipe`.
 
 ## Build environment
 
-- A Podman machine is per-account state. This project's machine belongs to
-  `agent-user`, and every `podman machine` command against it, by anyone,
-  runs as `agent-user`. A machine created from the primary user's shell is
-  invisible to the project.
-- Host tools come from Homebrew, whose prefix the primary user owns.
-  Installing one is the single exception to running project commands as
-  `agent-user`: only the primary user can, and only by hand. A runner target
-  that needs a missing tool exits nonzero naming the tool and its
-  `brew install` line; it never installs. No target's success path mutates
-  host state outside the project directory and the Podman machine.
-- The machine's file share into containers is served on the macOS side as
-  `agent-user`. A host path can be bind-mounted only if `agent-user` has
-  read and search permission on every directory from `/Users` down to it;
-  traverse-only on an ancestor makes the mount fail with permission denied.
-- The repository is mounted read-only at `/work` inside the container;
-  `/work/out` is the only writable path. A recipe that assembles files
-  stages them in a container-local temp dir and writes only to `/work/out`.
-  Module builds pass `MO=` so kbuild's artifacts land there too.
-- Kernel configuration choices live in `vdev/kernel-config/*.config`
-  fragments merged over defconfig and debug.config by `kernel-config`.
-  `.config` is never edited by hand; a change to a fragment is followed by
-  `kernel-config-vdev` and a rebuild.
-- An exercise's userspace tree, `exercises/<name>/userspace/`, builds
-  through plain Makefiles (not kbuild fragments) that take `CC`, `CXX`,
-  `OUT` and `DRIVER_INCLUDE` (the `exercises/` directory, so the UAPI
-  headers resolve as `<name>/driver/*.h`) and write only under `OUT`. It
-  produces the executable
-  `$(OUT)/<name>`, named after the exercise directory, and optionally
-  shared libraries `$(OUT)/lib<name>*.so` each carrying a `SONAME` equal to
-  its file name; the executable links a library by that name, never by
-  path. Static linking is not required. Anything else written under `OUT`
-  is intermediate. The Makefiles know no container or repository path.
-  Files at the top of `exercises/<name>/userspace/script/` are staged
-  as-is, without a build step, at `/usr/bin/` in the guest and run as
-  tests; each must start with a `#!` line naming its interpreter, and
-  `/usr/bin/luajit` is the interpreter the guest provides today.
-  Subdirectories of `script/` are script support, staged whole under
-  `/usr/bin/` with their names and never run; a Lua module there is
-  reached by `require` from any cwd through the `LUA_PATH` the guest's
-  `init` exports. The
-  library's public headers, `lib/*.h`, are staged to `/usr/include/<name>/`
-  in the guest.
-- An exercise's userspace API is defined in
-  `exercises/<name>/userspace/api_def/<api>.adef.toml` and its consumer
-  artifacts are generated from that definition by `vdev/api_gen/`
-  (ARCHITECTURE.md "API generation"). The definition is the human's
-  exercise work; the generator is framework. Generated files are build
-  products under `out/` and are never written into the source tree; the
-  one exception is the implementation stub, handed over once by a `cp`
-  the recipe prints. The ioctl header under `driver/` is hand-written
-  UAPI and is never generated. Every constant the library relays from the
-  driver is pinned in the definition's `[driver_data.const_pins]` and
-  checked when the library compiles against the generated header; a new
-  relayed constant without a pin is a review finding.
-- The active exercise is `EXERCISE` in `active_exercise.just` at the repo
-  root, imported by both justfiles. Every build, stage, test and style recipe
-  operates on that exercise only; `just EXERCISE=<name> <recipe>` overrides it
-  for one run. Several exercises in one boot would contend for the same `edu`
-  devices, so running more than one is not supported until device-to-driver
-  assignment exists.
-- C and C++ language intelligence in the editor comes from the image's
-  clangd through `just clangd-vdev`, never from a host clangd: only the
-  container has the kernel headers and the compiler the module is built
-  with. `out/compile_commands.json` is a build product of `stage`, so it
-  is as current as the last `just test` or `compile-commands-vdev`. The
-  editor runs as the primary user, so its launcher runs the recipe as
-  `agent-user` under `sudo -n -H` (`-H` because podman needs the target
-  user's `HOME`); the sudoers rule that permits that one
-  command is host state the primary user sets by hand, like a Homebrew
-  install.
-- Podman machine sizing lives in the `MACHINE_*` variables in the justfile.
-  Changing them does not resize an existing machine: remove it with
-  `podman machine rm` and run `just machine-vdev` again. No target runs
-  `podman machine set`.
+- The Podman machine belongs to `agent-user`; every `podman machine` command against it, by anyone, runs as `agent-user`.
+- Host state outside the project changes only by the primary user's hand: Homebrew installs, the sudoers rule for the clangd launcher ("Editor language server").
+- A target missing a host tool exits nonzero naming the tool and its `brew install` line; it never installs.
+- No target's success path mutates host state outside the project directory and the Podman machine.
+- A bind-mounted host path needs `agent-user` read and search permission on every directory from `/Users` down; search-only fails.
+- Container recipes write only to `/work/out`: assemble in a container-local temp dir; module builds pass `MO=` ("Storage").
+- Machine sizing is the `MACHINE_*` justfile variables; to apply a change, `podman machine rm` then `just machine-vdev`. No target runs `podman machine set`.
+- Kernel config choices live in `vdev/kernel-config/*.config` fragments ("Test kernel configuration"); never hand-edit `.config`. After a fragment change, run `kernel-config-vdev`, then rebuild.
 
-## Test machine
+## Exercise userspace ("Userspace programs")
 
-- `out/initramfs.cpio.gz` is a snapshot. After `driver-vdev`, run
-  `initramfs-vdev` before `run-vtarget`, or the guest loads the previous
-  build of the module.
-- `out/Image` comes only from `kernel-build-vdev`; `stage` and `test` do
-  not produce it. A boot recipe that finds it missing names that recipe.
-- Stdin piped into `run-vtarget` at launch is delivered before the guest
-  UART exists and is lost. A scripted console session waits for the shell
-  prompt before sending its first line, and lets the last command's output
-  drain before its timeout ends QEMU, or the final line is lost.
-- The guest reports a test run to the host through one line on the
-  console, `lkds-test: exit N`, printed by `init` after `lkds-test`
-  returns. `test-vtarget` passes only on `exit 0`; nothing else in the
-  console output is a contract.
-- A command-line variable override (`just VAR=value recipe`) does not
-  reach a `just` invoked from inside a recipe. A root recipe that invokes
-  `just` recursively passes every overridable variable it depends on
-  explicitly as `VAR=value` arguments, the way `VTARGET_QEMU` does. On the
-  command line, options precede overrides: `just --dry-run VAR=value
-  recipe`; `just` reads anything after the first override as a recipe name.
+- Makefiles under `exercises/<name>/userspace/` are plain GNU make, not kbuild; they write only under `OUT` and name no container or repository path.
+- `lib/` and `app/` include `exercises/cpp.mk` and take `CC`, `CXX`, `OUT`, `DRIVER_INCLUDE`; `api_def/` includes `exercises/gen.mk` and takes `OUT`, `API_GEN`.
+- UAPI headers are included as `<name>/driver/*.h` (`DRIVER_INCLUDE` is `exercises/`).
+- Products: executable `$(OUT)/<name>`; optionally `$(OUT)/lib<name>*.so`, each with a `SONAME` equal to its file name. Anything else under `OUT` is intermediate.
+- The executable links a library by `SONAME`, never by path; static linking is not required.
+- The library's public header is the generated one, shipped to `/usr/include/<name>/`; `lib/*.h` are the implementation's own and are not shipped.
+- Top-level files in `script/` ship as-is to `/usr/bin/` and run as tests; each starts with a `#!` line naming its interpreter (the guest provides `/usr/bin/luajit`).
+- Subdirectories of `script/` are support, shipped whole under `/usr/bin/` and never run; Lua modules there are reached by `require` from any cwd.
+
+## API generation ("API generation")
+
+- `vdev/api_gen/` is framework code.
+- After changing the generator or `cpp.mk` flags, run `userspace-clean-vdev`.
+- Generated files are build products under `out/`, never written into the source tree.
+- The ioctl header under `driver/` is hand-written UAPI; never generate it.
+- Pin every constant the library relays from the driver in `[driver_data.const_pins]`; a relayed constant without a pin is a review finding.
+
+## Style and editor
+
+- Driver sources follow kernel coding style; `format` applies it ("Style tools"), and a driver change is not done until `checkpatch-vdev` is clean.
+- Editor C/C++ intelligence comes from the image's clangd through `just clangd-vdev`, never a host clangd ("Editor language server").
+
+## Test machine ("Boot")
+
+- `out/initramfs.cpio.gz` is a snapshot: after `driver-vdev` or `userspace-vdev`, run `initramfs-vdev` before `run-vtarget`.
+- `out/Image` comes only from `kernel-build-vdev`; `stage` and `test` do not build it.
+- Stdin piped into `run-vtarget` at launch is lost. A scripted session waits for the shell prompt before its first line, and lets the last output drain before its timeout ends QEMU.
+- The only console contract is `lkds-test: exit N`; `test-vtarget` passes only on `exit 0`.

@@ -21,6 +21,14 @@ feat_a = 0
 feat_b = { value = 3, docstring = "the b feature" }
 feat_ab = { value = ["feat_a", "feat_b"], format = "hex" }
 
+[untyped_const]
+max_units = 16
+magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
+
+[string_const]
+product = "xy widget"
+vendor = { value = "acme", docstring = "who made it" }
+
 [typed_const.status]
 docstring = "call outcome"
 ok = 0
@@ -120,6 +128,17 @@ class ModelErrors(unittest.TestCase):
     def test_dtor_requires_ctor(self) -> None:
         self.assert_error(FIXTURE.replace('ctor = "open_port"\n', ""), "dtor: requires ctor")
 
+    def test_string_const_rejects_a_quote(self) -> None:
+        self.assert_error(FIXTURE.replace('product = "xy widget"', "product = 'xy \"widget\"'"), "string_const.product")
+
+    def test_new_constants_join_the_uniqueness_check(self) -> None:
+        self.assert_error(FIXTURE.replace("max_units = 16", "ok = 16"), "XY_OK already defined")
+        self.assert_error(FIXTURE.replace('product = "xy widget"', 'max_units = "x"'), "XY_MAX_UNITS already defined")
+
+    def test_class_must_be_an_identifier(self) -> None:
+        self.assert_error(FIXTURE.replace('dtor = "destroy_port"', 'dtor = "destroy_port"\nclass = "a-b"'),
+                          "class must be an identifier")
+
 
 class Naming(unittest.TestCase):
     def test_rules(self) -> None:
@@ -130,7 +149,7 @@ class Naming(unittest.TestCase):
         self.assertEqual(naming.opaque_struct("tcdl", "handle"), "tcdl_handle_opaque")
         self.assertEqual(naming.version_const("tcdl"), "TCDL_API_VERSION")
         self.assertEqual(naming.api_macro("tcdl"), "TCDL_API")
-        self.assertEqual(naming.lua_class("tcdl", "Device"), "TcdlDevice")
+        self.assertEqual(naming.lua_const_name("err_no_device"), "ERR_NO_DEVICE")
         self.assertEqual(naming.upper_camel("my_ns"), "MyNs")
 
 
@@ -139,9 +158,9 @@ class Model(unittest.TestCase):
         fn = next(f for f in load().functions if f.name == "open_port")
         self.assertEqual([p.name for p in fn.params], ["unit", "pport", "pstats", "generation"])
 
-    def test_class_defaults_to_upper_camel_of_the_name(self) -> None:
+    def test_class_defaults_to_the_name(self) -> None:
         port = next(o for o in load().opaque_refs if o.name == "port")
-        self.assertEqual(port.class_name, "Port")
+        self.assertEqual(port.class_name, "port")
 
 
 class Header(unittest.TestCase):
@@ -154,7 +173,7 @@ class Header(unittest.TestCase):
             "  XY_FEAT_B = (1u << 3), /* the b feature */",
             "  XY_FEAT_AB = XY_FEAT_A | XY_FEAT_B\n",
             "/* call outcome */\nenum xy_status {\n  XY_OK = 0,\n  XY_ERR_BUSY = 9, /* try later */\n"
-            "  XY_ERR_OTHER = 0x7fffffff,\n};",
+            "  XY_ERR_OTHER = 0x7fffffff\n};",
             "typedef enum xy_status xy_status;",
             "struct xy_port_opaque;\ntypedef struct xy_port_opaque* xy_port;",
             "\tuint32_t count; /* items seen */\n\tuint64_t bytes;\n",
@@ -164,6 +183,16 @@ class Header(unittest.TestCase):
             "/* buf: bytes to send */\nXY_API xy_status xy_send(xy_port hport, const void* buf, uint64_t len);",
         ):
             self.assertIn(expected, self.text)
+
+    def test_untyped_and_string_constants(self) -> None:
+        untyped = "enum {\n  XY_MAX_UNITS = 16,\n  XY_MAGIC = 0xbeef /* wire magic */\n};\n"
+        strings = 'static const char XY_PRODUCT[] = "xy widget";\nstatic const char XY_VENDOR[] = "acme"; /* who made it */\n'
+        self.assertIn(untyped, self.text)
+        self.assertIn(strings, self.text)
+        # untyped after the bit constants; strings after every constant enum, before the types
+        self.assertLess(self.text.index("XY_FEAT_AB ="), self.text.index(untyped))
+        self.assertLess(self.text.index("typedef enum xy_status"), self.text.index(strings))
+        self.assertLess(self.text.index(strings), self.text.index("struct xy_port_opaque;"))
 
     def test_only_permitted_preprocessor_lines(self) -> None:
         allowed = ("#pragma once", "#include", "#if", "#else", "#endif", "# define", "# include")
@@ -192,6 +221,24 @@ class Header(unittest.TestCase):
         self.assertNotIn("ABI pins", text)
         self.assertNotIn("static_assert", text)
 
+    def test_consumer_includes_only_stdint(self) -> None:
+        prelude = self.text[: self.text.rindex("#if defined(XY_IMPL)")]
+        include_lines = [line for line in prelude.splitlines() if line.startswith(("#include", "# include"))]
+        self.assertEqual(include_lines, ["#include <stdint.h>"])
+
+    def test_field_comment_alignment(self) -> None:
+        text = emit_c.header(
+            load(FIXTURE.replace('bytes = "u64"', 'bytes_total = { type = "u64", docstring = "d" }')),
+            source_name="xy_api.adef.toml",
+        )
+        start = text.index("struct xy_stats {")
+        body = text[start : text.index("\n};", start)]
+        columns = {line.index("/*") for line in body.splitlines() if "/*" in line}
+        self.assertEqual(len(columns), 1)
+
+    def test_banner(self) -> None:
+        self.assertIn("GENERATED by vdev/api_gen from xy_api.adef.toml", self.text.splitlines()[0])
+
 
 class Lua(unittest.TestCase):
     def setUp(self) -> None:
@@ -205,6 +252,7 @@ class Lua(unittest.TestCase):
         self.assertNotIn("XY_API ", cdef)
         self.assertNotIn("enum {", cdef)
         self.assertNotIn("XY_API_VERSION", cdef)
+        self.assertNotIn("XY_PRODUCT", cdef)
         self.assertNotIn("static_assert", cdef)
         self.assertNotIn("assert.h", cdef)
         self.assertFalse([line for line in cdef.splitlines() if line.startswith("#")])
@@ -212,27 +260,59 @@ class Lua(unittest.TestCase):
     def test_module_surface(self) -> None:
         for expected in (
             'local lib = ffi.load("libxy.so")',
-            "M.XY_API_VERSION = 0x01020304",
-            "M.XY_FEAT_B = 8",
-            "M.XY_FEAT_AB = 0x9\n",
-            "M.XY_OK = 0",
-            "M.XY_ERR_BUSY = 9\n",
-            "M.XY_ERR_OTHER = 0x7fffffff\n",
+            "M.API_VERSION = 0x01020304",
+            "M.FEAT_B = 8",
+            "M.FEAT_AB = 0x9\n",
+            "M.MAX_UNITS = 16\n",
+            "M.MAGIC = 0xbeef\n",
+            "M.OK = 0",
+            "M.ERR_BUSY = 9\n",
+            "M.ERR_OTHER = 0x7fffffff\n",
+            'M.PRODUCT = "xy widget"\n',
+            'M.VENDOR = "acme"\n',
+            '    [M.ERR_BUSY] = "ERR_BUSY",\n',
             "M.error_to_str = M.status_to_str",
             "    send = lib.xy_send,",
             "    spend = lib.xy_spend,",
-            "function M.XyPort.new(unit)",
+            "function M.Port.new(unit)",
             "ffi.gc(pport[0], lib.xy_destroy_port)",
-            "function M.XyPort.send(self, buf)",
+            "function M.Port.send(self, buf)",
             "lib.xy_send(self._handle, buf, #buf)",
+            "    if result ~= M.OK then\n",
         ):
             self.assertIn(expected, self.text)
-        self.assertNotIn("M.XyPort.destroy_port", self.text)
-        self.assertNotIn("M.XyPort.open_port", self.text)
-        self.assertNotIn("M.XyToken", self.text)
-        self.assertNotIn("M.XyPort.spend", self.text)
+        self.assertNotIn("M.XY_", self.text)
+        self.assertNotIn("M.Port.open_port", self.text)
+        self.assertNotIn("M.Token", self.text)
+        self.assertNotIn("M.Port.spend", self.text)
         self.assertNotIn("tonumber(lib.", self.text)
         self.assertNotIn("ffi.C.", self.text)
+
+    def test_dtor_is_an_explicit_release_method(self) -> None:
+        start = self.text.index("function M.Port.destroy_port(self)\n")
+        body = self.text[start : self.text.index("\nend\n", start)]
+        self.assertNotIn("assert(", body)
+        local = body.index("    local handle = self._handle\n")
+        guard = body.index("    if handle ~= nil then\n        ffi.gc(handle, nil)\n    end\n")
+        call = body.index("lib.xy_destroy_port(handle)")
+        drop, check = body.index("    self._handle = nil\n"), body.index("if result ~= M.OK then")
+        self.assertLess(local, guard)
+        self.assertLess(guard, call)
+        self.assertLess(call, drop)
+        self.assertLess(drop, check)
+        self.assertIn("    return true, nil", body)
+
+    def test_method_asserts_handle_is_live(self) -> None:
+        start = self.text.index("function M.Port.send(self, buf)\n")
+        body = self.text[start : self.text.index("\nend\n", start)]
+        first_statement = body.splitlines()[1].strip()
+        self.assertEqual(first_statement, 'assert(self._handle ~= nil, "Port used after destroy_port")')
+
+    def test_constant_and_class_name_clash_is_rejected(self) -> None:
+        text = FIXTURE.replace("max_units = 16", "io = 16")
+        api = load(text.replace('dtor = "destroy_port"', 'dtor = "destroy_port"\nclass = "i_o"'))  # both M.IO
+        with self.assertRaises(model.DefinitionError):
+            emit_lua.module(api, source_name="x", library="libxy.so")
 
     def test_constructor_caches_every_outref(self) -> None:
         for expected in (
@@ -247,11 +327,14 @@ class Lua(unittest.TestCase):
         self.assertNotIn("to_string", self.text)
 
     def test_explicit_class_and_no_dtor(self) -> None:
-        text = FIXTURE.replace('dtor = "destroy_port"', 'class = "Link"')
+        text = FIXTURE.replace('dtor = "destroy_port"', 'class = "data_link"')
         text = emit_lua.module(load(text), source_name="x", library="libxy.so")
-        self.assertIn("function M.XyLink.new(unit)", text)
+        self.assertIn("function M.DataLink.new(unit)", text)
         self.assertIn("self._handle = pport[0]\n", text)
-        self.assertIn("function M.XyLink.destroy_port(self)", text)
+        # without a dtor, destroy_port is an ordinary method
+        self.assertIn("function M.DataLink.destroy_port(self)", text)
+        self.assertIn('assert(self._handle ~= nil, "DataLink has no handle")', text)
+        self.assertNotIn("ffi.gc", text)
 
     def test_no_error_to_str_with_two_return_enums(self) -> None:
         text = FIXTURE.replace('[function.spend]\nreturn = "status"', '[function.spend]\nreturn = "other"')
@@ -260,10 +343,71 @@ class Lua(unittest.TestCase):
         self.assertNotIn("error_to_str", text)
         self.assertIn("function M.other_to_str(value)", text)
 
-    def test_memory_without_size_is_rejected(self) -> None:
-        api = load(FIXTURE.replace(', size = "len"', ""))
-        with self.assertRaises(model.DefinitionError):
-            emit_lua.module(api, source_name="x", library="libxy.so")
+    def test_inref_struct_is_copied_into_cdata(self) -> None:
+        text = FIXTURE + (
+            '\n[function.configure]\nreturn = "status"\nhport = "port"\n'
+            'cfg = { type = "stats", inref = true }\nlimit = { type = "u32", inref = true }\n'
+        )
+        module = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        for expected in (
+            "function M.Port.configure(self, cfg, limit)",
+            'local cfg = ffi.new("xy_stats", cfg)',
+            'local limit = ffi.new("uint32_t[1]", limit)',
+            "lib.xy_configure(self._handle, cfg, limit)",
+        ):
+            self.assertIn(expected, module)
+        header = emit_c.header(load(text), source_name="x")
+        self.assertIn("const xy_stats* cfg", header)
+        self.assertIn("const uint32_t* limit", header)
+
+    def test_struct_outref_of_method_is_a_table(self) -> None:
+        text = FIXTURE + '\n[function.stats_of]\nreturn = "status"\nhport = "port"\nout = { type = "stats", outref = true }\n'
+        module = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        self.assertIn("count = tonumber(out[0].count)", module)
+        self.assertIn("bytes = out[0].bytes", module)
+        self.assertNotIn("return out[0], nil", module)
+
+    def test_method_doc_lines(self) -> None:
+        self.assertIn("-- buf: bytes to send\nfunction M.Port.send(", self.text)
+
+    def test_nested_struct_is_copied(self) -> None:
+        text = FIXTURE.replace("[function.open_port]", '[struct.wrap]\ninner = "stats"\nn = "u32"\n\n[function.open_port]')
+        text = text.replace('pstats = { type = "stats"', 'pstats = { type = "wrap"')
+        module = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        self.assertIn(
+            "    self.pstats = {\n        inner = {\n            count = tonumber(pstats.inner.count),\n"
+            "            bytes = pstats.inner.bytes,\n        },\n        n = tonumber(pstats.n),\n    }\n",
+            module,
+        )
+
+    def test_outref_memory_method(self) -> None:
+        text = FIXTURE + (
+            '\n[function.recv]\nreturn = "status"\nhport = "port"\n'
+            'pdst = { type = "memory", outref = true, size = "n" }\nn = "u32"\n'
+        )
+        module = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        self.assertIn("function M.Port.recv(self, n)", module)
+        self.assertIn('ffi.new("uint8_t[?]", n)', module)
+        self.assertIn("return ffi.string(pdst, n), nil", module)
+        start = module.index("function M.Port.send(self, buf)")
+        body = module[start : module.index("\nend\n", start)]
+        self.assertIn("return true, nil", body)
+
+    def test_composed_of_composed(self) -> None:
+        text = FIXTURE.replace('format = "hex" }\n\n[untyped_const]', 'format = "hex" }\nfeat_all = ["feat_ab"]\n\n[untyped_const]')
+        api = load(text)
+        module = emit_lua.module(api, source_name="x", library="libxy.so")
+        header = emit_c.header(api, source_name="x")
+        self.assertIn("M.FEAT_ALL = 9", module)
+        self.assertIn("XY_FEAT_ALL = XY_FEAT_AB", header)
+
+    def test_new_returns_nil_result(self) -> None:
+        start = self.text.index("function M.Port.new(unit)\n")
+        body = self.text[start : self.text.index("\nend\n", start)]
+        self.assertIn("if result ~= M.OK then\n        return nil, result", body)
+
+    def test_banner(self) -> None:
+        self.assertIn("GENERATED by vdev/api_gen from xy_api.adef.toml", self.text.splitlines()[0])
 
 
 class Main(unittest.TestCase):
@@ -283,6 +427,45 @@ class Main(unittest.TestCase):
             self.assertTrue((generated / "include" / "tiny_compute" / "xy_api.h").is_file())
             self.assertTrue((generated / "binding" / "xy_api.lua").is_file())
 
+    def test_definition_error_exit_2_writes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.adef.toml"
+            definition.write_text("", encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            argv = ["api_gen", str(definition), "--generated", str(generated), "--exercise", "tiny_compute"]
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(stderr):
+                code = api_gen_main.main()
+            self.assertEqual(code, 2)
+            self.assertTrue(stderr.getvalue().startswith(f"api_gen: {definition}: "))
+            self.assertFalse(generated.exists())
+
+    def test_library_override_and_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.adef.toml"
+            definition.write_text(FIXTURE, encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            argv = [
+                "api_gen", str(definition), "--generated", str(generated),
+                "--exercise", "tiny_compute", "--library", "libz.so",
+            ]
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(api_gen_main.main(), 0)
+            lua_text = (generated / "binding" / "xy_api.lua").read_text(encoding="utf-8")
+            self.assertIn('ffi.load("libz.so")', lua_text)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            text = FIXTURE.replace('library = "libxy.so"\n', "")
+            definition = Path(tmp) / "xy_api.adef.toml"
+            definition.write_text(text, encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            argv = ["api_gen", str(definition), "--generated", str(generated), "--exercise", "tiny_compute"]
+            stderr = io.StringIO()
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(stderr):
+                code = api_gen_main.main()
+            self.assertEqual(code, 2)
+            self.assertIn("pass --library", stderr.getvalue())
+
 
 class Gendeps(unittest.TestCase):
     def run_gendeps(self, args: list[str]) -> tuple[int, str]:
@@ -293,8 +476,8 @@ class Gendeps(unittest.TestCase):
         return code, stdout.getvalue()
 
     def block(self, *, definition: str, stem: str) -> str:
-        header, lua = api_gen_main.output_paths(stem=stem, exercise="tiny_compute")
-        targets = f"OUT/{header} OUT/{lua}"
+        paths = api_gen_main.output_paths(stem=stem, exercise="tiny_compute")
+        targets = " ".join(f"OUT/{p}" for p in paths)
         return (
             f"GENERATED += {targets}\n"
             f"{targets} &: {definition}\n"
