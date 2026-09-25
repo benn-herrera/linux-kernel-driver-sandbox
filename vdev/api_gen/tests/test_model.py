@@ -146,7 +146,7 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, "max_units = ", "_max_units = "), "untyped_const[0]: unknown key(s) _max_units")
         self.assert_error(mutate(FIXTURE, "unit = ", "_unit = "), "function.open_port: unknown key(s) _unit")
         self.assert_error(mutate(FIXTURE, "ok = 0", "_ok = 0"), "typed_const.status: unknown key(s) _ok")
-        self.assert_error(mutate(FIXTURE, 'product = "xy', '_product = "xy'), "is a property, not a name")
+        self.assert_error(mutate(FIXTURE, 'product = "xy', '_product = "xy'), "string_const[0]: unknown key(s) _product")
         self.assert_error(mutate(FIXTURE, '_return = "status"\nunit', "unit"), "missing '_return'")
 
     def test_docstring_is_a_member_name_and_return_a_keyword(self) -> None:
@@ -154,9 +154,15 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, "bytes = ", "return = "), "keyword")
 
     def test_single_table_constants_are_rejected(self) -> None:
-        for key in ("untyped_const", "untyped_bit_const"):
+        for key in ("untyped_const", "untyped_bit_const", "string_const"):
             with self.subTest(key=key):
                 self.assert_error(mutate(FIXTURE, f"[[{key}]]", f"[{key}]"), f"[{key}] is now an array of tables")
+
+    def test_string_group_has_no_base_type(self) -> None:
+        self.assert_error(
+            mutate(FIXTURE, "[[string_const]]", '[[string_const]]\n_base_type = "u32"'),
+            "string_const[0]: unknown key(s) _base_type",
+        )
 
     def test_empty_group_is_rejected(self) -> None:
         text = mutate(FIXTURE, "[[untyped_const]]\n", '[[untyped_const]]\n_docstring = "none"\n\n[[untyped_const]]\n')
@@ -191,6 +197,31 @@ class ModelErrors(unittest.TestCase):
     def test_composed_constant_must_be_earlier(self) -> None:
         text = mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "feat_c"]')
         self.assert_error(text, "unknown constant 'feat_c'")
+
+    def test_bit_sum_refuses_overlapping_terms(self) -> None:
+        self.assert_error(
+            mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "1"]'),
+            "untyped_bit_const.feat_ab: feat_a and 1 share bits",
+        )
+
+    def test_composed_term_must_be_a_literal_or_known_entry(self) -> None:
+        self.assert_error(
+            mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "bogus"]'),
+            "untyped_bit_const.feat_ab: composes unknown constant 'bogus' (only earlier untyped_bit_const entries or literals)",
+        )
+        self.assert_error(
+            mutate(FIXTURE, "max_units = 16", 'max_units = 16\nbad = ["bogus"]'),
+            "untyped_const.bad: composes unknown constant 'bogus' (only earlier untyped_const entries or literals)",
+        )
+
+    def test_plain_group_composes_by_addition(self) -> None:
+        api = load(mutate(FIXTURE, "max_units = 16", 'max_units = 16\ntotal = ["max_units", "4"]'))
+        self.assertEqual(next(c for c in api.consts if c.key == "total").value, 20)
+
+    def test_composed_entry_dict_form_equals_naked_list(self) -> None:
+        api = load(KITCHEN_SINK)
+        naked = mutate(KITCHEN_SINK, 'feat_lit = { _value = ["feat_a", "4"] }', 'feat_lit = ["feat_a", "4"]')
+        self.assertEqual(load(naked), api)
 
     def test_memory_needs_a_ref(self) -> None:
         self.assert_error(mutate(FIXTURE, '_ref = "in", ', ""), "function.send.buf: a 'memory' parameter needs _ref")
@@ -273,16 +304,32 @@ class Shape(unittest.TestCase):
         api = load(KITCHEN_SINK)
         self.assertEqual(
             [(g.docstring, g.base_type, [c.key for c in g.entries]) for g in api.bit_const_groups],
-            [("feature flags", "i32", ["feat_a", "feat_b", "feat_ab"]), (None, "u32", ["feat_all"])],
+            [("feature flags", "i32", ["feat_a", "feat_b", "feat_ab", "feat_lit"]), (None, "u32", ["feat_all"])],
         )
         self.assertEqual(
             [(g.docstring, g.base_type, [c.key for c in g.entries]) for g in api.const_groups],
-            [("limits", "i32", ["max_units", "neg"]), ("wire values", "u32", ["magic"])],
+            [("limits", "i32", ["max_units", "extra", "max_total", "neg"]), ("wire values", "u32", ["magic"])],
         )
-        self.assertEqual([c.key for c in api.bit_consts], ["feat_a", "feat_b", "feat_ab", "feat_all"])
-        self.assertEqual([c.key for c in api.consts], ["max_units", "neg", "magic"])
+        self.assertEqual(
+            [c.key for c in api.bit_consts], ["feat_a", "feat_b", "feat_ab", "feat_lit", "feat_all"]
+        )
+        self.assertEqual([c.key for c in api.consts], ["max_units", "extra", "max_total", "neg", "magic"])
         self.assertEqual(api.bit_consts[-1].parts, ("feat_ab",))
         self.assertEqual({t.name: t.base_type for t in api.typed_consts}, {"status": "i32", "mode": "u32"})
+        self.assertEqual(
+            [(g.docstring, [c.key for c in g.entries]) for g in api.string_const_groups],
+            [(None, ["product", "vendor"])],
+        )
+        self.assertEqual([c.key for c in api.string_consts], ["product", "vendor"])
+
+    def test_composed_values_sum(self) -> None:
+        api = load(KITCHEN_SINK)
+        by_key = {c.key: c.value for c in api.bit_consts}
+        self.assertEqual(by_key["feat_ab"], 9)
+        self.assertEqual(by_key["feat_lit"], 5)
+        self.assertEqual(by_key["feat_all"], 9)
+        plain = {c.key: c.value for c in api.consts}
+        self.assertEqual(plain["max_total"], 20)
 
     def test_version_value(self) -> None:
         self.assertEqual(load().version_value(), 0x01020304)

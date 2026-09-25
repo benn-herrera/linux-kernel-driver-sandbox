@@ -34,8 +34,10 @@ def wrapper(api: Api, *, source_name: str, stem: str) -> str:
         _comment(g.docstring) + "".join(constant(naming.BASE_C_TYPES[g.base_type], c.key) for c in g.entries)
         for g in (*api.bit_const_groups, *api.const_groups)
     ]
-    if api.string_consts:
-        runs.append("".join(constant("const char*", c.key) for c in api.string_consts))
+    runs += [
+        _comment(g.docstring) + "".join(constant("const char*", c.key) for c in g.entries)
+        for g in api.string_const_groups
+    ]
     out += ["\n" + run for run in runs]
     out += [_enum(api, t.name) for t in api.typed_consts]
     if api.structs:

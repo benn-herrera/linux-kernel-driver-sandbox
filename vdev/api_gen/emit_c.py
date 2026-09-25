@@ -18,6 +18,16 @@ def int_literal(value: int, fmt: str) -> str:
     return str(value)
 
 
+def _term_text(ns: str, term: str) -> str:
+    """A composed entry's list term as the header spells it: a literal exactly as the
+    definition wrote it, a name as its constant."""
+    try:
+        int(term, 0)
+    except ValueError:
+        return naming.const_name(ns, term)
+    return term
+
+
 def c_params(api: Api, param: Param) -> list[tuple[str, str]]:
     """(C type, name) of each C parameter a definition parameter becomes: a `memory`
     parameter is the pointer and its byte count, every other parameter itself."""
@@ -99,18 +109,26 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
         blocks += [
             _comment_line(g.docstring)
             + _anonymous_enum(
-                [(naming.const_name(ns, c.key), int_literal(c.value, c.format), c.docstring) for c in g.entries]
+                [
+                    (
+                        naming.const_name(ns, c.key),
+                        " + ".join(_term_text(ns, p) for p in c.parts) if c.parts else int_literal(c.value, c.format),
+                        c.docstring,
+                    )
+                    for c in g.entries
+                ]
             )
             for g in api.const_groups
         ]
         blocks += [_typed_enum(api, t) for t in api.typed_consts]
-        if api.string_consts:
-            blocks.append(
-                "".join(
-                    f'static const char {naming.const_name(ns, c.key)}[] = "{c.value}";{_trailing(c.docstring)}\n'
-                    for c in api.string_consts
-                )
+        blocks += [
+            _comment_line(g.docstring)
+            + "".join(
+                f'static const char {naming.const_name(ns, c.key)}[] = "{c.value}";{_trailing(c.docstring)}\n'
+                for c in g.entries
             )
+            for g in api.string_const_groups
+        ]
     blocks += [_opaque(api, o) for o in api.opaque_refs]
     blocks += [_struct(api, s) for s in api.structs]
     if api.functions:
@@ -147,7 +165,7 @@ def _bit_enum(api: Api, group: BitConstGroup) -> str:
         [
             (
                 naming.const_name(ns, c.key),
-                f"(1u << {c.bit})" if c.bit is not None else " | ".join(naming.const_name(ns, p) for p in c.parts),
+                f"(1u << {c.bit})" if c.bit is not None else " | ".join(_term_text(ns, p) for p in c.parts),
                 c.docstring,
             )
             for c in group.entries

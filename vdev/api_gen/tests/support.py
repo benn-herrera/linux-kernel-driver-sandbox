@@ -1,9 +1,7 @@
 """Definitions and helpers shared by the api_gen tests."""
 
 import contextlib
-import functools
 import io
-import operator
 import re
 import tomllib
 import unittest
@@ -27,7 +25,7 @@ feat_ab = { _value = ["feat_a", "feat_b"], _format = "hex" }
 max_units = 16
 magic = { _value = 0xbeef, _format = "hex", _docstring = "wire magic" }
 
-[string_const]
+[[string_const]]
 product = "xy widget"
 vendor = { _value = "acme", _docstring = "who made it" }
 
@@ -87,6 +85,7 @@ _docstring = "feature flags"
 feat_a = 0
 feat_b = { _value = 3, _docstring = "the b feature" }
 feat_ab = { _value = ["feat_a", "feat_b"], _format = "hex" }
+feat_lit = { _value = ["feat_a", "4"] }
 
 [[untyped_bit_const]]
 _base_type = "u32"
@@ -95,6 +94,8 @@ feat_all = ["feat_ab"]
 [[untyped_const]]
 _docstring = "limits"
 max_units = 16
+extra = 4
+max_total = ["max_units", "extra"]
 neg = { _value = -5, _format = "hex" }
 
 [[untyped_const]]
@@ -102,7 +103,7 @@ _docstring = "wire values"
 _base_type = "u32"
 magic = { _value = 0xbeef, _format = "hex", _docstring = "wire magic" }
 
-[string_const]
+[[string_const]]
 product = "xy widget"
 vendor = { _value = "acme", _docstring = "who made it" }
 
@@ -236,13 +237,11 @@ def run_main(argv: list[str]) -> tuple[int, str, str]:
 
 
 def expected_constants(api: model.Api) -> dict[str, int | str]:
-    """Every constant's unprefixed name and value, computed from the model alone."""
-    bits: dict[str, int] = {}
-    for c in api.bit_consts:
-        own = 1 << c.bit if c.bit is not None else 0
-        bits[c.key] = own | functools.reduce(operator.or_, (bits[p] for p in c.parts), 0)
+    """Every constant's unprefixed name and value, read from the model's own resolved
+    values (a composed entry's sum was already computed, and a bit group's overlap-
+    checked, by the loader)."""
     out: dict[str, int | str] = {"API_VERSION": api.version_value()}
-    out |= {c.key.upper(): bits[c.key] for c in api.bit_consts}
+    out |= {c.key.upper(): c.value for c in api.bit_consts}
     out |= {c.key.upper(): c.value for c in api.consts}
     out |= {e.key.upper(): e.value for t in api.typed_consts for e in t.entries}
     out |= {c.key.upper(): c.value for c in api.string_consts}

@@ -44,6 +44,7 @@ TABLES = frozenset(
      "_driver_data"}
 )
 GROUP_PROPERTIES = frozenset({"_docstring", "_base_type"})
+STRING_GROUP_PROPERTIES = frozenset({"_docstring"})  # a string constant has no fixed-width representation
 OPAQUE_PROPERTIES = frozenset({"_docstring", "_class", "_ctor", "_dtor"})
 CONST_ATTRIBUTES = frozenset({"_value", "_docstring", "_format"})
 FIELD_ATTRIBUTES = frozenset({"_type", "_docstring"})
@@ -59,7 +60,8 @@ class DefinitionError(Exception):
 class BitConst:
     key: str
     bit: int | None  # set for a single bit
-    parts: tuple[str, ...]  # set for a mask composed of earlier entries
+    parts: tuple[str, ...]  # set for a sum: earlier same-table entries and literals, as written
+    value: int  # the resolved value: 1 << bit, or the (overlap-checked) sum of parts
     docstring: str | None
     format: str  # one of FORMATS: how a literal of the value is spelled
 
@@ -70,6 +72,7 @@ class EnumEntry:
     value: int
     docstring: str | None
     format: str  # one of FORMATS
+    parts: tuple[str, ...] = ()  # set for a plain-group sum: earlier entries and literals, as written
 
 
 @dataclass(frozen=True)
@@ -91,6 +94,12 @@ class StringConst:
     key: str
     value: str  # holds no '"', '\' or newline, so it is a valid C and Lua literal as-is
     docstring: str | None
+
+
+@dataclass(frozen=True)
+class StringConstGroup:
+    docstring: str | None
+    entries: tuple[StringConst, ...]
 
 
 @dataclass(frozen=True)
@@ -161,7 +170,7 @@ class Api:
     library: str | None
     bit_const_groups: tuple[BitConstGroup, ...]
     const_groups: tuple[ConstGroup, ...]
-    string_consts: tuple[StringConst, ...]
+    string_const_groups: tuple[StringConstGroup, ...]
     typed_consts: tuple[TypedConst, ...]
     opaque_refs: tuple[OpaqueRef, ...]
     structs: tuple[Struct, ...]
@@ -177,6 +186,11 @@ class Api:
     def consts(self) -> tuple[EnumEntry, ...]:
         """Every untyped_const entry across the groups, in document order."""
         return tuple(c for g in self.const_groups for c in g.entries)
+
+    @property
+    def string_consts(self) -> tuple[StringConst, ...]:
+        """Every string_const entry across the groups, in document order."""
+        return tuple(c for g in self.string_const_groups for c in g.entries)
 
     def kind(self, type_name: str) -> str:
         """One of "builtin", "enum", "opaque", "struct" for a validated type name."""
@@ -236,16 +250,10 @@ def from_dict(data: Mapping) -> Api:
         _quote_free(library, "_general._library")
 
     bit_const_groups = _bit_const_groups(_groups(data, "untyped_bit_const"))
-    const_groups = tuple(
-        ConstGroup(
-            doc,
-            base_type,
-            tuple(_int_entry(key, entry, f"untyped_const.{key}", base_type=base_type) for key, entry in members),
-        )
-        for doc, base_type, members in _groups(data, "untyped_const")
-    )
-    string_consts = tuple(
-        _string_const(key, entry) for key, entry in _table(data, "string_const").items()
+    const_groups = _const_groups(_groups(data, "untyped_const"))
+    string_const_groups = tuple(
+        StringConstGroup(doc, tuple(_string_const(key, entry) for key, entry in members))
+        for doc, _, members in _groups(data, "string_const", properties=STRING_GROUP_PROPERTIES)
     )
     typed_consts = tuple(
         _typed_const(name, body)
@@ -288,7 +296,7 @@ def from_dict(data: Mapping) -> Api:
         library=library,
         bit_const_groups=bit_const_groups,
         const_groups=const_groups,
-        string_consts=string_consts,
+        string_const_groups=string_const_groups,
         typed_consts=typed_consts,
         opaque_refs=tuple(opaque_refs),
         structs=tuple(structs),
@@ -326,8 +334,11 @@ def _table(data: Mapping, key: str) -> dict:
     return value
 
 
-def _groups(data: Mapping, key: str) -> list[tuple[str | None, str, list[tuple[str, object]]]]:
-    """(docstring, base type, members) for each table of the array `[[key]]`."""
+def _groups(
+    data: Mapping, key: str, *, properties: frozenset[str] = GROUP_PROPERTIES
+) -> list[tuple[str | None, str | None, list[tuple[str, object]]]]:
+    """(docstring, base type, members) for each table of the array `[[key]]`; base type is
+    None where `properties` has no `_base_type` (a string constant has no fixed width)."""
     groups = data.get(key, [])
     if isinstance(groups, dict):
         raise DefinitionError(f"[{key}] is now an array of tables: write each group as [[{key}]]")
@@ -336,10 +347,11 @@ def _groups(data: Mapping, key: str) -> list[tuple[str | None, str, list[tuple[s
     result = []
     for i, body in enumerate(groups):
         where = f"{key}[{i}]"
-        props, members = _split(body, GROUP_PROPERTIES, where)
+        props, members = _split(body, properties, where)
         if not members:
             raise DefinitionError(f"{where}: has no entries")
-        result.append((_docstring(props.get("_docstring"), f"{where}._docstring"), _base_type(props, where), members))
+        base_type = _base_type(props, where) if "_base_type" in properties else None
+        result.append((_docstring(props.get("_docstring"), f"{where}._docstring"), base_type, members))
     return result
 
 
@@ -405,47 +417,118 @@ def _unwrap_value(entry: object, where: str) -> tuple[object, str | None, str]:
     return attrs.get("_value"), _docstring(attrs.get("_docstring"), f"{where}._docstring"), fmt
 
 
+def _term_value(term: str, resolved: dict[str, int], where: str, *, kind: str) -> int:
+    """A composed entry's list term: the integer TOML itself would read (decimal or
+    0x-prefixed, an optional leading '-') if it parses as one, else the value of an
+    earlier same-table entry named `term`."""
+    try:
+        return int(term, 0)
+    except ValueError:
+        pass
+    if term not in resolved:
+        raise DefinitionError(f"{where}: composes unknown constant '{term}' (only earlier {kind} entries or literals)")
+    return resolved[term]
+
+
+def _check_disjoint_bits(where: str, terms: list[tuple[str, int]]) -> None:
+    """Refuses a bit-group sum whose terms share a bit, naming the two."""
+    accumulated = 0
+    owner: dict[int, str] = {}
+    for term, value in terms:
+        overlap = accumulated & value
+        if overlap:
+            bit = next(i for i in range(31) if overlap & (1 << i))
+            raise DefinitionError(f"{where}: {owner[bit]} and {term} share bits")
+        for i in range(31):
+            if value & (1 << i):
+                owner[i] = term
+        accumulated |= value
+
+
 def _bit_const_groups(
-    groups: list[tuple[str | None, str, list[tuple[str, object]]]]
+    groups: list[tuple[str | None, str | None, list[tuple[str, object]]]]
 ) -> tuple[BitConstGroup, ...]:
-    """A composed mask may name an entry of any earlier group, so the groups are read as one sequence."""
-    defined: set[str] = set()
+    """A composed value may name an entry of any earlier group or be a literal, so the
+    groups are read as one sequence; disjoint terms sum to the same value as their OR."""
+    resolved: dict[str, int] = {}
     result = []
     for group_doc, base_type, members in groups:
+        assert base_type is not None  # untyped_bit_const groups always carry _base_type
         consts = []
         for key, entry in members:
             where = f"untyped_bit_const.{key}"
             _identifier(key, where)
-            entry, doc, fmt = _unwrap_value(entry, where)
-            if _is_int(entry):
-                if not 0 <= entry <= 30:
+            raw, doc, fmt = _unwrap_value(entry, where)
+            if _is_int(raw):
+                if not 0 <= raw <= 30:
                     raise DefinitionError(f"{where}: bit index must be 0..30 (enumerators must fit int)")
-                consts.append(BitConst(key, entry, (), doc, fmt))
-            elif isinstance(entry, list) and entry and all(isinstance(p, str) for p in entry):
-                for part in entry:
-                    if part not in defined:
-                        raise DefinitionError(
-                            f"{where}: composes unknown constant '{part}' "
-                            "(only earlier untyped_bit_const entries)"
-                        )
-                consts.append(BitConst(key, None, tuple(entry), doc, fmt))
+                value, parts = 1 << raw, ()
+                consts.append(BitConst(key, raw, parts, value, doc, fmt))
+            elif isinstance(raw, list) and raw and all(isinstance(p, str) for p in raw):
+                parts = tuple(raw)
+                terms = [(p, _term_value(p, resolved, where, kind="untyped_bit_const")) for p in parts]
+                _check_disjoint_bits(where, terms)
+                value = sum(v for _, v in terms)
+                consts.append(BitConst(key, None, parts, value, doc, fmt))
             else:
                 raise DefinitionError(
-                    f"{where}: must be a bit index or a non-empty list of constant names"
+                    f"{where}: must be a bit index or a non-empty list of constant names or literals"
                 )
-            defined.add(key)
+            resolved[key] = value
         result.append(BitConstGroup(group_doc, base_type, tuple(consts)))
     return tuple(result)
+
+
+def _check_int32(value: int, base_type: str, where: str) -> None:
+    if not _INT32_MIN <= value <= _INT32_MAX:
+        raise DefinitionError(f"{where}: value must be an integer in the int32 range")
+    if base_type == "u32" and value < 0:
+        raise DefinitionError(f"{where}: value must not be negative: its _base_type is u32")
 
 
 def _int_entry(key: str, entry: object, where: str, *, base_type: str) -> EnumEntry:
     _identifier(key, where)
     value, doc, fmt = _unwrap_value(entry, where)
-    if not _is_int(value) or not _INT32_MIN <= value <= _INT32_MAX:
+    if not _is_int(value):
         raise DefinitionError(f"{where}: value must be an integer in the int32 range")
-    if base_type == "u32" and value < 0:
-        raise DefinitionError(f"{where}: value must not be negative: its _base_type is u32")
+    _check_int32(value, base_type, where)
     return EnumEntry(key, value, doc, fmt)
+
+
+def _plain_const_entry(
+    key: str, entry: object, where: str, *, base_type: str, resolved: dict[str, int]
+) -> EnumEntry:
+    """An untyped_const entry: a plain integer, or a list summing earlier untyped_const
+    entries and literals, the same composition untyped_bit_const uses (without the
+    disjointness rule, since a plain group is arithmetic, not bit flags)."""
+    _identifier(key, where)
+    raw, doc, fmt = _unwrap_value(entry, where)
+    if _is_int(raw):
+        value, parts = raw, ()
+    elif isinstance(raw, list) and raw and all(isinstance(p, str) for p in raw):
+        parts = tuple(raw)
+        value = sum(_term_value(p, resolved, where, kind="untyped_const") for p in parts)
+    else:
+        raise DefinitionError(f"{where}: must be an integer or a non-empty list of constant names or literals")
+    _check_int32(value, base_type, where)
+    resolved[key] = value
+    return EnumEntry(key, value, doc, fmt, parts)
+
+
+def _const_groups(
+    groups: list[tuple[str | None, str | None, list[tuple[str, object]]]]
+) -> tuple[ConstGroup, ...]:
+    """A composed value may name an entry of any earlier group, so the groups are read as one sequence."""
+    resolved: dict[str, int] = {}
+    result = []
+    for doc, base_type, members in groups:
+        assert base_type is not None  # untyped_const groups always carry _base_type
+        entries = tuple(
+            _plain_const_entry(key, entry, f"untyped_const.{key}", base_type=base_type, resolved=resolved)
+            for key, entry in members
+        )
+        result.append(ConstGroup(doc, base_type, entries))
+    return tuple(result)
 
 
 def _string_const(key: str, entry: object) -> StringConst:

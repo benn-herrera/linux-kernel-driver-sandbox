@@ -48,25 +48,15 @@ def _version_literal(api: Api) -> str:
     return f"0x{api.version_value():08x}"
 
 
-def _bit_const_values(api: Api) -> dict[str, int]:
-    """Each untyped_bit_const's value, in document order so a composed mask can OR
-    the values of the earlier entries it names."""
-    values: dict[str, int] = {}
-    for c in api.bit_consts:
-        values[c.key] = 1 << c.bit if c.bit is not None else 0
-        for part in c.parts:
-            values[c.key] |= values[part]
-    return values
-
-
 def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]]]:
     """Every constant's (name, Lua literal), in the same order the C header defines them,
-    as (docstring, literals) sections: one per constant group, the rest undocumented."""
+    as (docstring, literals) sections: one per constant group, the rest undocumented.
+    Every value is the model's already-resolved one; a composed entry's sum was computed,
+    and a bit group's overlap-checked, once in model.py."""
     name = naming.lua_const_name
-    bit_values = _bit_const_values(api)
     sections = [(None, [(name(naming.VERSION_KEY), _version_literal(api))])]
     sections += [
-        (g.docstring, [(name(c.key), emit_c.int_literal(bit_values[c.key], c.format)) for c in g.entries])
+        (g.docstring, [(name(c.key), emit_c.int_literal(c.value, c.format)) for c in g.entries])
         for g in api.bit_const_groups
     ]
     sections += [
@@ -74,8 +64,11 @@ def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]
         for g in api.const_groups
     ]
     rest = [(name(e.key), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
-    rest += [(name(c.key), f'"{c.value}"') for c in api.string_consts]
     sections.append((None, rest))
+    sections += [
+        (g.docstring, [(name(c.key), f'"{c.value}"') for c in g.entries])
+        for g in api.string_const_groups
+    ]
     return sections
 
 
