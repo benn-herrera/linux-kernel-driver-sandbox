@@ -99,6 +99,37 @@ class Classes(unittest.TestCase):
                 found = set(re.findall(rf"^function M\.{cls}\.(\w+)\(", self.text, re.M))
                 self.assertEqual(found, {"new"} | {f.name for f in self.methods(opaque)})
 
+    def test_argument_asserts_appear_in_order_with_expected_type_text(self) -> None:
+        def expected_type(p: model.Param) -> str:
+            """SPEC.md's accepted-type wording for `p`'s own argument, derived
+            independently of the emitter."""
+            if p.type == "memory":
+                return "a number" if p.ref == "out" else "a string"
+            kind = self.api.kind(p.type)
+            if kind == "struct":
+                return "a table or cdata"
+            if kind == "opaque":
+                return "cdata"
+            return "a number or cdata" if p.type == "u64" else "a number"
+
+        def visible_args(params: tuple[model.Param, ...]) -> list[model.Param]:
+            return [p for p in params if p.type == "memory" or p.ref != "out"]
+
+        for cls, opaque in self.classes():
+            ctor = next(f for f in self.api.functions if f.name == opaque.ctor)
+            funcs = {"new": ctor.params}
+            funcs |= {f.name: f.params[1:] for f in self.methods(opaque)}
+            for name, params in funcs.items():
+                with self.subTest(cls=cls, function=name):
+                    body = re.search(rf"^function M\.{cls}\.{name}\(.*?\nend\n", self.text, re.M | re.S).group()
+                    found = re.findall(r'assert\([^,]+, "([^"]+ must be [^"]+)"\)', body)
+                    expected = [
+                        f"{cls}.{name}: {p.name}{'_count' if p.type == 'memory' and p.ref == 'out' else ''}"
+                        f" must be {expected_type(p)}"
+                        for p in visible_args(params)
+                    ]
+                    self.assertEqual(found, expected)
+
     def test_c_calls_pass_parameters_in_definition_order(self) -> None:
         # The GC finalizer's call to the dtor is excluded: its argument is whatever the
         # finalizer receives, and check_xy.lua shows the finalizer releasing the handle.

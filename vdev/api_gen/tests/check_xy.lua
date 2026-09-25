@@ -4,6 +4,12 @@
 local M = dofile(arg[1])
 local ffi = require("ffi")
 
+-- Calls `fn(...)`, expecting it to fail as an assertion naming `needle`.
+local function type_error(needle, fn, ...)
+    local ok, err = pcall(fn, ...)
+    return ok == false and err ~= nil and err:find(needle, 1, true) ~= nil
+end
+
 local function checks()
     for k, v in pairs(M) do
         if type(v) == "number" then
@@ -36,8 +42,15 @@ local function checks()
     assert(p:send("abcd") == true)
     assert(select(2, p:send("abc")) == M.ERR_BUSY)
     assert(p:recv(5) == "rr\0rr")
-    assert(p:configure({count = 5, bytes = 0}, 6, M.SLOW, nil) == true)
-    assert(p:configure(ffi.new("xy_stats", {count = 5}), 6, M.SLOW, nil) == true)
+    local no_token = ffi.new("xy_token")
+    assert(p:configure({count = 5, bytes = 0}, 6, M.SLOW, no_token) == true)
+    assert(p:configure(ffi.new("xy_stats", {count = 5}), 6, M.SLOW, no_token) == true)
+
+    assert(type_error("must be a string", p.send, p, 42))
+    assert(type_error("must be a number", p.recv, p, "5"))
+    assert(type_error("must be a number", M.Port.new, "1"))
+    assert(type_error("must be a table or cdata", p.configure, p, "x", 6, M.SLOW, no_token))
+    assert(type_error("must be a string", p.send, p, nil))
 
     assert(select("#", p:stats_of()) == 4)
     local out, count, link, rest = p:stats_of()

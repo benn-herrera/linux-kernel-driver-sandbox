@@ -134,8 +134,47 @@ def _use_guard(opaque: OpaqueRef) -> str:
     return f'assert(self._handle ~= nil, "{class_display} {reason}")'
 
 
+def _type_check(api: Api, param: Param) -> tuple[tuple[str, ...], str]:
+    """The Lua `type()` results a parameter's own argument may legitimately hold, and
+    the words describing them for an assert message, keyed by the parameter's kind: a
+    memory buffer (a string, or for an `out` count a number), a struct or a by-value
+    opaque (a second handle), u64 (cdata is legitimate beside a number), or a plain
+    number (u32 and every enum)."""
+    if param.type == "memory":
+        if param.ref == "out":
+            return ("number",), "a number"
+        return ("string",), "a string"
+    kind = api.kind(param.type)
+    if kind == "struct":
+        return ("table", "cdata"), "a table or cdata"
+    if kind == "opaque":
+        return ("cdata",), "cdata"
+    if param.type == "u64":
+        return ("number", "cdata"), "a number or cdata"
+    return ("number",), "a number"
+
+
+def _visible_args(params: tuple[Param, ...]) -> list[Param]:
+    """Parameters that appear as a Lua argument: every one but a non-memory `out`,
+    which is allocated internally and returned instead."""
+    return [p for p in params if p.type == "memory" or p.ref != "out"]
+
+
+def _arg_asserts(api: Api, params: tuple[Param, ...], *, context: str) -> list[str]:
+    """One `assert` per Lua-visible argument, in signature order, checking its type
+    before any FFI allocation or call."""
+    lines = []
+    for p in _visible_args(params):
+        name = _memory_arg(p) if p.type == "memory" else p.name
+        types, expected = _type_check(api, p)
+        condition = " or ".join(f'type({name}) == "{t}"' for t in types)
+        lines.append(f'    assert({condition}, "{context}: {name} must be {expected}")\n')
+    return lines
+
+
 def _class(api: Api, opaque: OpaqueRef) -> str:
-    cls = f"M.{naming.upper_camel(opaque.class_name)}"
+    class_display = naming.upper_camel(opaque.class_name)
+    cls = f"M.{class_display}"
     ctor = next(f for f in api.functions if f.name == opaque.ctor)
     methods = [
         f
@@ -146,9 +185,9 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
     if opaque.dtor is not None:
         method_names.append(opaque.dtor)
     out = [f"\n{cls} = {{}}\n{cls}.__index = {cls}\n"]
-    out.append(_constructor(api, ctor, opaque, cls=cls, method_names=method_names))
+    out.append(_constructor(api, ctor, opaque, cls=cls, class_display=class_display, method_names=method_names))
     guard = _use_guard(opaque)
-    out += [_method(api, fn, cls=cls, guard=guard) for fn in methods]
+    out += [_method(api, fn, cls=cls, class_display=class_display, guard=guard) for fn in methods]
     if opaque.dtor is not None:
         out.append(_release(api, next(f for f in api.functions if f.name == opaque.dtor), cls=cls))
     return "".join(out)
@@ -221,7 +260,9 @@ def _result_check(api: Api, fn: Function) -> str:
     return f"    if result ~= M.{_ok_const(api, fn)} then\n        return nil, result\n    end\n"
 
 
-def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_names: list[str]) -> str:
+def _constructor(
+    api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, class_display: str, method_names: list[str]
+) -> str:
     """`new`, which caches every out parameter other than the handle on the object under
     its parameter name."""
     handle = next(p for p in fn.params if p.type == opaque.name and p.ref == "out")
@@ -231,7 +272,12 @@ def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_
     if duplicate is not None:
         raise DefinitionError(f"Lua module: {cls}.{duplicate} would be defined more than once")
     args, call, allocs, _ = _marshal(api, fn.params)
-    out = [_doc_lines(fn), f"function {cls}.new({', '.join(args)})\n", *allocs]
+    out = [
+        _doc_lines(fn),
+        f"function {cls}.new({', '.join(args)})\n",
+        *_arg_asserts(api, fn.params, context=f"{class_display}.new"),
+        *allocs,
+    ]
     out.append(_call(api, fn, call))
     handle_value = f"{handle.name}[0]"
     if opaque.dtor is not None:
@@ -243,12 +289,13 @@ def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_
     return "\n" + "".join(out)
 
 
-def _method(api: Api, fn: Function, *, cls: str, guard: str) -> str:
+def _method(api: Api, fn: Function, *, cls: str, class_display: str, guard: str) -> str:
     args, call, allocs, rets = _marshal(api, fn.params[1:])
     rets = rets or ["true"]
     return (
         f"\n{_doc_lines(fn)}function {cls}.{fn.name}({', '.join(['self', *args])})\n"
         f"    {guard}\n"
+        + "".join(_arg_asserts(api, fn.params[1:], context=f"{class_display}.{fn.name}"))
         + "".join(allocs)
         + _call(api, fn, ["self._handle", *call])
         + f"    return {', '.join(rets)}, nil\nend\n"
