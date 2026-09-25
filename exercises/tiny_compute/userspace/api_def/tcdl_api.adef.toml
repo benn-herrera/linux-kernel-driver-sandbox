@@ -1,90 +1,96 @@
-[general]
+[_general]
 # the file stem (in this case tcdl_api) names every output.
 #
 # for languages with namespace features, used as namespace
 # for those without used as prefix for functions, variables, etc. capitalized or upper-cased as  needed for idioms.
-namespace = "tcdl"
+_namespace = "tcdl"
 # version encoded however works for the target language
-version = [0, 5, 0, 0]
+_version = [0, 5, 0, 0]
 # shared library the script bindings load
-library = "libtiny_compute.so"
+_library = "libtiny_compute.so"
 
-# unused in this API def, but there is an [untyped_const] which the same
+# unused in this API def, but there is an [[untyped_const]] which the same
 # except that the values are literals instead of shifts.
-[untyped_bit_const]
+[[untyped_bit_const]]
+_docstring = "device capability flags"
+_base_type = "i32"
 cap_compute = 0
-cap_dma_read = 1
-cap_dma_write = 2
+cap_dma_read = { _value = 1, _docstring = "can be present separately from write" }
+cap_dma_write = { _value = 2, _docstring = "can be present separately from read" }
 # string lists are composed consts
 cap_dma_read_write = ["cap_dma_read", "cap_dma_write"]
 cap_all = ["cap_compute", "cap_dma_read_write"]
 
 [typed_const]
   [typed_const.result]
-    docstring = "all api functions return a result."
+    _docstring = "all api functions return a result."
+    _base_type = "i32"
     ok = 0
-    err_no_device = { value = 1, docstring = "requested device absent." }
+    err_no_device = { _value = 1, _docstring = "requested device absent." }
     err_invalid_handle = 2
     err_invalid_address = 3
     err_timedout = 4
     err_device_dead = 5
-    err_comm_failed = { value = 6, docstring = "low-level device communication failed." }
-    err_unsupported = { value = 7, docstring = "capability missing for attempted operation." }
-    err_unknown = { value = 0x7fffffff, format = "hex" }
+    err_comm_failed = { _value = 6, _docstring = "low-level device communication failed." }
+    err_unsupported = { _value = 7, _docstring = "capability missing for attempted operation." }
+    err_unknown = { _value = 0x7fffffff, _format = "hex" }
 
 [opaque_ref]
-  # ctor/dtor/class: bindings with object semantics wrap the handle in a class built on these
-  handle = { ctor = "create_device", dtor = "destroy_device", class = "device", docstring = "all device operation api calls require a handle." }
+  # class/ctor/dtor: bindings with object semantics wrap the handle in a class built on these
+  [opaque_ref.handle]
+    _class = "device"
+    _ctor = "create_device"
+    _dtor = "destroy_device"
+    _docstring = "all device operation api calls require a handle."
 
 [struct]
   [struct.info]
-    docstring = "standard pattern is to cache the info with your device handle."
-    api_version = { type = "u32", docstring = "built api version." }
-    device_idx = { type = "u32", docstring = "index passed to create_device" }
+    _docstring = "standard pattern is to cache the info with your device handle."
+    api_version = { _type = "u32", _docstring = "built api version." }
+    device_idx = { _type = "u32", _docstring = "index passed to create_device" }
     dma_buf_size = "u64" # bare type here is deliberate.
-    dma_alignment = { type = "u32", docstring = "dma memory i/o must be aligned to and multiples of this value" }
-    device_caps = { type = "u32", docstring = "bitwise or of cap bit flags" }
+    dma_alignment = { _type = "u32", _docstring = "dma memory i/o must be aligned to and multiples of this value" }
+    device_caps = { _type = "u32", _docstring = "bitwise or of cap bit flags" }
 
 [function]
   [function.create_device]
-    docstring = "multiple devices and multiple access to single device supported. info out param is optional."
-    return = "result"
+    _docstring = "multiple devices and multiple access to single device supported. info out param is optional."
+    _return = "result"
     index = "u32"
-    phtcd = { type = "handle", outref = true }
-    info = { type = "info", outref = true, nullsafe = true }
+    # _ref value options are in, out, inout
+    phtcd = { _type = "handle", _ref = "out" }
+    info = { _type = "info", _ref = "out", _optional = true }
   [function.destroy_device]
-    docstring = "double destroy will return an error but won't crash."
-    return = "result"
+    _docstring = "double destroy will _return an error but won't crash."
+    _return = "result"
     htcd = "handle"
   [function.check_alive]
-    docstring = "result is ok or device_dead"
-    return = "result"
+    _docstring = "result is ok or device_dead"
+    _return = "result"
     htcd = "handle"
   [function.compute_factorial]
-    return = "result"
+    _return = "result"
     htcd = "handle"
     arg  = "u32"
-    fact = { type = "u32", outref = true }
+    fact = { _type = "u32", _ref = "out" }
   [function.dma_to_device]
-    docstring = "be sure to check offset and size against dma_alignment"
-    return = "result"
+    _docstring = "be sure to check offset and size against dma_alignment"
+    _return = "result"
     htcd = "handle"
-    psrc = { type = "memory", inref = true, size = "count" }
     dst_device_offset = "u64"
-    count = "u64"
+    psrc = { _type = "memory", _ref = "in", _count = "u64" }
   [function.dma_from_device]
-    docstring = "be sure to check offset and size against dma_alignment"
-    return = "result"
+    _docstring = "be sure to check offset and size against dma_alignment"
+    _return = "result"
     htcd = "handle"
-    pdst = { type = "memory", outref = true, size = "count" }
     src_device_offset = "u64"
-    count = "u64"
+    pdst = { _type = "memory", _ref = "out", _count = "u64" }
 
-[driver_data]
+[_driver_data]
   # ioctl API header provided by driver (consumed by gen targets, but never parsed by this system)
-  header = "tiny_compute/driver/tcd_ioctl.h"
+  _header = "tiny_compute/driver/tcd_ioctl.h"
   # values defined in this file that *must* agree with the driver ABI header
-  [driver_data.const_pins]
+  [_driver_data.const_pins]
     cap_compute = "TCD_DEVICE_CAP_COMPUTE"
     cap_dma_read = "TCD_DEVICE_CAP_DMA_READ"
     cap_dma_write = "TCD_DEVICE_CAP_DMA_WRITE"

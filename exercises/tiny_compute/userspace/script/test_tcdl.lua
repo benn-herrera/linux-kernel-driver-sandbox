@@ -72,10 +72,10 @@ if dev.info.dma_buf_size ~= 0 and dev.info.dma_alignment ~= 0 then
     local text
     assert(dma_size % dev.info.dma_alignment == 0)
     assert(dma_size <= dev.info.dma_buf_size)
-    success, err = dev:dma_to_device(test_dma_str, 0)
+    success, err = dev:dma_to_device(0x0, test_dma_str)
     result = result and (err == nil)
     printf("dma_to_device(%s)(%d bytes): %s err: %s %s", test_dma_str, dma_size, success, err, tcdl.error_to_str(err))
-    text, err = dev:dma_from_device(0, dma_size)
+    text, err = dev:dma_from_device(0x0, dma_size)
     result = result and (err == nil)
     printf("dma_from_device(0, %d): %s err: %s %s", dma_size, text, err, tcdl.error_to_str(err))
     result = result and (text == test_dma_str)

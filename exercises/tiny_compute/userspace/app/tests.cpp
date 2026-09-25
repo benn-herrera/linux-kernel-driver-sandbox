@@ -50,7 +50,7 @@ bool test_compute(tcdl::Device& d) {
   uint32_t fact = 0;
   const auto tr = d.compute_factorial(kFactArg, fact);
   if (tr != tcdl::Result::Ok) {
-    fprintf(stderr, "compute_factorial returned error %u\n", unsigned(tr));
+    fprintf(stderr, "compute_factorial returned error %s(%u)\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
 
@@ -86,16 +86,16 @@ bool test_dma_round_trip(tcdl::Device& d) {
     pattern[e - i] = uint16_t(i);
   }
 
-  auto tr = d.dma_to_device(pattern.data(), 0x0ul, pattern.size() * sizeof(pattern[0]));
+  auto tr = d.dma_to_device(0x0ul, pattern.data(), pattern.size() * sizeof(pattern[0]));
   if (tr != tcdl::Result::Ok) {
-    fprintf(stderr, "dma to device failed.\n");
+    fprintf(stderr, "DMA to device failed with error %s(%u).\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
 
   auto readback = vector<uint16_t>(pattern.size(), 0xffff);
-  tr = d.dma_from_device(readback.data(), 0x0ul, readback.size() * sizeof(readback[0]));
+  tr = d.dma_from_device(0x0ul, readback.data(), readback.size() * sizeof(readback[0]));
   if (tr != tcdl::Result::Ok) {
-    fprintf(stderr, "dma from device failed.\n");
+    fprintf(stderr, "DMA from device failed with error %s(%d).\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
 
@@ -104,7 +104,18 @@ bool test_dma_round_trip(tcdl::Device& d) {
     result = false;
   }
 
+  printf("DMA round trip succeeded.\n");
+
   return result;
+}
+
+auto create_dev(uint32_t idx) {
+  tcdl::Result res{};
+  auto d = tcdl::Device::create(idx, &res);
+  if (!d) {
+    fprintf(stderr, "failed creating device: %s(%u).\n", tcdl::to_string(res), unsigned(res));
+  }
+  return d;
 }
 
 } // namespace
@@ -118,12 +129,7 @@ bool test_functionality(void) {
   // continuous session
   printf("*** single continuous session check ***\n");
   {
-    tcdl::Result cres{};
-  	auto d = tcdl::Device::create(0, &cres);
-    if (!d) {
-      fprintf(stderr, "failed creating device: %s(%u).\n", tcdl::to_string(cres), unsigned(cres));
-      return false;
-    }
+  	auto d = create_dev(0);
     result = test_info(d) && result;
   	result = test_compute(d) && result;
   	result = test_dma_round_trip(d) && result;
@@ -132,20 +138,20 @@ bool test_functionality(void) {
   // individual accesses
   printf("*** separate transactions session check ***\n");
   {
-    auto d = tcdl::Device::create(0);
+   	auto d = create_dev(0);
     result = test_info(d) && result;
   }
   {
-    auto d = tcdl::Device::create(0);
+   	auto d = create_dev(0);
    	result = test_compute(d) && result;
   }
   {
-    auto d = tcdl::Device::create(0);
+   	auto d = create_dev(0);
    	result = test_dma_round_trip(d) && result;
   }
   // verify 2nd device works at all.
   {
-    auto d = tcdl::Device::create(1);
+   	auto d = create_dev(1);
    	result = test_info(d) && result;
   }
 
