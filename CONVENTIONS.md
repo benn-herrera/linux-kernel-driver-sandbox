@@ -49,6 +49,7 @@ Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 ## API generation ("API generation")
 
 - `vdev/api_gen/` is framework code.
+- One `.adef.toml` per exercise: one definition, one `gendeps` call, one set of outputs. `gen.mk` refuses `api_def/` with more or none.
 - After changing the generator or `cpp.mk` flags, run `userspace-clean-vdev`.
 - Generated files are build products under `out/`, never written into the source tree.
 - The ioctl header under `driver/` is hand-written UAPI; never generate it.
@@ -58,6 +59,7 @@ Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 
 - Driver sources follow kernel coding style; `format` applies it ("Style tools"), and a driver change is not done until `checkpatch-vdev` is clean.
 - Editor C/C++ intelligence comes from the image's clangd through `just clangd-vdev`, never a host clangd ("Editor language server").
+- Markdown prose is one paragraph or list item per line, never hard-wrapped: a rendered page looks the same, and an edit or a diff touches one line.
 
 ## Test machine ("Boot")
 

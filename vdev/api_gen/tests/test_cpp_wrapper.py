@@ -198,13 +198,11 @@ class Outputs(unittest.TestCase):
         return generated
 
     def test_gendeps_lists_the_wrapper(self) -> None:
-        argv = ["api_gen", "gendeps", "--generated", "OUT", "--exercise", "ex", "xy_api.adef.toml"]
+        argv = ["api_gen", "gendeps", "xy_api.adef.toml"]
         stdout = io.StringIO()
         with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
             self.assertEqual(api_gen_main.main(), 0)
-        generated, rule = stdout.getvalue().splitlines()[1:3]
-        self.assertIn(" OUT/include/ex/xy_api.hpp ", generated)
-        self.assertIn(" OUT/include/ex/xy_api.hpp ", rule)
+        self.assertIn("  $(GEN)/include/$(BASE)/xy_api.hpp \\\n", stdout.getvalue())
 
     def test_generation_writes_the_wrapper_beside_the_header(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

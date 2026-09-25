@@ -1,18 +1,10 @@
 # SPEC – tiny_compute
 
-A driver for a small PCI compute device: probe and teardown, a
-character-device ABI, interrupt-driven compute, DMA, concurrent callers,
-and multiple device instances. The device is QEMU's `edu`, whose
-register map follows. The Roadmap section of ARCHITECTURE.md beside this
-file lists what remains.
+A driver for a small PCI compute device: probe and teardown, a character-device ABI, interrupt-driven compute, DMA, concurrent callers, and multiple device instances. The device is QEMU's `edu`, whose register map follows. The Roadmap section of ARCHITECTURE.md beside this file lists what remains.
 
 ## Device: QEMU `edu`
 
-The driver binds to QEMU's `edu` device, which `just run-vtarget` attaches
-by default (`VTARGET_DEVICES`). This section transcribes `docs/specs/edu.rst`
-from the QEMU v11.1.1 tree (the installed version), copyright 2014-2015 Jiri
-Slaby, GPLv2 or later. The register map below is the whole hardware
-interface.
+The driver binds to QEMU's `edu` device, which `just run-vtarget` attaches by default (`VTARGET_DEVICES`). This section transcribes `docs/specs/edu.rst` from the QEMU v11.1.1 tree (the installed version), copyright 2014-2015 Jiri Slaby, GPLv2 or later. The register map below is the whole hardware interface.
 
 ### PCI identification
 
@@ -43,24 +35,13 @@ Accesses below `0x80` must be 4 bytes wide. At `0x80` and above, 4 or 8 bytes.
 
 ### Interrupt controller
 
-A write to the interrupt raise register generates an interrupt. The written
-value appears in the interrupt status register and stays there, with the
-interrupt asserted, until the same value is written to the interrupt
-acknowledge register. This holds for MSI as well as INTx: even a driver that
-disables INTx and uses only MSI must write the acknowledge register at the end
-of its handler.
+A write to the interrupt raise register generates an interrupt. The written value appears in the interrupt status register and stays there, with the interrupt asserted, until the same value is written to the interrupt acknowledge register. This holds for MSI as well as INTx: even a driver that disables INTx and uses only MSI must write the acknowledge register at the end of its handler.
 
 ### DMA controller
 
-The device owns one 4096-byte buffer at device address `0x40000`. A transfer
-is programmed by writing source, destination and count, then the command
-register with the start bit; the start bit reads as set until the transfer
-completes. The source or destination on the device side is an address inside
-that buffer; on the host side it is a DMA address the driver obtained by
-mapping a buffer, within the device's DMA mask.
+The device owns one 4096-byte buffer at device address `0x40000`. A transfer is programmed by writing source, destination and count, then the command register with the start bit; the start bit reads as set until the transfer completes. The source or destination on the device side is an address inside that buffer; on the host side it is a DMA address the driver obtained by mapping a buffer, within the device's DMA mask.
 
-Example from the spec, moving 100 bytes to the device and back, with `addr`
-a DMA address of a host buffer:
+Example from the spec, moving 100 bytes to the device and back, with `addr` a DMA address of a host buffer:
 
 ```
 addr     -> DMA source address
@@ -78,16 +59,6 @@ while (DMA command register & 1)
     ;
 ```
 
-Setting bit `0x04` in the command register instead of polling raises
-interrupt `0x100` on completion, which the handler acknowledges like any
-other.
+Setting bit `0x04` in the command register instead of polling raises interrupt `0x100` on completion, which the handler acknowledges like any other.
 
-**ARM64 virt trap.** The default 28-bit mask covers 256 MiB, and on QEMU's
-`virt` machine guest RAM starts at 1 GiB, so no host buffer is reachable
-with the default. The device model clamps a DMA address to its mask rather
-than rejecting it, so the transfer silently goes elsewhere. Before the DMA
-exercise, the device needs `edu,dma_mask=0xffffffff` in `VTARGET_DEVICES`
-and the driver a matching `dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32))`.
-The clamping behaviour is from memory of the device model, not verified
-against the installed QEMU's source; the RAM base is a property of the
-`virt` machine and is not in doubt.
+**ARM64 virt trap.** The default 28-bit mask covers 256 MiB, and on QEMU's `virt` machine guest RAM starts at 1 GiB, so no host buffer is reachable with the default. The device model clamps a DMA address to its mask rather than rejecting it, so the transfer silently goes elsewhere. Before the DMA exercise, the device needs `edu,dma_mask=0xffffffff` in `VTARGET_DEVICES` and the driver a matching `dma_set_mask_and_coherent(dev, DMA_BIT_MASK(32))`. The clamping behaviour is from memory of the device model, not verified against the installed QEMU's source; the RAM base is a property of the `virt` machine and is not in doubt.

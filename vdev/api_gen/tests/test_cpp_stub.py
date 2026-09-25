@@ -76,13 +76,11 @@ class Stub(unittest.TestCase):
 
 class Outputs(unittest.TestCase):
     def test_gendeps_lists_the_stub(self) -> None:
-        argv = ["api_gen", "gendeps", "--generated", "OUT", "--exercise", "ex", "xy_api.adef.toml"]
+        argv = ["api_gen", "gendeps", "xy_api.adef.toml"]
         stdout = io.StringIO()
         with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
             self.assertEqual(api_gen_main.main(), 0)
-        generated, rule = stdout.getvalue().splitlines()[1:3]
-        self.assertTrue(generated.startswith("GENERATED += ") and generated.endswith(" OUT/stub/xy_api.cpp"))
-        self.assertIn(" OUT/stub/xy_api.cpp &: xy_api.adef.toml", rule)
+        self.assertIn("  $(GEN)/stub/xy_api.cpp\n", stdout.getvalue())
 
     @unittest.skipUnless(shutil.which("clang++"), "clang++ not on PATH")
     def test_stub_compiles_against_its_header_with_pins_active(self) -> None:

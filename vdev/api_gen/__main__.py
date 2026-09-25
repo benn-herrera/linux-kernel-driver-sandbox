@@ -1,7 +1,7 @@
 """CLI: validate an .adef.toml definition and write its C header, C++
 wrapper, LuaJIT base module and C++ implementation stub into the generated directory, or
-(gendeps mode) print a Makefile fragment naming those outputs for a set of
-definitions.
+(gendeps mode) print a Makefile fragment naming those outputs for one
+definition.
 """
 
 import argparse
@@ -90,42 +90,33 @@ def _generate_main(argv: list[str]) -> int:
 def _gendeps_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="api_gen gendeps",
-        description="print a Makefile fragment naming the outputs for each definition",
+        description="print a Makefile fragment naming the outputs for a definition",
     )
-    parser.add_argument("--generated", required=True, help="output directory, printed as given")
-    parser.add_argument("--exercise", required=True, help="exercise directory name, printed as given")
-    parser.add_argument("definitions", nargs="*", help="paths to *.adef.toml files")
+    parser.add_argument("definitions", nargs="*", help="path to a *.adef.toml file")
     args = parser.parse_args(argv)
 
-    blocks = []
-    for definition in args.definitions:
-        name = Path(definition).name
-        if not name.endswith(SUFFIX):
-            print(f"api_gen: {definition}: file name must end in {SUFFIX}", file=sys.stderr)
-            return 2
-        stem = name[: -len(SUFFIX)]
-        blocks.append(
-            _gendeps_block(
-                definition=definition, directory=args.generated, exercise=args.exercise, stem=stem
-            )
-        )
+    if len(args.definitions) != 1:
+        print("api_gen: gendeps takes exactly one definition", file=sys.stderr)
+        return 2
 
-    sys.stdout.write(GENDEPS_BANNER + "\n" + "".join(blocks))
+    definition = args.definitions[0]
+    name = Path(definition).name
+    if not name.endswith(SUFFIX):
+        print(f"api_gen: {definition}: file name must end in {SUFFIX}", file=sys.stderr)
+        return 2
+    stem = name[: -len(SUFFIX)]
+
+    sys.stdout.write(GENDEPS_BANNER + "\n" + _gendeps_block(definition=definition, stem=stem))
     return 0
 
 
-def _gendeps_block(*, definition: str, directory: str, exercise: str, stem: str) -> str:
-    targets = " ".join(f"{directory}/{path}" for path in output_paths(stem=stem, exercise=exercise))
+def _gendeps_block(*, definition: str, stem: str) -> str:
+    targets = " \\\n".join(f"  $(GEN)/{path}" for path in output_paths(stem=stem, exercise="$(BASE)"))
     recipe = (
-        f"PYTHONPATH=$(API_GEN) PYTHONDONTWRITEBYTECODE=1 "
-        f"python3 -m api_gen $< --generated {directory} --exercise {exercise}"
+        "PYTHONPATH=$(API_GEN) PYTHONDONTWRITEBYTECODE=1 "
+        "python3 -m api_gen $< --generated $(GEN) --exercise $(BASE)"
     )
-    return (
-        f"GENERATED += {targets}\n"
-        f"{targets} &: {definition}\n"
-        f"\t{recipe}\n"
-        f"\n"
-    )
+    return f"GENERATED := \\\n{targets}\n\n$(GENERATED) &: {definition}\n\t{recipe}\n"
 
 
 if __name__ == "__main__":

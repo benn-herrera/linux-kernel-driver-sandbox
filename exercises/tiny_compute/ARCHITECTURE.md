@@ -16,12 +16,10 @@
 
 ### Userspace – exercises/tiny_compute/userspace
 
-The API definition, then three consumers of the driver, each one layer up
-from the last:
+The API definition, then three consumers of the driver, each one layer up from the last:
 
 - api_def/: the userspace API defined once, generated into every consumer
-  - tcdl_api.adef.toml: types, constants, functions and docstrings of the
-    `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`
+  - tcdl_api.adef.toml: types, constants, functions and docstrings of the `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`
 - lib/: `libtiny_compute.so`, the C wrapper library over the ioctl ABI
   - tcdl_api.h: public C API, the foreign-function surface (namespace `tcdl_`/`TCDL_`)
   - tcdl_api.cpp: implementation; the opaque handle wraps the device fd
@@ -33,8 +31,7 @@ from the last:
   - tests.cpp: functionality tests through the library API
   - Makefile: `LINK_TYPE := EXE` plus `../../../cpp.mk`
 - script/: LuaJIT scripts, staged as-is and run as tests
-  - test_tcdl.lua: FFI binding to `libtiny_compute.so` built by parsing the
-    staged `tcdl_api.h` at run time, and the tests written against it
+  - test_tcdl.lua: FFI binding to `libtiny_compute.so` built by parsing the staged `tcdl_api.h` at run time, and the tests written against it
 
 ## Project Design
 
@@ -47,11 +44,8 @@ from the last:
   - mutex guards around interrupt-gated operations
   - completion per interrupt-gated operation
 - multi-device capable
-  - every piece of state lives in the per-device `tcd_dev`; the only shared
-    object is the driver-wide IDA that numbers instances
-  - each instance registers `/dev/tiny_compute<N>` with an IDA-allocated
-    `N` and a `devm_kasprintf` name; `remove` releases the number after the
-    node is gone so it can be reused
+  - every piece of state lives in the per-device `tcd_dev`; the only shared object is the driver-wide IDA that numbers instances
+  - each instance registers `/dev/tiny_compute<N>` with an IDA-allocated `N` and a `devm_kasprintf` name; `remove` releases the number after the node is gone so it can be reused
   - the test machine boots two `edu` instances so both paths run every time
 - resilient, with full error trapping for all potential failure modes
 - reasonable userspace ABI
@@ -63,77 +57,39 @@ from the last:
     - info - simple sync RO op
     - liveness - simple sync RW op
     - compute - interrupt-gated sync RW op 
-    - bidirectional DMA - interrupt-gated sync RW ops through the device's
-      4 KiB buffer; the driver stages through coherent buffers and userspace
-      never sees a bus address
+    - bidirectional DMA - interrupt-gated sync RW ops through the device's 4 KiB buffer; the driver stages through coherent buffers and userspace never sees a bus address
 
 ### Library
 
-- designed as a foreign-function surface first: opaque handle, fixed-width
-  arguments, enum results with explicit values, no callbacks, no varargs
-- the header is the binding. It is written so that a preprocessor-free
-  reader (LuaJIT `ffi.cdef`) accepts it once `#` lines and the visibility
-  macro are stripped: constants are enums, not macros; every struct is
-  declared with a typedef; comments are `/* */`
-- the handle is the device fd xored with a constant cast to a pointer, so the library carries no
-  state of its own and a handle costs nothing to copy
-- error mapping is one direction: errno from the ioctl to a `tcdl_result`;
-  the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to
-  `TCDL_ERR_UNSUPPORTED`
-- the definition is the source of truth. `api_def/tcdl_api.adef.toml`
-  states the API once, and the header (with the ABI pins in its
-  implementation-only block) and the Lua base module are generated from
-  it by the framework's `vdev/api_gen/` (root
-  ARCHITECTURE.md "API generation"). Until the emitters exist the
-  hand-written `lib/tcdl_api.h` is the header and the definition mirrors
-  it; the switch-over replaces the header with the generated one and
-  `tcdl_api.cpp` follows it
-- device capabilities live in the driver's per-device state and gate the
-  operations; `tcdl_info.device_caps` reports them, and the composed masks
-  (`TCDL_CAP_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side,
-  since convenience is not the ABI header's job
+- designed as a foreign-function surface first: opaque handle, fixed-width arguments, enum results with explicit values, no callbacks, no varargs
+- the header is the binding. It is written so that a preprocessor-free reader (LuaJIT `ffi.cdef`) accepts it once `#` lines and the visibility macro are stripped: constants are enums, not macros; every struct is declared with a typedef; comments are `/* */`
+- the handle is the device fd xored with a constant cast to a pointer, so the library carries no state of its own and a handle costs nothing to copy
+- error mapping is one direction: errno from the ioctl to a `tcdl_result`; the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to `TCDL_ERR_UNSUPPORTED`
+- the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once, and the header (with the ABI pins in its implementation-only block) and the Lua base module are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). Until the emitters exist the hand-written `lib/tcdl_api.h` is the header and the definition mirrors it; the switch-over replaces the header with the generated one and `tcdl_api.cpp` follows it
+- device capabilities live in the driver's per-device state and gate the operations; `tcdl_info.device_caps` reports them, and the composed masks (`TCDL_CAP_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side, since convenience is not the ABI header's job
 
 ### Driver Test
 
-- the C++ program and the Lua script both go through the library; nothing
-  in userspace issues an ioctl except `tcdl_api.cpp`
+- the C++ program and the Lua script both go through the library; nothing in userspace issues an ioctl except `tcdl_api.cpp`
 - exercise every ABI function
-  - acquisition, info, liveness, compute, DMA round trip (pattern out and
-    back through the device buffer, compared byte for byte)
+  - acquisition, info, liveness, compute, DMA round trip (pattern out and back through the device buffer, compared byte for byte)
 - two homes, split by what each language can do
-  - the C++ program: the smoke test through the library, and the one
-    threaded case, two threads on one fd (**NYI**)
-  - the Lua script: **IN PROGRESS** everything multi-device and multi-process, since Lua
-    has no threads and coroutines are cooperative; N processes across all
-    devices, the isolation check, and the adversarial phase
+  - the C++ program: the smoke test through the library, and the one threaded case, two threads on one fd (**NYI**)
+  - the Lua script: **IN PROGRESS** everything multi-device and multi-process, since Lua has no threads and coroutines are cooperative; N processes across all devices, the isolation check, and the adversarial phase
 - isolate testing into two phases
   - 'walk right down Main Street' (what's being done now)
   - **NYI**: 'be mean and nasty' aka adversarial usage patterns (coming soon to a horror show near you)
 
 ## Roadmap
 
-The stack from driver to script, one host coordinating several accelerators
-through a library and a binding, is in place. Remaining, in order:
+The stack from driver to script, one host coordinating several accelerators through a library and a binding, is in place. Remaining, in order:
 
-- The API generator's emitters: C header, ABI pin unit, Lua base module,
-  then the header-only C++ wrapper (RAII device ownership with a cached
-  `tcdl_info`) that the test program shrinks onto. The wiring is in place
-  with a stub that writes empty placeholders; the switch-over retires the
-  hand-written header and the `gsub` normalizer in the Lua binding.
-- The torture suite in Lua against the binding, multi-process, across the
-  two instances the test machine boots: the isolation check (a DMA pattern
-  written to one device must not be readable from the other, and
-  operations on the two must not serialise on each other), then
-  `open`/`release` under contention and the per-device locks. The driver
-  side is done. The C++ program shrinks to a smoke test through the
-  library plus its one threaded case.
+- The API generator's emitters: C header, ABI pin unit, Lua base module, then the header-only C++ wrapper (RAII device ownership with a cached `tcdl_info`) that the test program shrinks onto. The wiring is in place with a stub that writes empty placeholders; the switch-over retires the hand-written header and the `gsub` normalizer in the Lua binding.
+- The torture suite in Lua against the binding, multi-process, across the two instances the test machine boots: the isolation check (a DMA pattern written to one device must not be readable from the other, and operations on the two must not serialise on each other), then `open`/`release` under contention and the per-device locks. The driver side is done. The C++ program shrinks to a smoke test through the library plus its one threaded case.
 - proper dmsg logging
 - A Rust port of the driver.
 - Driver-side device mocking to present additional design considerations to ABI and surfaces to userspace.
   - will build on existing IRQ and DMA mechanisms
   - computation will be mocked and placed into device buffer, user will have to fetch them via normal mechanism
   - will blend device handling logic in the driver with more sophisticated 'compute device' ABI offered to userland 
-- Removal while open: `misc_deregister` does not close open files, so an
-  ioctl can run after `remove` (reachable via sysfs `unbind`). A removed
-  flag in `tcd_dev`, set in `remove` under the operation locks and checked
-  by every ioctl (`-ENODEV`), plus the adversarial test that exercises it.
+- Removal while open: `misc_deregister` does not close open files, so an ioctl can run after `remove` (reachable via sysfs `unbind`). A removed flag in `tcd_dev`, set in `remove` under the operation locks and checked by every ioctl (`-ENODEV`), plus the adversarial test that exercises it.
