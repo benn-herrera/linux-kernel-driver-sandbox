@@ -83,7 +83,7 @@ tcdl_result tcdl_compute_factorial(tcdl_handle htcd, uint32_t arg, uint32_t* pfa
   const auto fd = h2fd(htcd);
  	auto result = ioctl(fd, TCD_IOC_COMPUTE, IOC_PARAM(arg));
   if (result) {
-    return errno == ETIMEDOUT ? TCDL_ERR_TIMEDOUT : TCDL_ERR_COMM_FAILED;
+    return errno == ETIMEDOUT ? TCDL_ERR_TIMEDOUT : (errno == EOPNOTSUPP ? TCDL_ERR_UNSUPPORTED : TCDL_ERR_COMM_FAILED);
   }
   *pfact = arg;
   return TCDL_OK;
@@ -100,7 +100,7 @@ tcdl_result tcdl_dma_to_device(tcdl_handle htcd, const void* psrc, uint64_t dst_
 
   tcd_dma_req to_dev_req{ .ubuf = uint64_t(psrc), .dev_offset = dst_device_offset, .count = count };
   if (ioctl(fd, TCD_IOC_DMA_TO_DEVICE, IOC_PARAM(to_dev_req))) {
-    return errno == ETIMEDOUT ? TCDL_ERR_TIMEDOUT : TCDL_ERR_COMM_FAILED;
+    return errno == ETIMEDOUT ? TCDL_ERR_TIMEDOUT : (errno == EOPNOTSUPP ? TCDL_ERR_UNSUPPORTED : TCDL_ERR_COMM_FAILED);
   }
 
   return TCDL_OK;
@@ -117,7 +117,7 @@ tcdl_result tcdl_dma_from_device(tcdl_handle htcd, void* pdst, uint64_t src_devi
 
   tcd_dma_req from_dev_req{ .ubuf = uint64_t(pdst), .dev_offset = src_device_offset, .count = count };
   if (ioctl(fd, TCD_IOC_DMA_FROM_DEVICE, IOC_PARAM(from_dev_req))) {
-    return errno == ETIMEDOUT ? TCDL_ERR_TIMEDOUT : TCDL_ERR_COMM_FAILED;
+    return errno == ETIMEDOUT ? TCDL_ERR_TIMEDOUT : (errno == EOPNOTSUPP ? TCDL_ERR_UNSUPPORTED : TCDL_ERR_COMM_FAILED);
   }
 
   return TCDL_OK;

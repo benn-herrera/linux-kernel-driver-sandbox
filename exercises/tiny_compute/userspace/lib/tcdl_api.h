@@ -38,6 +38,7 @@ enum tcdl_result {
   TCDL_ERR_TIMEDOUT = 4,
   TCDL_ERR_DEVICE_DEAD = 5,
   TCDL_ERR_COMM_FAILED = 6,
+  TCDL_ERR_UNSUPPORTED = 7,
   TCDL_ERR_UNKNOWN = 0x7fffffff,
 };
 typedef enum tcdl_result tcdl_result;

@@ -7,16 +7,16 @@
 #include <linux/cleanup.h>
 #include <linux/uaccess.h>
 
+// pin the ABI-relayed values
+static_assert(TCD_DEVICE_CAP_COMPUTE == TCD_CAP_COMPUTE);
+static_assert(TCD_DEVICE_CAP_DMA_READ == TCD_CAP_DMA_READ);
+static_assert(TCD_DEVICE_CAP_DMA_WRITE == TCD_CAP_DMA_WRITE);
+static_assert(__builtin_strcmp(TCD_DEVICE_NAME_BASE, KBUILD_MODNAME) == 0);
+
 struct tcd_file {
 	struct tcd_dev *tcd;
 	// other stuff will go here eventually
 };
-
-static_assert(TCD_DEVICE_CAP_COMPUTE == TCD_CAP_COMPUTE);
-static_assert(TCD_DEVICE_CAP_DMA_READ == TCD_CAP_DMA_READ);
-static_assert(TCD_DEVICE_CAP_DMA_WRITE == TCD_CAP_DMA_WRITE);
-// would be nice to be able to pin this like the device caps.
-//static_assert(TCD_DEVICE_NAME_BASE == KBUILD_MODNAME);
 
 int tcd_open(struct inode *inode, struct file *file)
 {
@@ -88,7 +88,7 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		int result = 0;
 
 		if (!(mfile->tcd->cap_flags & TCD_CAP_COMPUTE))
-		  return -EFAULT;
+			return -EOPNOTSUPP;
 
 		if (get_user(val, (u32 __user *)arg))
 			return -EFAULT;
@@ -126,7 +126,7 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		struct tcd_dma_req dma_req = {};
 
 		if (!(mfile->tcd->cap_flags & TCD_CAP_DMA_READ))
-		  return -EFAULT;
+			return -EOPNOTSUPP;
 
 		if (copy_from_user(&dma_req, (const void *)arg,
 				   sizeof(dma_req)))
@@ -139,7 +139,7 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		struct tcd_dma_req dma_req = {};
 
 		if (!(mfile->tcd->cap_flags & TCD_CAP_DMA_WRITE))
-		  return -EFAULT;
+			return -EOPNOTSUPP;
 
 		if (copy_from_user(&dma_req, (const void *)arg,
 				   sizeof(dma_req)))

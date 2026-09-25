@@ -21,14 +21,15 @@ local lib_tcd = ffi.load("libtiny_compute.so")
 
 -- the module
 local M = {
-  TCDL_OK = tonumber(ffi.C.TCDL_OK),
-  TCDL_ERR_NO_DEVICE = tonumber(ffi.C.TCDL_ERR_NO_DEVICE),
-  TCDL_ERR_INVALID_HANDLE = tonumber(ffi.C.TCDL_ERR_INVALID_HANDLE),
-  TCDL_ERR_INVALID_ADDRESS = tonumber(ffi.C.TCDL_ERR_INVALID_ADDRESS),
-  TCDL_ERR_TIMEDOUT = tonumber(ffi.C.TCDL_ERR_TIMEDOUT),
-  TCDL_ERR_DEVICE_DEAD = tonumber(ffi.C.TCDL_ERR_DEVICE_DEAD),
-  TCDL_ERR_COMM_FAILED = tonumber(ffi.C.TCDL_ERR_COMM_FAILED),
-  TCDL_ERR_UNKNOWN = tonumber(ffi.C.TCDL_ERR_UNKNOWN),
+    TCDL_OK = tonumber(ffi.C.TCDL_OK),
+    TCDL_ERR_NO_DEVICE = tonumber(ffi.C.TCDL_ERR_NO_DEVICE),
+    TCDL_ERR_INVALID_HANDLE = tonumber(ffi.C.TCDL_ERR_INVALID_HANDLE),
+    TCDL_ERR_INVALID_ADDRESS = tonumber(ffi.C.TCDL_ERR_INVALID_ADDRESS),
+    TCDL_ERR_TIMEDOUT = tonumber(ffi.C.TCDL_ERR_TIMEDOUT),
+    TCDL_ERR_DEVICE_DEAD = tonumber(ffi.C.TCDL_ERR_DEVICE_DEAD),
+    TCDL_ERR_COMM_FAILED = tonumber(ffi.C.TCDL_ERR_COMM_FAILED),
+    TCDL_ERR_UNSUPPORTED = tonumber(ffi.C.TCDL_ERR_UNSUPPORTED),
+    TCDL_ERR_UNKNOWN = tonumber(ffi.C.TCDL_ERR_UNKNOWN),
 }
 local error_strings = {}
 for k, v in pairs(M) do
@@ -40,11 +41,11 @@ M.TcdlDevice = {}
 M.TcdlDevice.__index = M.TcdlDevice
 
 local caps = {
-  TCDL_CAP_COMPUTE = tonumber(ffi.C.TCDL_CAP_COMPUTE),
-  TCDL_CAP_DMA_READ = tonumber(ffi.C.TCDL_CAP_DMA_READ),
-  TCDL_CAP_DMA_WRITE = tonumber(ffi.C.TCDL_CAP_DMA_WRITE),
-  TCDL_CAP_DMA_READ_WRITE = tonumber(ffi.C.TCDL_CAP_DMA_READ_WRITE),
-  TCDL_CAP_ALL = tonumber(ffi.C.TCDL_CAP_ALL),
+    TCDL_CAP_COMPUTE = tonumber(ffi.C.TCDL_CAP_COMPUTE),
+    TCDL_CAP_DMA_READ = tonumber(ffi.C.TCDL_CAP_DMA_READ),
+    TCDL_CAP_DMA_WRITE = tonumber(ffi.C.TCDL_CAP_DMA_WRITE),
+    TCDL_CAP_DMA_READ_WRITE = tonumber(ffi.C.TCDL_CAP_DMA_READ_WRITE),
+    TCDL_CAP_ALL = tonumber(ffi.C.TCDL_CAP_ALL),
 }
 local cap_strings = {}
 for k, v in pairs(caps) do

@@ -62,9 +62,9 @@ enum tcd_dma_direction_bit {
 };
 
 enum tcd_cap_bit {
-  TCD_CAP_COMPUTE = (1u << 0),
-  TCD_CAP_DMA_READ = (1u << 1),
-  TCD_CAP_DMA_WRITE = (1u << 2)
+	TCD_CAP_COMPUTE = (1u << 0),
+	TCD_CAP_DMA_READ = (1u << 1),
+	TCD_CAP_DMA_WRITE = (1u << 2)
 };
 
 //
