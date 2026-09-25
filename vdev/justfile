@@ -100,8 +100,33 @@ driver-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
+[doc("generate the active exercise's userspace API artifacts from /work/exercises/EXERCISE/userspace/api_def/*.adef.toml with vdev/api_gen into OUT/userspace-build/EXERCISE/generated/ (the C header, the ABI pin translation unit, the Lua base module), then compile the pin unit with -fsyntax-only against the driver's ioctl header; no-op with a note when the exercise has no definitions")]
+generate: exercise-check
+  #!/usr/bin/env bash
+  set -euo pipefail
+  shopt -s nullglob
+  dir="{{EXERCISE_DIR}}/userspace/api_def"
+  defs=("${dir}"/*.adef.toml)
+  if (( ${#defs[@]} == 0 )); then
+    printf 'no api definitions under %s; nothing to generate\n' "${dir}" >&2
+    exit 0
+  fi
+  gen="{{OUT}}/userspace-build/{{EXERCISE}}/generated"
+  mkdir -p "${gen}"
+  stems=()
+  for def in "${defs[@]}"; do
+    stem="$(basename "${def}" .adef.toml)"
+    stems+=("${stem}")
+    PYTHONPATH=/work/vdev PYTHONDONTWRITEBYTECODE=1 python3 -m api_gen "${def}" --generated "${gen}"
+    pins="${gen}/${stem}_pins.cpp"
+    if [[ -f "${pins}" ]]; then
+      clang++ --std=c++20 -fsyntax-only -I/work/exercises -I"${gen}" -I"{{EXERCISE_DIR}}/userspace/lib" "${pins}"
+    fi
+  done
+  printf 'generated %s: %s\n' "${gen}" "${stems[*]}" >&2
+
 [doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header is copied to OUT/userspace/include/EXERCISE/ (created)")]
-userspace: exercise-check
+userspace: exercise-check generate
   #!/usr/bin/env bash
   set -euo pipefail
   shopt -s nullglob
@@ -126,6 +151,10 @@ userspace: exercise-check
   for header in "${dir}/lib"/*.h; do
     cp "${header}" "${include}/"
   done
+  # api_gen staging, disabled until the generator emits real files:
+  # mkdir -p "{{OUT}}/userspace/binding"
+  # cp "${build}/generated"/*.lua "{{OUT}}/userspace/binding/"
+  # cp "${build}/generated"/*.h "${include}/"
   printf 'built %s/userspace: %s\n' "{{OUT}}" "{{EXERCISE}}" >&2
 
 [doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/ for every exercise, not only the active one")]
@@ -274,7 +303,7 @@ initramfs:
   stage_closure
   pack
 
-[doc("build the modules and userspace programs and pack the initramfs, in one container, and the compile_commands.json")]
+[doc("build the modules and userspace programs and pack the initramfs, in one container, and the compile_commands.json (userspace runs generate first)")]
 stage: driver userspace compile-commands initramfs
 
 [doc("copy the kernel tree's .clang-format to OUT/clang-format for the host-side format recipe")]

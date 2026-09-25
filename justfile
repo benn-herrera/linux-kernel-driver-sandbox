@@ -140,6 +140,10 @@ driver-vdev: machine-vdev
 driver-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} driver-clean
 
+[doc("generate the active exercise's userspace API artifacts on the dev box (see vdev/justfile generate)")]
+generate-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} generate
+
 [doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so, script/* and lib/*.h land in out/userspace/")]
 userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace

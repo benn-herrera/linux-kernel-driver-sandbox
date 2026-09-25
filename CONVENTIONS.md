@@ -73,6 +73,18 @@
   `init` exports. The
   library's public headers, `lib/*.h`, are staged to `/usr/include/<name>/`
   in the guest.
+- An exercise's userspace API is defined in
+  `exercises/<name>/userspace/api_def/<api>.adef.toml` and its consumer
+  artifacts are generated from that definition by `vdev/api_gen/`
+  (ARCHITECTURE.md "API generation"). The definition is the human's
+  exercise work; the generator is framework. Generated files are build
+  products under `out/` and are never written into the source tree; the
+  one exception is the implementation stub, handed over once by a `cp`
+  the recipe prints. The ioctl header under `driver/` is hand-written
+  UAPI and is never generated. Every constant the library relays from the
+  driver is pinned in the definition's `[driver_data.const_pins]` and
+  checked by compiling the generated pin unit; a new relayed constant
+  without a pin is a review finding.
 - The active exercise is `EXERCISE` in `active_exercise.just` at the repo
   root, imported by both justfiles. Every build, stage, test and style recipe
   operates on that exercise only; `just EXERCISE=<name> <recipe>` overrides it

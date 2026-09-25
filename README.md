@@ -34,8 +34,10 @@ which describe it in full.
 
 **The exercises** are the driver work itself. Each exercise is one tree,
 `exercises/<name>/`: its own SPEC.md and ARCHITECTURE.md, `driver/` (the
-kernel module and its kbuild Makefile) and `userspace/` (the test program
-and library, each with a plain Makefile, plus optional `script/` files).
+kernel module and its kbuild Makefile) and `userspace/` (`api_def/`, the
+API definition the consumer artifacts are generated from; `lib/` and
+`app/`, the library and test program, each with a plain Makefile; and
+optional `script/` files).
 The recipes build and test one exercise at a time, the one named in
 `active_exercise.just`.
 

@@ -30,8 +30,9 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `MOUNTS` set. It never starts the machine.
 - Root workflow recipes (`kernel-fetch-vdev`, `kernel-config-vdev`,
   `kernel-build-vdev`, `kernel-clean-vdev`, `driver-vdev`,
-  `driver-clean-vdev`, `userspace-vdev`, `userspace-clean-vdev`,
-  `compile-commands-vdev`, `initramfs-vdev`, `checkpatch-vdev`,
+  `driver-clean-vdev`, `generate-vdev`, `userspace-vdev`,
+  `userspace-clean-vdev`, `compile-commands-vdev`, `initramfs-vdev`,
+  `checkpatch-vdev`,
   `export-clang-format-vdev`) depend
   on `machine-vdev` and compose one line: `just run-vdev just --justfile
   /work/vdev/justfile EXERCISE=<active> <name>`, where `<name>` is the root
@@ -301,6 +302,63 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `/lib/`, and the headers at `/usr/include/<name>/`.
   `exercises/tiny_compute/userspace/` is the first test exercise.
 
+## API generation
+
+- An exercise's userspace API is defined once, in
+  `exercises/<name>/userspace/api_def/<api>.adef.toml`, and the artifacts
+  every consumer needs are generated from it: the C header, a translation
+  unit of `static_assert` lines pinning library constants to the driver's
+  UAPI header, and a LuaJIT base module carrying the `ffi.cdef` text as a
+  long string. A header-only C++ wrapper is a planned fourth emitter. The
+  kernel ioctl header is never generated; its shape is too far from a
+  userspace API's, and it is hand-written UAPI under `driver/`.
+- The definition format, as the loader reads it: `[general]` with
+  `name`, `namespace` and `version`; `[untyped_bit_const]` with bit
+  indices, a string list composing named constants; `[typed_const.<enum>]`
+  with explicit values; `[opaque_ref.<name>]`; `[struct.<name>]` with
+  typed fields; `[function.<name>]` with `return` and parameters in
+  document order, each a bare type string or an inline table with `type`
+  and attributes (`outref`, `inref`, `nullsafe`, `docstring`);
+  `[driver_data]` naming the driver header and, under `const_pins`, the
+  driver symbol each constant must equal. `docstring` and `return` are
+  reserved keys at every level. Type names are one namespace across
+  enums, opaque refs and structs. Parameter order is document order,
+  which `tomllib` preserves because Python dicts do; the loader states
+  that reliance.
+- The generator is `vdev/api_gen/`, a standard-library-only Python
+  package run in the container as `python3 -m api_gen <definition>
+  --generated <dir>` with `PYTHONPATH=/work/vdev` and
+  `PYTHONDONTWRITEBYTECODE=1`, since `/work/vdev` is read-only and Python
+  would otherwise try to write `__pycache__` beside it. Outputs are build
+  products at `out/userspace-build/<name>/generated/`, named by the
+  definition's stem: `<stem>.h`, `<stem>_pins.cpp`, `<stem>.lua`. The
+  current package is a stub that validates the definition parses and
+  writes empty placeholders at those paths; the emitters are the next
+  step. A per-API hooks module beside the definition is reserved for
+  peculiarities, its interface to be cut from the first real case.
+- `just generate-vdev` runs the `generate` recipe in `vdev/justfile`:
+  every `api_def/*.adef.toml` through the generator, then `clang++
+  -fsyntax-only` on each `<stem>_pins.cpp` with the exercises directory,
+  the generated directory and `lib/` on the include path. That compile is
+  the ABI pin check: a constant that disagrees with `tcd_ioctl.h` fails
+  here, before the library or the app builds. An exercise with no
+  definitions passes with a note. `userspace` depends on `generate`, so
+  `stage` and `just test` run it.
+- `exercises/cpp.mk` adds `-I$(OUT)/generated`, derived from the `OUT`
+  it already receives, so `lib/` and `app/` sources include the generated
+  header by name. A quoted include searches the including file's
+  directory first, so while the hand-written `lib/tcdl_api.h` exists it
+  wins over the empty placeholder.
+- Staging of generated artifacts into the initramfs, the Lua base module
+  to `out/userspace/binding/` and the generated header to
+  `out/userspace/include/<name>/`, is written into the `userspace` recipe
+  as commented-out lines and stays disabled until the generator emits
+  real files; enabling it while the placeholders are empty would stage an
+  empty header over the real one.
+- The implementation of the API (`lib/tcdl_api.cpp`) stays hand-written;
+  the generator will emit a stub of it once, to be copied into `lib/` when
+  absent, and never touch it after.
+
 ## Style tools
 
 - `just checkpatch-vdev` runs the kernel tree's
@@ -374,10 +432,12 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 
 - The repository root is mounted read-only at `/work`: `justfile`,
   `active_exercise.just` (the `EXERCISE` selection both justfiles import),
-  `vdev/justfile`, `vdev/initramfs/` and `vdev/kernel-config/`,
+  `vdev/justfile`, `vdev/initramfs/`, `vdev/kernel-config/` and
+  `vdev/api_gen/` (the API generator, see "API generation"),
   `Containerfile`, the project documents, `exercises/cpp.mk` and one
   `exercises/<name>/` tree per exercise (`SPEC.md`, `ARCHITECTURE.md`,
-  `driver/`, `userspace/`; `tiny_compute` is the first), `out/`
+  `driver/`, `userspace/` with `api_def/`, `lib/`, `app/` and `script/`;
+  `tiny_compute` is the first), `out/`
   (gitignored build output, mounted read-write at `/work/out`),
   `.zed/settings.json` (gitignored, Zed's clangd launcher, see "Editor
   language server"), `.claude-temp/` (gitignored scratch).

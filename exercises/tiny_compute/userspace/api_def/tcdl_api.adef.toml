@@ -1,0 +1,85 @@
+[general]
+# stem for all output files
+name = "tcdl_api"
+# for languages with namespace features, used as namespace
+# for those without used as prefix for functions, variables, etc. capitalized or upper-cased as  needed for idioms.
+namespace = "tcdl"
+# version encoded however works for the target language
+version = [0, 5, 0, 0]
+
+[untyped_bit_const]
+cap_compute = 0
+cap_dma_read = 1
+cap_dma_write = 2
+# string lists are composed consts
+cap_read_write = ["cap_dma_read", "cap_dma_write"]
+cap_all = ["cap_compute", "cap_read_write"]
+
+[typed_const]
+  [typed_const.result]
+    docstring = "all api functions return a result."
+    ok = 0
+    err_no_device = { value = 1, docstring = "requested device absent." }
+    err_invalid_handle = 2
+    err_invalid_address = 3
+    err_timedout = 4
+    err_device_dead = 5
+    err_comm_failed = { value = 6, docstring = "low-level device communication failed." }
+    err_unsupported = { value = 7, docstring = "capability missing for attempted operation." }
+    err_unknown = 0x7fffffff
+
+[opaque_ref]
+  handle = { docstring = "all device operation api calls require a handle." }
+
+[struct]
+  [struct.info]
+    docstring = "standard pattern is to cache the info with your device handle."
+    version = { type = "u32", docstring = "built api version." }
+    device_idx = { type = "u32", docstring = "index passed to create_device" }
+    dma_buf_size = "u64" # bare type here is deliberate.
+    dma_alignment = { type = "u32", docstring = "dma memory i/o must be aligned to and multiples of this value" }
+    device_caps = { type = "u32", docstring = "orred cap bit flags" }
+
+[function]
+  [function.create_device]
+    docstring = "multiple devices and multiple access to single device supported. info out param is optional."
+    return = "result"
+    index = "u32"
+    phtcd = { type = "handle", outref = true }
+    pinfo = { type = "info", outref = true, nullsafe = true }
+  [function.destroy_device]
+    docstring = "double destroy will return an error but won't crash."
+    return = "result"
+    htcd = "handle"
+  [function.check_alive]
+    docstring = "result is ok or device_dead"
+    return = "result"
+    htcd = "handle"
+  [function.compute_factorial]
+    return = "result"
+    htcd = "handle"
+    arg  = "u32"
+    fact = { type = "u32", outref = true }
+  [function.dma_to_device]
+    docstring = "be sure to check offset and size against dma_alignment"
+    return = "result"
+    htcd = "handle"
+    psrc = { type = "memory", inref = true }
+    dst_device_offset = "u64"
+    count = "u64"
+  [function.dma_from_device]
+    docstring = "be sure to check offset and size against dma_alignment"
+    return = "result"
+    htcd = "handle"
+    pdst = { type = "memory", outref = true }
+    src_device_offset = "u64"
+    count = "u64"
+
+[driver_data]
+  # ioctl API header provided by driver (consumed by gen targets, but never parsed by this system)
+  header = "tiny_compute/driver/tcd_ioctl.h"
+  # values defined in this file that *must* agree with the driver ABI header
+  [driver_data.const_pins]
+    cap_compute = "TCD_DEVICE_CAP_COMPUTE"
+    cap_dma_read = "TCD_DEVICE_CAP_DMA_READ"
+    cap_dma_write = "TCD_DEVICE_CAP_DMA_WRITE"

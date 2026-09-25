@@ -5,6 +5,7 @@
 # <exercise> is the name of the directory two levels above this Makefile's
 # directory: exercises/<exercise>/userspace/{app,lib}/Makefile.
 # Each object also gets a compile_commands fragment, $(OUT)/<obj>.o.json.
+# Generated headers are found at $(OUT)/generated (see the generate recipe).
 ifeq ($(strip $(OUT)),)
 $(error OUT is not set: make OUT=<out_dir> DRIVER_INCLUDE=<exercises_dir>)
 endif
@@ -29,7 +30,7 @@ else
 $(error LINK_TYPE must be EXE or SO)
 endif
 
-COMMON_FLAGS := -g -fvisibility=hidden -Wall -Wextra $(PIC) -I$(DRIVER_INCLUDE) -I..
+COMMON_FLAGS := -g -fvisibility=hidden -Wall -Wextra $(PIC) -I$(DRIVER_INCLUDE) -I$(OUT)/generated -I..
 CFLAGS := --std=c17 $(COMMON_FLAGS)
 CXXFLAGS := --std=c++20 $(COMMON_FLAGS)
 

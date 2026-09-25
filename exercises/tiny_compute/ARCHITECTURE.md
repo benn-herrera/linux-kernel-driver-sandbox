@@ -16,8 +16,12 @@
 
 ### Userspace – exercises/tiny_compute/userspace
 
-Three consumers of the driver, each one layer up from the last:
+The API definition, then three consumers of the driver, each one layer up
+from the last:
 
+- api_def/: the userspace API defined once, generated into every consumer
+  - tcdl_api.adef.toml: types, constants, functions and docstrings of the
+    `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`
 - lib/: `libtiny_compute.so`, the C wrapper library over the ioctl ABI
   - tcdl_api.h: public C API, the foreign-function surface (namespace `tcdl_`/`TCDL_`)
   - tcdl_api.cpp: implementation; the opaque handle wraps the device fd
@@ -74,7 +78,19 @@ Three consumers of the driver, each one layer up from the last:
 - the handle is the device fd xored with a constant cast to a pointer, so the library carries no
   state of its own and a handle costs nothing to copy
 - error mapping is one direction: errno from the ioctl to a `tcdl_result`;
-  the caller never sees errno
+  the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to
+  `TCDL_ERR_UNSUPPORTED`
+- the definition is the source of truth. `api_def/tcdl_api.adef.toml`
+  states the API once, and the header, the ABI pin unit and the Lua base
+  module are generated from it by the framework's `vdev/api_gen/` (root
+  ARCHITECTURE.md "API generation"). Until the emitters exist the
+  hand-written `lib/tcdl_api.h` is the header and the definition mirrors
+  it; the switch-over replaces the header with the generated one and
+  `tcdl_api.cpp` follows it
+- device capabilities live in the driver's per-device state and gate the
+  operations; `tcdl_info.device_caps` reports them, and the composed masks
+  (`TCDL_CAP_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side,
+  since convenience is not the ABI header's job
 
 ### Driver Test
 
@@ -98,6 +114,11 @@ Three consumers of the driver, each one layer up from the last:
 The stack from driver to script, one host coordinating several accelerators
 through a library and a binding, is in place. Remaining, in order:
 
+- The API generator's emitters: C header, ABI pin unit, Lua base module,
+  then the header-only C++ wrapper (RAII device ownership with a cached
+  `tcdl_info`) that the test program shrinks onto. The wiring is in place
+  with a stub that writes empty placeholders; the switch-over retires the
+  hand-written header and the `gsub` normalizer in the Lua binding.
 - The torture suite in Lua against the binding, multi-process, across the
   two instances the test machine boots: the isolation check (a DMA pattern
   written to one device must not be readable from the other, and
