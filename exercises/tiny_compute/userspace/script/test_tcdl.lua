@@ -5,7 +5,8 @@ function printf(f, ...)
     print(string.format(f, ...))
 end
 
--- binding.tcdl_api is generated from api_dev/tcld_api.adef.toml by api_gen - see vdev/justfile recipe 'generate'
+-- binding.tcdl_api is generated from api_dev/tcld_api.adef.toml by api_gen
+--   see vdev/justfile recipe 'generate'
 local tcdl = require("binding.tcdl_api")
 local tcdl_dev = tcdl.TcdlDevice.new(0)
 
@@ -14,11 +15,46 @@ if not tcdl_dev then
     os.exit(1)
 end
 
+local tcdl_caps_to_string
+function tcdl_caps_to_string(caps)
+    local caps_list = {}
+    if bit.band(caps, tcdl.TCDL_CAP_COMPUTE) ~= 0 then
+        caps_list[#caps_list + 1] = "COMPUTE"
+        caps = bit.bxor(caps, tcdl.TCDL_CAP_COMPUTE)
+    end
+    if bit.band(caps, tcdl.TCDL_CAP_DMA_READ) ~= 0 then
+        caps_list[#caps_list + 1] = "DMA_READ"
+        caps = bit.bxor(caps, tcdl.TCDL_CAP_DMA_READ)
+    end
+    if bit.band(caps, tcdl.TCDL_CAP_DMA_WRITE) ~= 0 then
+        caps_list[#caps_list + 1] = "DMA_WRITE"
+        caps = bit.bxor(caps, tcdl.TCDL_CAP_DMA_WRITE)
+    end
+    if caps ~= 0 then
+      caps_list[#caps_list + 1] = string.format("0x%x", caps)
+    end
+    return (#caps_list > 0) and table.concat(caps_list, "|") or "NONE"
+end
+
+local tcdl_info_to_string
+function tcdl_info_to_string(info, indent)
+    indent = indent or ""
+    return table.concat({
+        indent .. "api_version: " .. tostring(info.api_version),
+        indent .. "device_idx: " .. tostring(info.device_idx),
+        indent .. "dma_buf_size: " .. tostring(info.dma_buf_size),
+        indent .. "dma_alignment: " .. tostring(info.dma_alignment),
+        indent .. "device_caps: " .. tcdl_caps_to_string(info.device_caps),
+    }, "\n")
+end
+
+
 local result = true
 local err, success
 
+
 local is_alive
-print(tcdl_dev:get_info_string("  "))
+print(tcdl_info_to_string(tcdl_dev.info))
 is_alive, err = tcdl_dev:check_alive()
 result = result and (err == nil) and is_alive
 printf("check_alive(): %s err: %s %s", is_alive, err, tcdl.error_to_str(err))

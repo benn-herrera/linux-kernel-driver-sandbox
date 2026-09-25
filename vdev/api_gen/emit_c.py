@@ -11,6 +11,13 @@ def c_type(api: Api, type_name: str) -> str:
     return naming.type_name(api.namespace, type_name)
 
 
+def int_literal(value: int, fmt: str) -> str:
+    """An integer spelled for C and Lua alike: decimal, or lower-case unpadded hex."""
+    if fmt == "hex":
+        return f"-0x{-value:x}" if value < 0 else f"0x{value:x}"
+    return str(value)
+
+
 def param_type(api: Api, param: Param) -> str:
     if param.type == "memory":
         return "const void*" if param.inref else "void*"
@@ -118,7 +125,7 @@ def _typed_enum(api: Api, typed: TypedConst) -> str:
     ns = api.namespace
     name = naming.type_name(ns, typed.name)
     lines = "".join(
-        f"  {naming.const_name(ns, e.key)} = {e.value},{_trailing(e.docstring)}\n" for e in typed.entries
+        f"  {naming.const_name(ns, e.key)} = {int_literal(e.value, e.format)},{_trailing(e.docstring)}\n" for e in typed.entries
     )
     return f"{_comment_line(typed.docstring)}enum {name} {{\n{lines}}};\ntypedef enum {name} {name};\n"
 

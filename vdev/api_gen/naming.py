@@ -38,6 +38,11 @@ def impl_macro(namespace: str) -> str:
     return f"{namespace.upper()}_IMPL"
 
 
-def device_class(namespace: str) -> str:
-    """Lua class wrapping the opaque ref: `TcdlDevice`."""
-    return "".join(part.capitalize() for part in namespace.split("_")) + "Device"
+def upper_camel(name: str) -> str:
+    """`my_ns` -> `MyNs`."""
+    return "".join(part.capitalize() for part in name.split("_"))
+
+
+def lua_class(namespace: str, class_name: str) -> str:
+    """Lua class wrapping an opaque ref: namespace `tcdl`, class `Device` -> `TcdlDevice`."""
+    return upper_camel(namespace) + class_name

@@ -1,6 +1,5 @@
 [general]
-# stem for all output files
-name = "tcdl_api"
+# the file stem (tcdl_api) names every output
 # for languages with namespace features, used as namespace
 # for those without used as prefix for functions, variables, etc. capitalized or upper-cased as  needed for idioms.
 namespace = "tcdl"
@@ -28,10 +27,11 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     err_device_dead = 5
     err_comm_failed = { value = 6, docstring = "low-level device communication failed." }
     err_unsupported = { value = 7, docstring = "capability missing for attempted operation." }
-    err_unknown = 0x7fffffff
+    err_unknown = { value = 0x7fffffff, format = "hex" }
 
 [opaque_ref]
-  handle = { docstring = "all device operation api calls require a handle." }
+  # ctor/dtor/class: bindings with object semantics wrap the handle in a class built on these
+  handle = { ctor = "create_device", dtor = "destroy_device", class = "Device", docstring = "all device operation api calls require a handle." }
 
 [struct]
   [struct.info]
@@ -40,7 +40,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     device_idx = { type = "u32", docstring = "index passed to create_device" }
     dma_buf_size = "u64" # bare type here is deliberate.
     dma_alignment = { type = "u32", docstring = "dma memory i/o must be aligned to and multiples of this value" }
-    device_caps = { type = "u32", docstring = "orred cap bit flags" }
+    device_caps = { type = "u32", docstring = "bitwise or of cap bit flags" }
 
 [function]
   [function.create_device]
@@ -48,7 +48,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     return = "result"
     index = "u32"
     phtcd = { type = "handle", outref = true }
-    pinfo = { type = "info", outref = true, nullsafe = true }
+    info = { type = "info", outref = true, nullsafe = true }
   [function.destroy_device]
     docstring = "double destroy will return an error but won't crash."
     return = "result"

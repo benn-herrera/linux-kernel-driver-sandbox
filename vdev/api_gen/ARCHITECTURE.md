@@ -26,7 +26,11 @@ definition ──load/validate──▶ Api (frozen dataclasses) ──▶ emitt
   structs and functions.
 - `__main__.py`: the command line. Parses arguments, loads, runs both
   emitters in memory, and writes only if both succeed, so a failing
-  definition leaves no partial output.
+  definition leaves no partial output. It always writes; whether it runs
+  at all is make's decision, from the definition's mtime. Its
+  `gendeps` mode prints the make rules `exercises/gen.mk` includes, from
+  the one function that names the outputs, so the naming rule has a
+  single home and the build file carries none of it.
 
 ## The model
 
@@ -53,14 +57,14 @@ project depends on it.
   the function prefix as an argument, so the header passes `NS_API ` and
   the cdef passes nothing. Type mapping is `c_type()` and `param_type()`.
   The ABI pins are one trailing `#if defined(NS_IMPL)` block from
-  `DriverData`, includes then `static_assert` lines, after every constant
+  `DriverData`, includes and `static_assert` lines, after every constant
   they name; `cdef()` does not render it.
 - **Lua module** (`emit_lua.module()`): `_constant_literals()` computes
   every value in Python, bit constants by shifting and masks by OR over
   earlier entries, so the numbers come from the model and not from the
-  FFI. `_device_class()` finds the constructor (the one function with an
-  outref of the opaque type) and the destroyer (`destroy*` taking only the
-  opaque by value) and refuses the definition if either is not unique.
+  FFI. `_device_class()` builds one class per opaque ref that declares a
+  `ctor`, from the `ctor`, `dtor` and `class` the definition states;
+  nothing about the class is inferred from names or shapes.
   `_marshal()` turns a parameter list into four lists at once: the Lua
   arguments, the C call arguments, the allocations for outrefs, and the
   values returned; the `size` rule for `memory` lives there, dropping the
@@ -73,12 +77,9 @@ project depends on it.
 
 - `nullsafe` is documentation. C has no expression for it and the Lua
   constructor allocates the struct regardless.
-- The spelling of numbers. `tomllib` yields integers, so `0x7fffffff` in
-  the definition is `2147483647` in the header. The value is the contract;
-  the spelling is not.
-- More than one opaque ref, or functions returning different enums. Both
-  are refused rather than half-handled; the device class and
-  `error_to_str` assume one of each.
+- The spelling of numbers as written. `tomllib` yields integers, so the
+  definition says `format = "hex"` where it wants hex; without it a value
+  is decimal whatever the file said.
 
 ## Tests
 

@@ -148,10 +148,9 @@ api-gen-test-vdev: machine-vdev
 generate-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} generate
 
-[doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so, script/* and lib/*.h land in out/userspace/")]
+[doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so, script/* and the generated header and binding land in out/userspace/")]
 userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace
-  ls -l "{{OUT_DIR}}/userspace/"
 
 [doc("remove out/userspace-build/ (the intermediate trees) and out/userspace/ for every exercise, not only the active one")]
 userspace-clean-vdev: machine-vdev

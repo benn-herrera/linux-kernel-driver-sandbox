@@ -19,19 +19,27 @@ products and are never edited.
 One TOML file, `<stem>.adef.toml`. `<stem>` names every output. The file
 holds these tables, each optional unless stated:
 
-- `[general]` (required): `name`, `namespace` (an identifier; the prefix
-  for everything generated), `version` (four integers 0..255, encoded
+- `[general]` (required): `namespace` (an identifier; the prefix for
+  everything generated), `version` (four integers 0..255, encoded
   most-significant first into one 32-bit value), `library` (the shared
-  object file name the script binding loads).
+  object file name the script binding loads). There is no name field:
+  the file stem names every output.
 - `[untyped_bit_const]`: constants that are bit flags. An integer value is
   a bit index. A list of strings names earlier entries whose flags are
-  combined into a mask. Either may be wrapped as `{ value = ..., docstring
-  = "..." }`.
+  combined into a mask. Either may be wrapped as `{ value = ..., format =
+  "hex"|"dec", docstring = "..." }`; `format` chooses how the number is
+  spelled where a literal is emitted, decimal by default.
 - `[typed_const.<enum>]`: an enumeration. Entries are integers fitting a
-  32-bit signed value, optionally wrapped as `{ value = ..., docstring =
-  "..." }`. A `docstring` key at the table level documents the enum.
+  32-bit signed value, optionally wrapped as `{ value = ..., format =
+  "hex"|"dec", docstring = "..." }`. A `docstring` key at the table level
+  documents the enum.
 - `[opaque_ref.<name>]`: a handle type whose representation is the
-  implementation's secret. Carries at most a `docstring`.
+  implementation's secret. Attributes: `docstring`; and for bindings with
+  object semantics, `ctor`, the function that produces the handle (it has
+  exactly one `outref` of this type), `dtor`, the function that releases
+  it (its only parameter is this type by value; requires `ctor`), and
+  `class`, the object's name in those bindings (an identifier; default the
+  ref's name in UpperCamel).
 - `[struct.<name>]`: fields in document order, each a type string or `{
   type = "...", docstring = "..." }`. A `docstring` key documents the
   struct.
@@ -120,23 +128,25 @@ A module returned from `require`, needing no file at run time:
   the header gives it. Composed masks are computed. The version is one
   32-bit value.
 - `M.<enum>_to_str(value)` maps a value to its constant name for each enum;
-  `M.error_to_str` is the same for the enum every function returns (all
-  functions must return the same enum for the module to be generated).
+  `M.error_to_str` is the same alias for the one enum every function
+  returns, and is absent when functions return different enums.
 - `M.raw.<f>` is the FFI function for each function.
-- If the definition has exactly one opaque ref, a class `M.<Ns>Device`:
-  - `new(...)` takes the non-`outref` parameters of the one function that
-    has an `outref` of the opaque type, in order; returns `nil, result` on
-    any result other than the enum's zero-valued entry, else an object
-    whose `_handle` is the opaque value with the `destroy*` function as its
-    GC finalizer and whose `info` is a plain table copy of the struct
-    `outref` if that function has one (`u32` and enum fields as numbers,
-    `u64` as cdata). `get_info_string(indent)` renders that table one
-    field per line.
-  - One method per remaining function whose first parameter is the opaque
-    by value, taking the other non-`outref` parameters in order; `outref`
-    values are returned in order after a successful call, followed by
-    `nil`; a method with no `outref` returns `true, nil`; any other result
-    returns `nil, result`.
+- For each opaque ref with a `ctor`, a class `M.<Ns><Class>`:
+  - `new(...)` takes the `ctor`'s non-`outref` parameters in order;
+    returns `nil, result` on any result other than the enum's zero-valued
+    entry, else an object whose `_handle` is the opaque value with the
+    `dtor` as its GC finalizer, and which caches every other `outref` of
+    the `ctor` under that parameter's name: a struct as a plain table copy
+    of its fields (`u32` and enum fields as numbers, `u64` as cdata), a
+    scalar as a number. The module emits no display helpers; what a
+    consumer prints is the consumer's.
+  - One method per function, other than the `ctor` and `dtor`, whose
+    first parameter is the opaque by value, taking the other non-`outref`
+    parameters in order; `outref` values are returned in order after a
+    successful call, followed by `nil`; a method with no `outref` returns
+    `true, nil`; any other result returns `nil, result`.
+  - An opaque ref without a `ctor` gets no class; its functions are
+    reachable through `M.raw`.
   - `memory` with `size`: an `inref` buffer is a Lua string in its
     position and its `size` parameter disappears from the argument list,
     the string's length being passed; an `outref` buffer keeps its `size`
@@ -147,11 +157,23 @@ A module returned from `require`, needing no file at run time:
 
 ## Invocation
 
+Two modes. Generation:
 `python3 -m api_gen <definition> --generated <dir> --exercise <name>
 [--library <file>]`. `--library` overrides `general.library`; one of them
 must be present for the Lua module. Exit status 0 on success with one line
 on stderr naming what was written; 2 on any definition error, with the
 message `api_gen: <definition>: <what is wrong>`, and nothing written.
+Both outputs are always written; staleness is the build's concern.
+
+Dependencies: `python3 -m api_gen gendeps --generated <dir> --exercise
+<name> <definition>...` prints make text to stdout: per definition, a
+`GENERATED +=` line naming its outputs and one grouped-target rule
+(`a b &: definition`, GNU make 4.3 or later) making both outputs from
+the definition by running the generation mode. The rule refers to
+the make variable `API_GEN` for the directory holding the package. No
+definition is read; only the names matter, and the output paths come
+from the same code the generation mode writes to, so a build file never
+spells them. With no definitions, only the banner is printed.
 
 ## Not generated
 

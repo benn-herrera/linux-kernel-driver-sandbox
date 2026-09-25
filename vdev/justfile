@@ -100,26 +100,17 @@ driver-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
-[doc("generate the active exercise's userspace API artifacts from /work/exercises/EXERCISE/userspace/api_def/*.adef.toml with vdev/api_gen into OUT/userspace-build/EXERCISE/generated/, laid out as its destination: include/EXERCISE/ (the C header, carrying the ABI pins in its implementation-only block) and binding/ (the Lua module); no-op with a note when the exercise has no definitions")]
+[doc("generate the active exercise's userspace API artifacts: make -C /work/exercises/EXERCISE/userspace/api_def with exercises/gen.mk, which runs vdev/api_gen for every *.adef.toml newer than its outputs under OUT/userspace-build/EXERCISE/generated/; outputs land under generated/include/EXERCISE/ and generated/binding/; no-op with a note when the exercise has no api_def/Makefile")]
 generate: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
-  shopt -s nullglob
   dir="{{EXERCISE_DIR}}/userspace/api_def"
-  defs=("${dir}"/*.adef.toml)
-  if (( ${#defs[@]} == 0 )); then
-    printf 'no api definitions under %s; nothing to generate\n' "${dir}" >&2
+  if [[ ! -f "${dir}/Makefile" ]]; then
+    printf 'no api_def/Makefile under %s; nothing to generate\n' "${dir}" >&2
     exit 0
   fi
-  gen="{{OUT}}/userspace-build/{{EXERCISE}}/generated"
-  mkdir -p "${gen}"
-  stems=()
-  for def in "${defs[@]}"; do
-    stem="$(basename "${def}" .adef.toml)"
-    stems+=("${stem}")
-    PYTHONPATH=/work/vdev PYTHONDONTWRITEBYTECODE=1 python3 -m api_gen "${def}" --generated "${gen}" --exercise "{{EXERCISE}}"
-  done
-  printf 'generated %s: %s\n' "${gen}" "${stems[*]}" >&2
+  make -C "${dir}" OUT="{{OUT}}/userspace-build/{{EXERCISE}}" API_GEN=/work/vdev
+  printf 'generated %s/userspace-build/%s/generated\n' "{{OUT}}" "{{EXERCISE}}" >&2
 
 [doc("run the API generator's unit tests (vdev/api_gen/tests) with the image's python3")]
 api-gen-test:
@@ -127,7 +118,7 @@ api-gen-test:
   set -euo pipefail
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s /work/vdev/api_gen/tests -t /work/vdev
 
-[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header is copied to OUT/userspace/include/EXERCISE/ (created); the generated include/ and binding/ subtrees are staged whole onto OUT/userspace/")]
+[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); the generated include/ and binding/ subtrees are staged whole onto OUT/userspace/; lib/*.h are the implementation's own and are not staged")]
 userspace: exercise-check generate
   #!/usr/bin/env bash
   set -euo pipefail
@@ -148,12 +139,8 @@ userspace: exercise-check generate
   if [[ -d "${dir}/script" ]]; then
     cp -r "${dir}/script/." "{{OUT}}/userspace/"
   fi
-  include="{{OUT}}/userspace/include/{{EXERCISE}}"
-  mkdir -p "${include}"
-  for header in "${dir}/lib"/*.h; do
-    cp "${header}" "${include}/"
-  done
-  # generated artifacts: generated/ mirrors OUT/userspace/, so each subtree is staged whole
+  # generated artifacts: generated/ mirrors OUT/userspace/, so each subtree is staged whole;
+  # lib/*.h are the implementation's own and are not staged
   for sub in include binding; do
     if [[ -d "${build}/generated/${sub}" ]]; then
       mkdir -p "{{OUT}}/userspace/${sub}"

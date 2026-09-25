@@ -17,6 +17,7 @@ RESERVED_KEYS = frozenset({"docstring", "return"})
 BUILTIN_TYPES = frozenset({"u32", "u64", "memory"})
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
+FORMATS = ("dec", "hex")
 
 
 class DefinitionError(Exception):
@@ -29,6 +30,7 @@ class BitConst:
     bit: int | None  # set for a single bit
     parts: tuple[str, ...]  # set for a mask composed of earlier entries
     docstring: str | None
+    format: str  # one of FORMATS: how a literal of the value is spelled
 
 
 @dataclass(frozen=True)
@@ -36,6 +38,7 @@ class EnumEntry:
     key: str
     value: int
     docstring: str | None
+    format: str  # one of FORMATS
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,9 @@ class TypedConst:
 class OpaqueRef:
     name: str
     docstring: str | None
+    ctor: str | None  # function with exactly one outref of this type
+    dtor: str | None  # function taking only this type by value; set only with ctor
+    class_name: str
 
 
 @dataclass(frozen=True)
@@ -92,7 +98,6 @@ class DriverData:
 
 @dataclass(frozen=True)
 class Api:
-    name: str
     namespace: str
     version: tuple[int, int, int, int]
     library: str | None
@@ -129,8 +134,9 @@ def from_dict(data: Mapping) -> Api:
     general = data.get("general")
     if not isinstance(general, dict):
         raise DefinitionError("missing [general] table")
-    if not isinstance(general.get("name"), str):
-        raise DefinitionError("missing general.name string")
+    if "name" in general:
+        raise DefinitionError("general: unknown key name (the definition's file name is the output stem)")
+    _reject_unknown(general, {"namespace", "version", "library"}, "general")
     if "function" not in data:
         raise DefinitionError("missing [function] table")
 
@@ -153,10 +159,9 @@ def from_dict(data: Mapping) -> Api:
         _typed_const(name, body)
         for name, body in _named_tables(_table(data, "typed_const"), "typed_const")
     )
-    opaque_refs = []
-    for name, body in _named_tables(_table(data, "opaque_ref"), "opaque_ref"):
-        _reject_unknown(body, {"docstring"}, f"opaque_ref.{name}")
-        opaque_refs.append(OpaqueRef(name, _docstring(body, f"opaque_ref.{name}")))
+    opaque_refs = [
+        _opaque_ref(name, body) for name, body in _named_tables(_table(data, "opaque_ref"), "opaque_ref")
+    ]
     struct_tables = _named_tables(_table(data, "struct"), "struct")
 
     type_names: dict[str, str] = {}
@@ -183,9 +188,9 @@ def from_dict(data: Mapping) -> Api:
         _function(name, body, type_names, enum_names)
         for name, body in _named_tables(_table(data, "function"), "function")
     )
+    _check_lifecycles(opaque_refs, {f.name: f for f in functions})
 
     api = Api(
-        name=general["name"],
         namespace=namespace,
         version=tuple(version),
         library=library,
@@ -247,20 +252,31 @@ def _reject_unknown(body: Mapping, allowed: set[str], where: str) -> None:
         raise DefinitionError(f"{where}: unknown key(s) {', '.join(unknown)}")
 
 
+def _format(attrs: Mapping, where: str) -> str:
+    value = attrs.get("format", "dec")
+    if value not in FORMATS:
+        raise DefinitionError(f"{where}.format must be one of {', '.join(FORMATS)}")
+    return value
+
+
+def _unwrap_value(entry: object, where: str) -> tuple[object, str | None, str]:
+    """Split a bare value or a { value, docstring, format } table into (value, docstring, format)."""
+    if not isinstance(entry, dict):
+        return entry, None, "dec"
+    _reject_unknown(entry, {"value", "docstring", "format"}, where)
+    return entry.get("value"), _docstring(entry, where), _format(entry, where)
+
+
 def _bit_consts(table: dict) -> tuple[BitConst, ...]:
     consts: list[BitConst] = []
     for key, entry in table.items():
         where = f"untyped_bit_const.{key}"
         _identifier(key, where)
-        doc = None
-        if isinstance(entry, dict):
-            _reject_unknown(entry, {"value", "docstring"}, where)
-            doc = _docstring(entry, where)
-            entry = entry.get("value")
+        entry, doc, fmt = _unwrap_value(entry, where)
         if _is_int(entry):
             if not 0 <= entry <= 31:
                 raise DefinitionError(f"{where}: bit index must be in 0..31")
-            consts.append(BitConst(key, entry, (), doc))
+            consts.append(BitConst(key, entry, (), doc, fmt))
         elif isinstance(entry, list) and entry and all(isinstance(p, str) for p in entry):
             defined = {c.key for c in consts}
             for part in entry:
@@ -269,7 +285,7 @@ def _bit_consts(table: dict) -> tuple[BitConst, ...]:
                         f"{where}: composes unknown constant '{part}' "
                         "(only earlier untyped_bit_const entries)"
                     )
-            consts.append(BitConst(key, None, tuple(entry), doc))
+            consts.append(BitConst(key, None, tuple(entry), doc, fmt))
         else:
             raise DefinitionError(
                 f"{where}: must be a bit index, a non-empty list of constant names, "
@@ -285,17 +301,49 @@ def _typed_const(name: str, body: dict) -> TypedConst:
             continue
         where = f"typed_const.{name}.{key}"
         _identifier(key, where)
-        doc = None
-        if isinstance(entry, dict):
-            _reject_unknown(entry, {"value", "docstring"}, where)
-            doc = _docstring(entry, where)
-            entry = entry.get("value")
+        entry, doc, fmt = _unwrap_value(entry, where)
         if not _is_int(entry) or not _INT32_MIN <= entry <= _INT32_MAX:
             raise DefinitionError(f"{where}: value must be an integer in the int32 range")
-        entries.append(EnumEntry(key, entry, doc))
+        entries.append(EnumEntry(key, entry, doc, fmt))
     if not entries:
         raise DefinitionError(f"typed_const.{name}: has no entries")
     return TypedConst(name, tuple(entries), _docstring(body, f"typed_const.{name}"))
+
+
+def _opaque_ref(name: str, body: dict) -> OpaqueRef:
+    where = f"opaque_ref.{name}"
+    _reject_unknown(body, {"docstring", "ctor", "dtor", "class"}, where)
+    for key in ("ctor", "dtor"):
+        if not isinstance(body.get(key, ""), str):
+            raise DefinitionError(f"{where}.{key} must be a function name")
+    class_name = body.get("class", naming.upper_camel(name))
+    if not isinstance(class_name, str) or not _IDENTIFIER.match(class_name):
+        raise DefinitionError(f"{where}.class must be an identifier")
+    return OpaqueRef(name, _docstring(body, where), body.get("ctor"), body.get("dtor"), class_name)
+
+
+def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Function]) -> None:
+    classes: dict[str, str] = {}
+    for o in opaque_refs:
+        where = f"opaque_ref.{o.name}"
+        if o.dtor is not None and o.ctor is None:
+            raise DefinitionError(f"{where}.dtor: requires ctor")
+        if o.ctor is None:
+            continue
+        ctor = functions.get(o.ctor)
+        if ctor is None or sum(p.type == o.name and p.outref for p in ctor.params) != 1:
+            raise DefinitionError(
+                f"{where}.ctor: '{o.ctor}' must name a function with exactly one {o.name} outref"
+            )
+        if o.dtor is not None:
+            dtor = functions.get(o.dtor)
+            if dtor is None or [(p.type, p.outref, p.inref) for p in dtor.params] != [(o.name, False, False)]:
+                raise DefinitionError(
+                    f"{where}.dtor: '{o.dtor}' must name a function whose only parameter is a {o.name} by value"
+                )
+        if o.class_name in classes:
+            raise DefinitionError(f"{where}.class: {o.class_name} is already the class of opaque_ref.{classes[o.class_name]}")
+        classes[o.class_name] = o.name
 
 
 def _member_type(entry: object, where: str) -> tuple[str, dict]:
