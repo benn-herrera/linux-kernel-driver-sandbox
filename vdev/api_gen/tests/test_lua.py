@@ -212,6 +212,21 @@ class ErrorToStr(unittest.TestCase):
         self.assertIn("function M.other_to_str(value)", text)
 
 
+class ToStr(unittest.TestCase):
+    def test_nil_maps_to_the_zero_valued_entry(self) -> None:
+        text = emit_lua.module(load(KITCHEN_SINK), source_name="x", library="libxy.so")
+        self.assertIn(
+            'function M.status_to_str(value)\n    if value == nil then return "OK" end\n'
+            "    return status_names[value]\nend\n",
+            text,
+        )
+
+    def test_enum_with_no_zero_entry_has_no_nil_clause(self) -> None:
+        text = mutate(KITCHEN_SINK, "fine = 0", "fine = 5")
+        text = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        self.assertIn("function M.mode_to_str(value)\n    return mode_names[value]\nend\n", text)
+
+
 class Validate(unittest.TestCase):
     def validate(self, text: str) -> list[str]:
         return emit_lua.validate(load(text))

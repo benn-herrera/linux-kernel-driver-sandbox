@@ -2,7 +2,7 @@
 per opaque ref that names a constructor."""
 
 from api_gen import emit_c, naming
-from api_gen.model import Api, Function, OpaqueRef, Param
+from api_gen.model import Api, Function, OpaqueRef, Param, TypedConst
 
 LUA_KEYWORDS = frozenset(
     "and break do else elseif end false for function goto if in local nil not or repeat return "
@@ -59,9 +59,11 @@ def module(api: Api, *, source_name: str, library: str) -> str:
         names = "".join(
             f'    [M.{c}] = "{c}",\n' for c in (naming.lua_const_name(e.name) for e in typed.entries)
         )
+        zero = _zero_entry(typed)
+        nil_clause = f'    if value == nil then return "{zero}" end\n' if zero is not None else ""
         out.append(
             f"\nlocal {typed.name}_names = {{\n{names}}}\n"
-            f"function M.{typed.name}_to_str(value)\n    return {typed.name}_names[value]\nend\n"
+            f"function M.{typed.name}_to_str(value)\n{nil_clause}    return {typed.name}_names[value]\nend\n"
         )
     returns = {f.returns for f in api.functions}
     if len(returns) == 1:
@@ -116,6 +118,13 @@ def _ok_const(api: Api, fn: Function) -> str:
     typed = next(t for t in api.typed_consts if t.name == fn.returns)
     ok = next(e for e in typed.entries if e.value == 0)
     return naming.lua_const_name(ok.name)
+
+
+def _zero_entry(typed: TypedConst) -> str | None:
+    """The Lua constant name of `typed`'s zero-valued entry, or None if it has none.
+    A return enum always has one (SPEC.md requires it); any other typed_const may not."""
+    zero = next((e for e in typed.entries if e.value == 0), None)
+    return None if zero is None else naming.lua_const_name(zero.name)
 
 
 def _is_opaque_value(param: Param, opaque: str) -> bool:
