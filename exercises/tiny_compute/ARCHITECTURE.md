@@ -21,17 +21,16 @@ The API definition, then three consumers of the driver, each one layer up from t
 - api_def/: the userspace API defined once, generated into every consumer
   - tcdl_api.adef.toml: types, constants, functions and docstrings of the `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`
 - lib/: `libtiny_compute.so`, the C wrapper library over the ioctl ABI
-  - tcdl_api.h: public C API, the foreign-function surface (namespace `tcdl_`/`TCDL_`)
-  - tcdl_api.cpp: implementation; the opaque handle wraps the device fd
+  - tcdl_api.cpp: implementation of the generated `tcdl_api.h` (namespace `tcdl_`/`TCDL_`, the foreign-function surface); the opaque handle wraps the device fd
   - util.h: internal helpers
   - Makefile: `LINK_TYPE := SO` plus `../../../cpp.mk`
 - app/: `tiny_compute`, the C++ test program, linked against the library
   - common.h: utility definitions and function prototypes
   - main.cpp: entry point
-  - tests.cpp: functionality tests through the library API
+  - tests.cpp: functionality tests through the generated C++ wrapper `tcdl_api.hpp`
   - Makefile: `LINK_TYPE := EXE` plus `../../../cpp.mk`
 - script/: LuaJIT scripts, staged as-is and run as tests
-  - test_tcdl.lua: FFI binding to `libtiny_compute.so` built by parsing the staged `tcdl_api.h` at run time, and the tests written against it
+  - test_tcdl.lua: the tests, written against the generated module `binding/tcdl_api.lua`, which is staged beside the scripts and binds `libtiny_compute.so` through the FFI
 
 ## Project Design
 
@@ -65,7 +64,7 @@ The API definition, then three consumers of the driver, each one layer up from t
 - the header is the binding. It is written so that a preprocessor-free reader (LuaJIT `ffi.cdef`) accepts it once `#` lines and the visibility macro are stripped: constants are enums, not macros; every struct is declared with a typedef; comments are `/* */`
 - the handle is the device fd xored with a constant cast to a pointer, so the library carries no state of its own and a handle costs nothing to copy
 - error mapping is one direction: errno from the ioctl to a `tcdl_result`; the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to `TCDL_ERR_UNSUPPORTED`
-- the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once, and the header (with the ABI pins in its implementation-only block) and the Lua base module are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). Until the emitters exist the hand-written `lib/tcdl_api.h` is the header and the definition mirrors it; the switch-over replaces the header with the generated one and `tcdl_api.cpp` follows it
+- the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once; the C header (with the ABI pins in its implementation-only block), the header-only C++ wrapper, the Lua module and the implementation stub are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). `lib/tcdl_api.cpp` is the one hand-written piece and follows the generated header
 - device capabilities live in the driver's per-device state and gate the operations; `tcdl_info.device_caps` reports them, and the composed masks (`TCDL_CAP_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side, since convenience is not the ABI header's job
 
 ### Driver Test
