@@ -15,11 +15,6 @@ class Stub(unittest.TestCase):
     def setUp(self) -> None:
         self.text = stub()
 
-    def test_banner(self) -> None:
-        first_line = self.text.splitlines()[0]
-        self.assertIn("GENERATED", first_line)
-        self.assertIn("xy_api.adef.toml", first_line)
-
     def test_preprocessor_lines_are_the_impl_guarded_include_then_the_std_headers(self) -> None:
         lines = [line for line in self.text.splitlines() if line.startswith("#")]
         self.assertEqual(

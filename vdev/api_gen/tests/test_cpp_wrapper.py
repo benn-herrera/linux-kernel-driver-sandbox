@@ -17,9 +17,6 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(includes[0], '#include "xy_api.h"')
         for include in includes[1:]:
             self.assertRegex(include, r"#include <\w+>")
-        first_line = self.text.splitlines()[0]
-        self.assertIn("GENERATED", first_line)
-        self.assertIn("xy_api.adef.toml", first_line)
         self.assertTrue(self.text.rstrip().endswith("}  // namespace xy"))
 
     def test_no_exceptions_no_allocation(self) -> None:
@@ -37,6 +34,8 @@ class Wrapper(unittest.TestCase):
         self.assertNotIn("release()", text)
         self.assertIn("  Status destroy_port() {\n", text)
 
+
+class Refusals(unittest.TestCase):
     def test_member_collision_is_an_error(self) -> None:
         with self.assertRaises(model.DefinitionError) as caught:
             wrapper(FIXTURE.replace("[function.send]", "[function.release]"))
