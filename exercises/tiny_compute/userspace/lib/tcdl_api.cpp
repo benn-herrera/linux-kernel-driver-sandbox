@@ -42,7 +42,8 @@ auto errno_to_result(tcdl_result unknown=TCDL_ERR_COMM_FAILED) {
   switch(errno) {
     case ETIMEDOUT: return TCDL_ERR_TIMEDOUT;
     case EOPNOTSUPP: return TCDL_ERR_UNSUPPORTED;
-    case EINVAL: return TCDL_ERR_INVALID_ADDRESS;
+    case EINVAL: return TCDL_ERR_MISALIGNED;
+    case EFAULT: return TCDL_ERR_INVALID_ADDRESS;
   }
   return unknown;
 }

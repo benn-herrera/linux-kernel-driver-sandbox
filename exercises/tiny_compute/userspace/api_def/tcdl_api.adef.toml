@@ -28,11 +28,12 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     ok = 0
     err_no_device = { _value = 1, _docstring = "requested device absent." }
     err_invalid_handle = 2
-    err_invalid_address = 3
+    err_invalid_address = { _value = 3, _docstring = "source/dest address is null or read/write attempt at address fails." }
     err_timedout = 4
     err_device_dead = 5
     err_comm_failed = { _value = 6, _docstring = "low-level device communication failed." }
     err_unsupported = { _value = 7, _docstring = "capability missing for attempted operation." }
+    err_misaligned = { _value = 8, _docstring = "offset or size do not meet alignment requirements or offset + size exceeds device buffer size." }
     err_unknown = { _value = 0x7fffffff, _format = "hex" }
 
 [opaque_ref]
@@ -61,7 +62,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     phtcd = { _type = "handle", _ref = "out" }
     info = { _type = "info", _ref = "out", _optional = true }
   [function.destroy_device]
-    _docstring = "double destroy will _return an error but won't crash."
+    _docstring = "double destroy will return an error but won't crash."
     _return = "result"
     htcd = "handle"
   [function.check_alive]
