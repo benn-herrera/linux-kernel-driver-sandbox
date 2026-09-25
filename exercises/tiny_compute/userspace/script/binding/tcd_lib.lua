@@ -9,11 +9,14 @@ if not fhdr then
 end
 local api_text = fhdr:read("*a")
 fhdr:close()
+fhdr = nil
 
 -- strip preprocessor lines and the TCDL_API annotation
 api_text = api_text:gsub("#[^\n]*\n", ""):gsub("%f[%w_]TCDL_API%f[^%w_]", "")
 ffi.cdef(api_text)
 -- print(api_text)
+api_text = nil
+
 local lib_tcd = ffi.load("libtiny_compute.so")
 
 -- the module

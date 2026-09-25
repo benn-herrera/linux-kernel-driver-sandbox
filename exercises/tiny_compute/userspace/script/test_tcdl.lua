@@ -14,13 +14,15 @@ if not tcdl_dev then
 end
 
 local result = true
-local err, fact, is_alive, success, text
+local err, success
 
+local is_alive
 print(tcdl_dev:get_info_string("  "))
 is_alive, err = tcdl_dev:check_alive()
-result = result and (err == nil)
+result = result and (err == nil) and is_alive
 printf("check_alive(): %s err: %s %s", is_alive, err, tcdl.error_to_str(err))
 
+local fact
 fact, err = tcdl_dev:compute_factorial(5)
 result = result and (err == nil)
 printf("compute_factorial(5): %s err: %s %s", fact, err, tcdl.error_to_str(err))
@@ -29,6 +31,7 @@ result = result and (fact == 5 * 4 * 3 * 2)
 if tcdl_dev.info.dma_buf_size ~= 0 and tcdl_dev.info.dma_alignment ~= 0 then
     local test_dma_str = "Daisy, Daisy, give me your answer, do.012345678"
     local dma_size = (#test_dma_str + 1)
+    local text
     assert(dma_size % tcdl_dev.info.dma_alignment == 0)
     assert(dma_size <= tcdl_dev.info.dma_buf_size)
     success, err = tcdl_dev:dma_to_device(test_dma_str, 0)
