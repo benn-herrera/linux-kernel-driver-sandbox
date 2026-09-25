@@ -85,8 +85,7 @@ struct tcd_dev {
 	struct completion compute_done;
 	struct mutex dma_lock;
 	struct completion dma_done;
-	struct tcd_dma_buf dma_from_device;
-	struct tcd_dma_buf dma_to_device;
+	struct tcd_dma_buf dma_buf;
 	u32 cap_flags;
 	int id;
 	int irq;

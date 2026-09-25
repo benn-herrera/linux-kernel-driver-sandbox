@@ -49,17 +49,12 @@ int tcd_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 				     "dma set mask failed.\n");
 
 	// this memory is auto-freed like devm_kzalloc - no corresponding free() needed in remove()
-	tcd->dma_from_device.cpu =
-		dmam_alloc_coherent(&pdev->dev, TCD_DMA_BUF_SIZE,
-				    &tcd->dma_from_device.dma, GFP_KERNEL);
-	tcd->dma_to_device.cpu =
-		dmam_alloc_coherent(&pdev->dev, TCD_DMA_BUF_SIZE,
-				    &tcd->dma_to_device.dma, GFP_KERNEL);
-	if (!tcd->dma_from_device.cpu || !tcd->dma_to_device.cpu)
+	tcd->dma_buf.cpu = dmam_alloc_coherent(&pdev->dev, TCD_DMA_BUF_SIZE,
+					       &tcd->dma_buf.dma, GFP_KERNEL);
+	if (!tcd->dma_buf.cpu)
 		return dev_err_probe(&pdev->dev, -ENOMEM,
 				     "dma buffer allocation failed.\n");
-	tcd->dma_from_device.size = TCD_DMA_BUF_SIZE;
-	tcd->dma_to_device.size = TCD_DMA_BUF_SIZE;
+	tcd->dma_buf.size = TCD_DMA_BUF_SIZE;
 
 	// device-scoped interrupt handler completion
 	init_completion(&tcd->compute_done);

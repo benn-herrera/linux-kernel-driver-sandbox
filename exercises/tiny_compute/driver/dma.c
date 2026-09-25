@@ -25,7 +25,7 @@ static int tcd_dma_xfer(struct tcd_dev *tcd, u64 src, u64 dst, u64 count,
 
 		cmd = TCD_DMA_FROM_DEVICE;
 		cmd_src = TCD_DMA_DEVICE_BUF + src;
-		cmd_dst = tcd->dma_from_device.dma;
+		cmd_dst = tcd->dma_buf.dma;
 		break;
 
 	case DMA_TO_DEVICE:
@@ -35,7 +35,7 @@ static int tcd_dma_xfer(struct tcd_dev *tcd, u64 src, u64 dst, u64 count,
 			return -EINVAL;
 
 		cmd = TCD_DMA_TO_DEVICE;
-		cmd_src = tcd->dma_to_device.dma;
+		cmd_src = tcd->dma_buf.dma;
 		cmd_dst = TCD_DMA_DEVICE_BUF + dst;
 		break;
 	default:
@@ -48,7 +48,7 @@ static int tcd_dma_xfer(struct tcd_dev *tcd, u64 src, u64 dst, u64 count,
 
 		if (dir == DMA_TO_DEVICE) {
 			// stage source data from userspace
-			result = copy_from_user(tcd->dma_to_device.cpu,
+			result = copy_from_user(tcd->dma_buf.cpu,
 						(const void __user *)src,
 						count);
 			if (result)
@@ -70,8 +70,7 @@ static int tcd_dma_xfer(struct tcd_dev *tcd, u64 src, u64 dst, u64 count,
 				// relay transferred data to userspace
 				result = copy_to_user(
 					(void __user *)dst,
-					(const void *)tcd->dma_from_device.cpu,
-					count);
+					(const void *)tcd->dma_buf.cpu, count);
 				if (result)
 					return -EFAULT;
 			} else
