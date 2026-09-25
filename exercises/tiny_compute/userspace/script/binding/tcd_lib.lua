@@ -29,7 +29,6 @@ local M = {
   TCDL_ERR_DEVICE_DEAD = tonumber(ffi.C.TCDL_ERR_DEVICE_DEAD),
   TCDL_ERR_COMM_FAILED = tonumber(ffi.C.TCDL_ERR_COMM_FAILED),
   TCDL_ERR_UNKNOWN = tonumber(ffi.C.TCDL_ERR_UNKNOWN),
-  TCDL_CAP_COMPUTE = tonumber(ffi.C.TCDL_CAP_COMPUTE),
 }
 local error_strings = {}
 for k, v in pairs(M) do
@@ -41,6 +40,7 @@ M.TcdlDevice = {}
 M.TcdlDevice.__index = M.TcdlDevice
 
 local caps = {
+  TCDL_CAP_COMPUTE = tonumber(ffi.C.TCDL_CAP_COMPUTE),
   TCDL_CAP_DMA_READ = tonumber(ffi.C.TCDL_CAP_DMA_READ),
   TCDL_CAP_DMA_WRITE = tonumber(ffi.C.TCDL_CAP_DMA_WRITE),
   TCDL_CAP_DMA_READ_WRITE = tonumber(ffi.C.TCDL_CAP_DMA_READ_WRITE),
