@@ -125,7 +125,13 @@ generate: exercise-check
   done
   printf 'generated %s: %s\n' "${gen}" "${stems[*]}" >&2
 
-[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header is copied to OUT/userspace/include/EXERCISE/ (created)")]
+[doc("run the API generator's unit tests (vdev/api_gen/tests) with the image's python3")]
+api-gen-test:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s /work/vdev/api_gen/tests -t /work/vdev
+
+[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header and every generated header is copied to OUT/userspace/include/EXERCISE/ (created); every generated .lua module goes to OUT/userspace/binding/")]
 userspace: exercise-check generate
   #!/usr/bin/env bash
   set -euo pipefail
@@ -151,10 +157,16 @@ userspace: exercise-check generate
   for header in "${dir}/lib"/*.h; do
     cp "${header}" "${include}/"
   done
-  # api_gen staging, disabled until the generator emits real files:
-  # mkdir -p "{{OUT}}/userspace/binding"
-  # cp "${build}/generated"/*.lua "{{OUT}}/userspace/binding/"
-  # cp "${build}/generated"/*.h "${include}/"
+  # generated artifacts: the Lua base module beside the scripts' modules, the header for the guest prompt
+  if [[ -d "${build}/generated" ]]; then
+    mkdir -p "{{OUT}}/userspace/binding"
+    for lua in "${build}/generated"/*.lua; do
+      cp "${lua}" "{{OUT}}/userspace/binding/"
+    done
+    for header in "${build}/generated"/*.h; do
+      cp "${header}" "${include}/"
+    done
+  fi
   printf 'built %s/userspace: %s\n' "{{OUT}}" "{{EXERCISE}}" >&2
 
 [doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/ for every exercise, not only the active one")]

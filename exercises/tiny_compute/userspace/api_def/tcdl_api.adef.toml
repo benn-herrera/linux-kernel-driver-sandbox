@@ -6,14 +6,16 @@ name = "tcdl_api"
 namespace = "tcdl"
 # version encoded however works for the target language
 version = [0, 5, 0, 0]
+# shared library the script bindings load
+library = "libtiny_compute.so"
 
 [untyped_bit_const]
 cap_compute = 0
 cap_dma_read = 1
 cap_dma_write = 2
 # string lists are composed consts
-cap_read_write = ["cap_dma_read", "cap_dma_write"]
-cap_all = ["cap_compute", "cap_read_write"]
+cap_dma_read_write = ["cap_dma_read", "cap_dma_write"]
+cap_all = ["cap_compute", "cap_dma_read_write"]
 
 [typed_const]
   [typed_const.result]
@@ -34,7 +36,7 @@ cap_all = ["cap_compute", "cap_read_write"]
 [struct]
   [struct.info]
     docstring = "standard pattern is to cache the info with your device handle."
-    version = { type = "u32", docstring = "built api version." }
+    api_version = { type = "u32", docstring = "built api version." }
     device_idx = { type = "u32", docstring = "index passed to create_device" }
     dma_buf_size = "u64" # bare type here is deliberate.
     dma_alignment = { type = "u32", docstring = "dma memory i/o must be aligned to and multiples of this value" }
@@ -64,14 +66,14 @@ cap_all = ["cap_compute", "cap_read_write"]
     docstring = "be sure to check offset and size against dma_alignment"
     return = "result"
     htcd = "handle"
-    psrc = { type = "memory", inref = true }
+    psrc = { type = "memory", inref = true, size = "count" }
     dst_device_offset = "u64"
     count = "u64"
   [function.dma_from_device]
     docstring = "be sure to check offset and size against dma_alignment"
     return = "result"
     htcd = "handle"
-    pdst = { type = "memory", outref = true }
+    pdst = { type = "memory", outref = true, size = "count" }
     src_device_offset = "u64"
     count = "u64"
 

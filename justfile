@@ -140,6 +140,10 @@ driver-vdev: machine-vdev
 driver-clean-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} driver-clean
 
+[doc("run the API generator's unit tests on the dev box (see vdev/justfile api-gen-test)")]
+api-gen-test-vdev: machine-vdev
+  just run-vdev {{VDEV_JUST}} api-gen-test
+
 [doc("generate the active exercise's userspace API artifacts on the dev box (see vdev/justfile generate)")]
 generate-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} generate

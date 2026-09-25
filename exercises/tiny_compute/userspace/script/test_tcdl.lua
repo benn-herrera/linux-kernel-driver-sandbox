@@ -5,7 +5,7 @@ function printf(f, ...)
     print(string.format(f, ...))
 end
 
-local tcdl = require("binding.tcd_lib")
+local tcdl = require("binding.tcdl_api")
 local tcdl_dev = tcdl.TcdlDevice.new(0)
 
 if not tcdl_dev then
@@ -29,8 +29,9 @@ printf("compute_factorial(5): %s err: %s %s", fact, err, tcdl.error_to_str(err))
 result = result and (fact == 5 * 4 * 3 * 2)
 
 if tcdl_dev.info.dma_buf_size ~= 0 and tcdl_dev.info.dma_alignment ~= 0 then
-    local test_dma_str = "Daisy, Daisy, give me your answer, do.012345678"
-    local dma_size = (#test_dma_str + 1)
+    -- binary-safe binding: the string's own length is the transfer size, so it must be aligned
+    local test_dma_str = "Daisy, Daisy, give me your answer, do.0123456789"
+    local dma_size = #test_dma_str
     local text
     assert(dma_size % tcdl_dev.info.dma_alignment == 0)
     assert(dma_size <= tcdl_dev.info.dma_buf_size)

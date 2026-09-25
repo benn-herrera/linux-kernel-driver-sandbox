@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-#include "lib/tcdl_api.h"
+#include "tcdl_api.h"
 
 // unique auto tiny compute device handle
 struct AutoTCDH {

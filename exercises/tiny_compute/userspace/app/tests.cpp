@@ -34,7 +34,7 @@ bool test_compute(tcdl_handle h, const tcdl_info& info) {
   uint32_t fact = 0;
   const auto tr = tcdl_compute_factorial(h, kFactArg, &fact);
   if (tr != TCDL_OK) {
-    fprintf(stderr, "compute_factorial returned error %lu\n", tr);
+    fprintf(stderr, "compute_factorial returned error %u\n", unsigned(tr));
     return false;
   }
 

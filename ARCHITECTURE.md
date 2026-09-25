@@ -313,12 +313,17 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   kernel ioctl header is never generated; its shape is too far from a
   userspace API's, and it is hand-written UAPI under `driver/`.
 - The definition format, as the loader reads it: `[general]` with
-  `name`, `namespace` and `version`; `[untyped_bit_const]` with bit
+  `name`, `namespace`, `version` and `library` (the shared object the
+  script bindings load); `[untyped_bit_const]` with bit
   indices, a string list composing named constants; `[typed_const.<enum>]`
   with explicit values; `[opaque_ref.<name>]`; `[struct.<name>]` with
   typed fields; `[function.<name>]` with `return` and parameters in
   document order, each a bare type string or an inline table with `type`
-  and attributes (`outref`, `inref`, `nullsafe`, `docstring`);
+  and attributes (`outref`, `inref`, `nullsafe`, `docstring`, and for
+  `memory` parameters `size`, naming the sibling parameter that carries
+  the byte count: the Lua binding takes an inref buffer as a string and
+  supplies `#s` as that count, and returns an outref buffer as a string of
+  exactly that many bytes, binary-safe with no NUL appended);
   `[driver_data]` naming the driver header and, under `const_pins`, the
   driver symbol each constant must equal. `docstring` and `return` are
   reserved keys at every level. Type names are one namespace across
@@ -332,10 +337,15 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   would otherwise try to write `__pycache__` beside it. Outputs are build
   products at `out/userspace-build/<name>/generated/`, named by the
   definition's stem: `<stem>.h`, `<stem>_pins.cpp`, `<stem>.lua`. The
-  current package is a stub that validates the definition parses and
-  writes empty placeholders at those paths; the emitters are the next
-  step. A per-API hooks module beside the definition is reserved for
-  peculiarities, its interface to be cut from the first real case.
+  package is `model.py` (load, validate, normalise into frozen
+  dataclasses), `naming.py` (the prefix and case rules), one
+  `emit_*.py` per output, and `tests/` (stdlib `unittest` on a small
+  fixture definition, run by `just api-gen-test-vdev`). `--library`
+  overrides `general.library`. What the emitters do not express:
+  `nullsafe` (documentation only), and the spelling of numbers, which
+  `tomllib` normalises so a hex value comes out decimal. A per-API hooks
+  module beside the definition is reserved for peculiarities, its
+  interface to be cut from the first real case.
 - `just generate-vdev` runs the `generate` recipe in `vdev/justfile`:
   every `api_def/*.adef.toml` through the generator, then `clang++
   -fsyntax-only` on each `<stem>_pins.cpp` with the exercises directory,
@@ -347,14 +357,16 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 - `exercises/cpp.mk` adds `-I$(OUT)/generated`, derived from the `OUT`
   it already receives, so `lib/` and `app/` sources include the generated
   header by name. A quoted include searches the including file's
-  directory first, so while the hand-written `lib/tcdl_api.h` exists it
-  wins over the empty placeholder.
-- Staging of generated artifacts into the initramfs, the Lua base module
-  to `out/userspace/binding/` and the generated header to
-  `out/userspace/include/<name>/`, is written into the `userspace` recipe
-  as commented-out lines and stays disabled until the generator emits
-  real files; enabling it while the placeholders are empty would stage an
-  empty header over the real one.
+  directory first, so a hand-written header of the same name beside a
+  source would shadow the generated one; none exists. The compile rules
+  record header dependencies with `-MMD`, so a regenerated header
+  rebuilds every object that includes it.
+- The `userspace` recipe stages the generated artifacts: every generated
+  `.lua` module to `out/userspace/binding/`, where `require` finds it
+  through `LUA_PATH`, and every generated header to
+  `out/userspace/include/<name>/` for a reader at the guest prompt. The
+  generated Lua module embeds its `ffi.cdef` text, so it reads no header
+  at run time.
 - The implementation of the API (`lib/tcdl_api.cpp`) stays hand-written;
   the generator will emit a stub of it once, to be copied into `lib/` when
   absent, and never touch it after.

@@ -47,11 +47,14 @@ $(OUT)/$(NAME): $(OBJS) $(LINK_DEPS)
 
 $(OUT)/%.o: %.c
 	@mkdir -p $(OUT)
-	$(CC) $(CFLAGS) -MJ $@.json -c -o $@ $<
+	$(CC) $(CFLAGS) -MMD -MP -MJ $@.json -c -o $@ $<
 
 $(OUT)/%.o: %.cpp
 	@mkdir -p $(OUT)
-	$(CXX) $(CXXFLAGS) -MJ $@.json -c -o $@ $<
+	$(CXX) $(CXXFLAGS) -MMD -MP -MJ $@.json -c -o $@ $<
+
+# header dependencies recorded by -MMD, so a regenerated header rebuilds its includers
+-include $(OBJS:.o=.d)
 
 clean:
-	rm -f $(OUT)/$(NAME) $(OBJS) $(OBJS:%=%.json)
+	rm -f $(OUT)/$(NAME) $(OBJS) $(OBJS:%=%.json) $(OBJS:.o=.d)
