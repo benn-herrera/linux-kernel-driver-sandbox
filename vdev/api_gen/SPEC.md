@@ -12,8 +12,10 @@ A userspace API is stated once, in a definition file, and every artifact a
 consumer needs is generated from it: a C header that also carries, for
 the implementation's build only, a compile-time check that the library's
 constants agree with the driver's UAPI header; a header-only C++
-wrapper; a LuaJIT module; and an implementation stub. The definition is the source of truth; the artifacts are build
-products and are never edited.
+wrapper; a LuaJIT module; and an implementation stub. The definition is
+the source of truth; the artifacts are build products and are never
+edited. The definition states meaning, not shape: each output is
+idiomatic for its own language, and no output copies another's form.
 
 ## The definition
 
@@ -145,15 +147,18 @@ standard library, inside `namespace <ns>`. Constants are `inline
 constexpr` under their unprefixed names; each enum is an `enum class`
 over the C values with UpperCamel entries and a `to_string`; each struct
 is an alias of the C typedef. Each opaque ref with a `ctor` is a class
-named from `class` in UpperCamel, move-constructible and not assignable
-(its cached members are const): `create(...)` takes the `ctor`'s
-non-`outref` parameters and returns `std::optional`, with the call's
-result written through an optional out-pointer; every other `ctor`
-outref is a public const member named after its parameter; the
-destructor and `release()` call the `dtor`; one method per function,
+named from `class` in UpperCamel, move-only (move assignment releases
+the current handle first): `create(...)` takes the `ctor`'s
+non-`outref` parameters and returns the class by value, with the call's
+result written through an optional out-pointer; on failure the object
+is falsy (null handle, value-initialised members), so `if (!dev)` is the
+check and no optional is involved; every other `ctor` outref is a
+private member read through a const accessor named after its parameter,
+`dev.info()`; the destructor and `release()` call the `dtor`; one
+method per function,
 other than the `ctor` and `dtor`, whose first parameter is the opaque
-by value, returning the enum and taking `memory` parameters as
-`std::span` so their `size` parameter disappears. Results are
+by value, returning the enum and taking `memory` parameters as the C
+header does, pointer and count in the definition's order. Results are
 `[[nodiscard]]`. An opaque by value is the C handle type; an enum
 `inref` or `outref` is the C typedef. Casts are functional-style, C names
 unqualified, fixed-width integers spelled as the C header spells them.

@@ -1,23 +1,5 @@
 #pragma once
 
-#include <tiny_compute/driver/tcd_ioctl.h>
-
-#include <fcntl.h>
-#include <stdio.h>
-#include <sys/errno.h>
-#include <sys/ioctl.h>
-#include <unistd.h>
-
-#include <algorithm>
-#include <array>
-#include <cstdint>
-#include <cstring>
-#include <map>
-#include <memory>
-#include <string>
-#include <unordered_map>
-#include <vector>
-
 // unique auto file descriptor
 struct AutoFD {
   AutoFD() = default;

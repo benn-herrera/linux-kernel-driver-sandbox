@@ -8,6 +8,14 @@
 #include "tcdl_api.h"
 #undef TCDL_IMPL
 
+#include <fcntl.h>
+#include <sys/errno.h>
+#include <sys/ioctl.h>
+#include <unistd.h>
+
+#include <cstring>
+#include <string>
+
 #include "util.h"
 
 #define IOC_PARAM(V) ((unsigned long)&V)

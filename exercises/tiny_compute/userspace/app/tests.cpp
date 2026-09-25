@@ -2,15 +2,25 @@
  * implementation of userspace tests of Tiny Compute Device Library API
  */
 #include "common.h"
+#include <stdio.h>
+#include <unistd.h>
 #include <cstdint>
+#include <cstring>
 #include <vector>
+
+// binding.tcdl_api.hpp is generated from api_def/tcdl_api.adef.toml by api_gen
+// see vdev/justfile recipe 'generate'
+#include "tcdl_api.hpp"
 
 namespace {
 
-bool test_info(tcdl_handle h, const tcdl_info& info) {
-  if (!h) {
+const char* boolstr(bool v) { return v ? "true" : "false"; }
+
+bool test_info(tcdl::Device& d) {
+  if (!d) {
     return false;
   }
+  const auto& info = d.info();
   printf("API version: 0x%08x\n", info.api_version);
   printf("device index: %u\n", info.device_idx);
   printf("dma buf size: %lu\n", info.dma_buf_size);
@@ -24,21 +34,22 @@ bool test_info(tcdl_handle h, const tcdl_info& info) {
   return result;
 }
 
-bool test_compute(tcdl_handle h, const tcdl_info& info) {
-  if (!h) {
+bool test_compute(tcdl::Device& d) {
+  if (!d) {
     return false;
   }
+  const auto& info = d.info();
 
-  if (!(info.device_caps & TCDL_CAP_COMPUTE)) {
-    fprintf(stderr, "device cap TCDL_CAP_COMPUTE(0x%x) expected, but missing.\n", TCDL_CAP_COMPUTE);
+  if (!(info.device_caps & tcdl::CAP_COMPUTE)) {
+    fprintf(stderr, "device cap TCDL_CAP_COMPUTE(0x%x) expected, but missing.\n", tcdl::CAP_COMPUTE);
     return false;
   }
 
  	static constexpr uint32_t kFactArg = 6;
  	static constexpr uint32_t kFactVal = 6 * 5 * 4 * 3 * 2;
   uint32_t fact = 0;
-  const auto tr = tcdl_compute_factorial(h, kFactArg, &fact);
-  if (tr != TCDL_OK) {
+  const auto tr = d.compute_factorial(kFactArg, fact);
+  if (tr != tcdl::Result::Ok) {
     fprintf(stderr, "compute_factorial returned error %u\n", unsigned(tr));
     return false;
   }
@@ -51,13 +62,14 @@ bool test_compute(tcdl_handle h, const tcdl_info& info) {
   return result;
 }
 
-bool test_dma_round_trip(tcdl_handle h, const tcdl_info& info) {
-  if (!h) {
+bool test_dma_round_trip(tcdl::Device& d) {
+  if (!d) {
     return false;
   }
+  const auto& info = d.info();
   bool result = true;
 
-  if ((info.device_caps & TCDL_CAP_DMA_READ_WRITE) != TCDL_CAP_DMA_READ_WRITE) {
+  if ((info.device_caps & tcdl::CAP_DMA_READ_WRITE) != tcdl::CAP_DMA_READ_WRITE) {
     fprintf(stderr, "DMA read/write capabilities expected but one or both missing.\n");
     return false;
   }
@@ -74,15 +86,15 @@ bool test_dma_round_trip(tcdl_handle h, const tcdl_info& info) {
     pattern[e - i] = uint16_t(i);
   }
 
-  auto tr = tcdl_dma_to_device(h, pattern.data(), 0x0ul, pattern.size() * sizeof(pattern[0]));
-  if (tr != TCDL_OK) {
+  auto tr = d.dma_to_device(pattern.data(), 0x0ul, pattern.size() * sizeof(pattern[0]));
+  if (tr != tcdl::Result::Ok) {
     fprintf(stderr, "dma to device failed.\n");
     return false;
   }
 
   auto readback = vector<uint16_t>(pattern.size(), 0xffff);
-  tr = tcdl_dma_from_device(h, readback.data(), 0x0ul, readback.size() * sizeof(readback[0]));
-  if (tr != TCDL_OK) {
+  tr = d.dma_from_device(readback.data(), 0x0ul, readback.size() * sizeof(readback[0]));
+  if (tr != tcdl::Result::Ok) {
     fprintf(stderr, "dma from device failed.\n");
     return false;
   }
@@ -103,30 +115,39 @@ bool test_dma_round_trip(tcdl_handle h, const tcdl_info& info) {
 bool test_functionality(void) {
  	bool result = true;
 
-  tcdl_info info{};
-
   // continuous session
   printf("*** single continuous session check ***\n");
   {
-  	auto tcdh = create_tcdh(0, &info);
-    result = test_info(tcdh, info) && result;
-  	result = test_compute(tcdh, info) && result;
-  	result = test_dma_round_trip(tcdh, info) && result;
+    tcdl::Result cres{};
+  	auto d = tcdl::Device::create(0, &cres);
+    if (!d) {
+      fprintf(stderr, "failed creating device: %s(%u).\n", tcdl::to_string(cres), unsigned(cres));
+      return false;
+    }
+    result = test_info(d) && result;
+  	result = test_compute(d) && result;
+  	result = test_dma_round_trip(d) && result;
   }
   printf("\n");
   // individual accesses
   printf("*** separate transactions session check ***\n");
   {
-    info = {};
-    result = test_info(create_tcdh(0, &info), info) && result;
-    info = {};
-   	result = test_compute(create_tcdh(0, &info), info) && result;
-    info = {};
-   	result = test_dma_round_trip(create_tcdh(0, &info), info) && result;
+    auto d = tcdl::Device::create(0);
+    result = test_info(d) && result;
+  }
+  {
+    auto d = tcdl::Device::create(0);
+   	result = test_compute(d) && result;
+  }
+  {
+    auto d = tcdl::Device::create(0);
+   	result = test_dma_round_trip(d) && result;
   }
   // verify 2nd device works at all.
-  info = {};
- 	result = test_info(create_tcdh(1, &info), info) && result;
+  {
+    auto d = tcdl::Device::create(1);
+   	result = test_info(d) && result;
+  }
 
 	return result;
 }
