@@ -1,7 +1,8 @@
 // A consumer of support.KITCHEN_SINK's C++ wrapper, run against fake_xy.cpp's libxy.so.
 // Exit codes: 0 all steps passed; 1 create(99) failure result; 2 create(3) and its cached
 // out parameters; 3 send; 4 recv; 5 configure; 6 stats_of; 7 move construction; 8 move assignment;
-// 9 release; 10 destructors freed the slots; 11 PRODUCT; 12 DataLink::create; 13 bump; 14 seek and tune.
+// 9 release; 10 destructors freed the slots; 11 PRODUCT; 12 DataLink::create; 13 bump; 14 seek and tune;
+// 15 annotate (an _optional struct in parameter).
 #include "xy_api.hpp"
 
 #include <cstring>
@@ -76,6 +77,12 @@ int main() {
   if (port.seek(1ULL << 40) != xy::Status::Ok || port.tune(-3, -(1LL << 40), 200, 0.5, next, delta) != xy::Status::Ok ||
       next != -(1LL << 40) - 1 || delta != -4) {
     return 14;
+  }
+
+  xy::Stats note{};
+  note.count = 7;
+  if (port.annotate(&note) != xy::Status::Ok || port.annotate() != xy::Status::Ok) {
+    return 15;
   }
 
   xy::Port moved = std::move(port);

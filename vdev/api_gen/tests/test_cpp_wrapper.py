@@ -44,6 +44,28 @@ class Wrapper(unittest.TestCase):
         self.assertIn("    return Status(xy_send(handle_, buf, buf_count));\n", text)
 
 
+class OptionalParam(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = wrapper(KITCHEN_SINK)
+
+    def test_pointer_with_default_instead_of_reference(self) -> None:
+        self.assertIn("  Status annotate(const Stats* note = nullptr) {\n", self.text)
+        self.assertIn("    return Status(xy_annotate(handle_, note));\n", self.text)
+
+    def test_ctor_cached_outref_unaffected(self) -> None:
+        self.assertIn("static Port create(uint32_t unit, Status* result = nullptr) {\n", self.text)
+
+    def test_default_omitted_when_a_non_optional_parameter_follows(self) -> None:
+        text = wrapper(mutate(
+            KITCHEN_SINK,
+            'limit = { _type = "u32", _ref = "in" }',
+            'limit = { _type = "u32", _ref = "in", _optional = true }',
+        ))
+        self.assertIn(
+            "  Status configure(const Stats& cfg, const uint32_t* limit, Mode mode, xy_token who) {\n", text
+        )
+
+
 class BaseTypes(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)

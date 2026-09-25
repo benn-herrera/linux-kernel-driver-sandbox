@@ -131,27 +131,47 @@ def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -
     """The C++ parameter list and the C call arguments. A `memory` parameter is forwarded
     exactly as the C header declares it, pointer and count; with `outrefs_are_locals`, a
     non-memory out parameter is the caller's local, passed by address and absent from the
-    signature."""
-    sig, call = [], []
+    signature (a constructor's cached outrefs; `_optional` never reaches them). An
+    `_optional` struct or scalar `in`/`out`/`inout` parameter elsewhere is a pointer,
+    forwarded as-is, instead of a reference; defaults are trailing, so it is given
+    `= nullptr` only when every parameter after it in the signature has one too."""
+    # (can this position default to nullptr, its signature text or None if it has none
+    # (a constructor's local outref), the C call argument).
+    entries: list[tuple[bool, str | None, str]] = []
     for p in params:
         if p.type == "memory":
             for c_type, name in emit_c.c_params(api, p):
-                sig.append(f"{c_type} {name}")
-                call.append(name)
+                entries.append((False, f"{c_type} {name}", name))
         elif p.ref == "in":
-            sig.append(f"const {_ref_type(api, p.type)}& {p.name}")
-            call.append(f"&{p.name}")
+            if p.optional:
+                entries.append((True, f"const {_ref_type(api, p.type)}* {p.name}", p.name))
+            else:
+                entries.append((False, f"const {_ref_type(api, p.type)}& {p.name}", f"&{p.name}"))
         elif p.ref is not None:
-            if not (outrefs_are_locals and p.ref == "out"):
-                sig.append(f"{_ref_type(api, p.type)}& {p.name}")
-            call.append(f"&{p.name}")
+            local_outref = outrefs_are_locals and p.ref == "out"
+            if local_outref:
+                entries.append((False, None, f"&{p.name}"))
+            elif p.optional:
+                entries.append((True, f"{_ref_type(api, p.type)}* {p.name}", p.name))
+            else:
+                entries.append((False, f"{_ref_type(api, p.type)}& {p.name}", f"&{p.name}"))
         elif api.kind(p.type) == "enum":
-            sig.append(f"{naming.upper_camel(p.type)} {p.name}")
-            call.append(f"{emit_c.c_type(api, p.type)}({p.name})")
+            entries.append((False, f"{naming.upper_camel(p.type)} {p.name}", f"{emit_c.c_type(api, p.type)}({p.name})"))
         else:
-            sig.append(f"{_ref_type(api, p.type)} {p.name}")
-            call.append(p.name)
-    return sig, call
+            entries.append((False, f"{_ref_type(api, p.type)} {p.name}", p.name))
+
+    sig: list[str] = []
+    can_default = True
+    for can_be_default, text, _ in reversed(entries):
+        if text is None:
+            continue
+        if can_be_default and can_default:
+            sig.append(f"{text} = nullptr")
+        else:
+            sig.append(text)
+            can_default = False
+    sig.reverse()
+    return sig, [call for _, _, call in entries]
 
 
 def _doc(fn: Function) -> str:

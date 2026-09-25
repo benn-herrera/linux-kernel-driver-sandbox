@@ -92,6 +92,11 @@ local function checks()
     assert(type_error("scale must be a number", p.tune, p, -3, -2 ^ 40, 200, "0.5"))
     assert(type_error("must be a number or 64-bit cdata", p.tune, p, -3, "big", 200, 0.5))
 
+    assert(p:annotate(nil) == true)
+    assert(p:annotate({count = 7, bytes = 0}) == true)
+    assert(select(2, p:annotate({count = 1, bytes = 0})) == M.ERR_BUSY)
+    assert(type_error("must be a table or xy_stats or nil", p.annotate, p, 42))
+
     assert(p:destroy_port() == true)
     local again, again_err = p:destroy_port()
     assert(again == nil and again_err == M.ERR_OTHER)

@@ -18,14 +18,20 @@ CDATA_INTEGERS = frozenset({"i64", "u64"})
 
 def validate(api: Api) -> list[str]:
     """Every objection the Lua module has to `api`: a name that is a Lua keyword, a
-    parameter named like a generated local, a constant named like a class, and a class
-    member defined twice."""
+    parameter named like a generated local, `_optional` on a by-value parameter, a
+    constant named like a class, and a class member defined twice."""
     problems = [f"{where}: '{name}' is a Lua keyword" for where, name in api.names() if name in LUA_KEYWORDS]
     problems += [
         f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code binds"
         for fn in api.functions
         for p in fn.params
         if p.name in GENERATED_LOCALS
+    ]
+    problems += [
+        f"function.{fn.name}.{p.name}: optional needs a pointer parameter"
+        for fn in api.functions
+        for p in fn.params
+        if p.optional and p.ref is None
     ]
     classes = [o for o in api.opaque_refs if o.ctor is not None]
     class_names = {naming.upper_camel(o.class_name) for o in classes}
@@ -158,14 +164,25 @@ def _box(api: Api, type_name: str) -> str:
 def _alloc(api: Api, p: Param) -> str:
     """The cdata a non-memory reference parameter's C pointer reaches: an `in` or `inout`
     value arrives as a Lua value (a table or cdata for a struct) and is copied in; an
-    `out` value starts zeroed."""
+    `out` value starts zeroed. An `_optional` `in` or `inout` parameter builds the cdata
+    only when the caller's value is non-nil; `nil` passes straight through, so the FFI
+    turns it into a null pointer. A constructor's cached `out` parameter (also `out`
+    here) ignores `_optional`, since the binding always supplies it."""
+    box = _box(api, p.type)
+    if p.optional and p.ref != "out":
+        return f'    local {p.name} = {p.name} ~= nil and ffi.new("{box}", {p.name}) or nil\n'
     init = "" if p.ref == "out" else f", {p.name}"
-    return f'    local {p.name} = ffi.new("{_box(api, p.type)}"{init})\n'
+    return f'    local {p.name} = ffi.new("{box}"{init})\n'
 
 
 def _read_back(api: Api, p: Param) -> str:
-    """The Lua value of what the C call wrote through a reference parameter."""
-    return _lua_value(api, p.type, p.name if api.kind(p.type) == "struct" else f"{p.name}[0]")
+    """The Lua value of what the C call wrote through a reference parameter. An
+    `_optional` `inout` parameter reads back `nil` when the caller's own value was nil,
+    since `_alloc` never built a pointer for the call to write through."""
+    value = _lua_value(api, p.type, p.name if api.kind(p.type) == "struct" else f"{p.name}[0]")
+    if p.optional and p.ref != "out":
+        return f"({p.name} ~= nil and {value} or nil)"
+    return value
 
 
 def _use_guard(opaque: OpaqueRef) -> str:
@@ -183,22 +200,32 @@ def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
     buffer (a string, or for an `out` count a number), a struct (a table or its own
     cdata type), a by-value opaque (its own cdata type, never bare `cdata`), a 64-bit
     builtin (a number or 64-bit cdata, since a literal like `48ULL` may be `uint64_t`
-    or `int64_t`), or a plain number (every narrower builtin and every enum)."""
+    or `int64_t`), or a plain number (every narrower builtin and every enum). An
+    `_optional` parameter's condition also admits `nil`, and its expected text gains
+    an " or nil" suffix; for `memory` this applies only to `_ref = "in"` (`validate`
+    refuses `_optional` on any other by-value parameter, so it never reaches here)."""
     if param.type == "memory":
         if param.ref == "out":
             return f'type({name}) == "number"', "a number"
-        return f'type({name}) == "string"', "a string"
+        condition, expected = f'type({name}) == "string"', "a string"
+        if param.optional and param.ref == "in":
+            condition, expected = f"{name} == nil or {condition}", f"{expected} or nil"
+        return condition, expected
     kind = api.kind(param.type)
     if kind == "struct":
         c_type = emit_c.c_type(api, param.type)
-        return f'type({name}) == "table" or ffi.istype("{c_type}", {name})', f"a table or {c_type}"
-    if kind == "opaque":
+        condition, expected = f'type({name}) == "table" or ffi.istype("{c_type}", {name})', f"a table or {c_type}"
+    elif kind == "opaque":
         c_type = emit_c.c_type(api, param.type)
-        return f'ffi.istype("{c_type}", {name})', f"a {c_type}"
-    if param.type in CDATA_INTEGERS:
+        condition, expected = f'ffi.istype("{c_type}", {name})', f"a {c_type}"
+    elif param.type in CDATA_INTEGERS:
         condition = f'type({name}) == "number" or ffi.istype("uint64_t", {name}) or ffi.istype("int64_t", {name})'
-        return condition, "a number or 64-bit cdata"
-    return f'type({name}) == "number"', "a number"
+        expected = "a number or 64-bit cdata"
+    else:
+        condition, expected = f'type({name}) == "number"', "a number"
+    if param.optional:
+        condition, expected = f"{name} == nil or {condition}", f"{expected} or nil"
+    return condition, expected
 
 
 def _visible_args(params: tuple[Param, ...]) -> list[Param]:
@@ -281,8 +308,13 @@ def _memory_alloc(p: Param) -> str | None:
 def _memory_count(p: Param) -> str:
     """The byte count passed to the C call and read back for the returned string:
     `#` of the caller's string for `in`; the count local, either the caller's `out`
-    argument or the one `_memory_alloc` captured for `inout`, otherwise."""
-    return f"#{p.name}" if p.ref == "in" else f"{p.name}_count"
+    argument or the one `_memory_alloc` captured for `inout`, otherwise. An `_optional`
+    `in` argument's count is 0 when the caller passed `nil` instead of a string."""
+    if p.ref != "in":
+        return f"{p.name}_count"
+    if p.optional:
+        return f"({p.name} and #{p.name} or 0)"
+    return f"#{p.name}"
 
 
 def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str], list[str], list[str]]:

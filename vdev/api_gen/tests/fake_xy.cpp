@@ -102,6 +102,11 @@ XY_API xy_status xy_open_link(xy_link* plink) {
   return XY_OK;
 }
 
+XY_API xy_status xy_annotate(xy_port hport, const xy_stats* note) {
+  (void)hport;
+  return note == nullptr || note->count == 7 ? XY_OK : XY_ERR_BUSY;
+}
+
 XY_API xy_status xy_reset(void) {
   return XY_OK;
 }

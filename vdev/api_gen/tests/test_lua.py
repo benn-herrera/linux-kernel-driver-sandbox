@@ -104,12 +104,15 @@ class Classes(unittest.TestCase):
             """SPEC.md's accepted-type wording for `p`'s own argument, derived
             independently of the emitter."""
             if p.type == "memory":
-                return "a number" if p.ref == "out" else "a string"
+                base = "a number" if p.ref == "out" else "a string"
+                return f"{base} or nil" if p.optional and p.ref == "in" else base
             kind = self.api.kind(p.type)
             if kind in ("struct", "opaque"):
                 c_type = naming.type_name(self.api.namespace, p.type)
-                return f"a table or {c_type}" if kind == "struct" else f"a {c_type}"
-            return "a number or 64-bit cdata" if p.type in ("i64", "u64") else "a number"
+                base = f"a table or {c_type}" if kind == "struct" else f"a {c_type}"
+            else:
+                base = "a number or 64-bit cdata" if p.type in ("i64", "u64") else "a number"
+            return f"{base} or nil" if p.optional else base
 
         def visible_args(params: tuple[model.Param, ...]) -> list[model.Param]:
             return [p for p in params if p.type == "memory" or p.ref != "out"]
@@ -201,6 +204,34 @@ class Classes(unittest.TestCase):
         lua = emit_lua.module(load(text), source_name="x", library="libxy.so")
         condition = 'type(limit) == "number" or ffi.istype("uint64_t", limit) or ffi.istype("int64_t", limit)'
         self.assertIn(f'assert({condition}, "Port.configure: limit must be a number or 64-bit cdata")', lua)
+
+
+class Optional(unittest.TestCase):
+    def setUp(self) -> None:
+        self.api = load(KITCHEN_SINK)
+        self.text = emit_lua.module(self.api, source_name="xy_api.adef.toml", library="libxy.so")
+
+    def test_argument_assert_admits_nil(self) -> None:
+        self.assertIn(
+            'assert(note == nil or type(note) == "table" or ffi.istype("xy_stats", note), '
+            '"Port.annotate: note must be a table or xy_stats or nil")',
+            self.text,
+        )
+
+    def test_value_is_boxed_only_when_non_nil(self) -> None:
+        self.assertIn('local note = note ~= nil and ffi.new("xy_stats", note) or nil', self.text)
+        self.assertIn("lib.xy_annotate(self._handle, note)", self.text)
+
+    def test_ctor_cached_outref_ignores_the_hint(self) -> None:
+        self.assertNotIn("pstats ~= nil", self.text)
+        self.assertIn('local pstats = ffi.new("xy_stats")\n', self.text)
+
+    def test_by_value_optional_is_refused(self) -> None:
+        text = mutate(KITCHEN_SINK, 'mode = "mode"', 'mode = { _type = "mode", _optional = true }')
+        self.assertEqual(
+            emit_lua.validate(load(text)),
+            ["lua: function.configure.mode: optional needs a pointer parameter"],
+        )
 
 
 class ErrorToStr(unittest.TestCase):

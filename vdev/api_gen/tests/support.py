@@ -193,6 +193,12 @@ data = { _type = "memory", _ref = "inout", _count = "u32" }
 _return = "status"
 plink = { _type = "link", _ref = "out" }
 
+[function.annotate]
+_docstring = "ok iff note is absent or note.count == 7"
+_return = "status"
+hport = "port"
+note = { _type = "stats", _ref = "in", _optional = true }
+
 [function.reset]
 _return = "status"
 
