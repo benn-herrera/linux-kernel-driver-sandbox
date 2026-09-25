@@ -10,72 +10,7 @@ from unittest import mock
 from api_gen import __main__ as api_gen_main
 from api_gen import emit_c, emit_lua, model, naming
 
-FIXTURE = """
-[general]
-namespace = "xy"
-version = [1, 2, 3, 4]
-library = "libxy.so"
-
-[untyped_bit_const]
-feat_a = 0
-feat_b = { value = 3, docstring = "the b feature" }
-feat_ab = { value = ["feat_a", "feat_b"], format = "hex" }
-
-[untyped_const]
-max_units = 16
-magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
-
-[string_const]
-product = "xy widget"
-vendor = { value = "acme", docstring = "who made it" }
-
-[typed_const.status]
-docstring = "call outcome"
-ok = 0
-err_busy = { value = 9, docstring = "try later" }
-err_other = { value = 0x7fffffff, format = "hex" }
-
-[opaque_ref.port]
-ctor = "open_port"
-dtor = "destroy_port"
-
-[opaque_ref.token]
-
-[struct.stats]
-count = { type = "u32", docstring = "items seen" }
-bytes = "u64"
-
-[function.open_port]
-return = "status"
-unit = "u32"
-pport = { type = "port", outref = true }
-pstats = { type = "stats", outref = true, nullsafe = true }
-generation = { type = "u32", outref = true }
-
-[function.destroy_port]
-docstring = "release the port"
-return = "status"
-hport = "port"
-
-[function.send]
-return = "status"
-hport = "port"
-buf = { type = "memory", inref = true, size = "len", docstring = "bytes to send" }
-len = "u64"
-
-[function.spend]
-return = "status"
-htoken = "token"
-
-[driver_data]
-header = "xy/driver/xy_ioctl.h"
-[driver_data.const_pins]
-feat_a = "XYD_FEAT_A"
-"""
-
-
-def load(text: str = FIXTURE) -> model.Api:
-    return model.from_dict(tomllib.loads(text))
+from api_gen.tests.support import FIXTURE, load
 
 
 class ModelErrors(unittest.TestCase):
