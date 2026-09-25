@@ -106,11 +106,10 @@ class Classes(unittest.TestCase):
             if p.type == "memory":
                 return "a number" if p.ref == "out" else "a string"
             kind = self.api.kind(p.type)
-            if kind == "struct":
-                return "a table or cdata"
-            if kind == "opaque":
-                return "cdata"
-            return "a number or cdata" if p.type == "u64" else "a number"
+            if kind in ("struct", "opaque"):
+                c_type = naming.type_name(self.api.namespace, p.type)
+                return f"a table or {c_type}" if kind == "struct" else f"a {c_type}"
+            return "a number or 64-bit cdata" if p.type == "u64" else "a number"
 
         def visible_args(params: tuple[model.Param, ...]) -> list[model.Param]:
             return [p for p in params if p.type == "memory" or p.ref != "out"]
@@ -122,7 +121,7 @@ class Classes(unittest.TestCase):
             for name, params in funcs.items():
                 with self.subTest(cls=cls, function=name):
                     body = re.search(rf"^function M\.{cls}\.{name}\(.*?\nend\n", self.text, re.M | re.S).group()
-                    found = re.findall(r'assert\([^,]+, "([^"]+ must be [^"]+)"\)', body)
+                    found = re.findall(r'"([^"]+ must be [^"]+)"', body)
                     expected = [
                         f"{cls}.{name}: {p.name}{'_count' if p.type == 'memory' and p.ref == 'out' else ''}"
                         f" must be {expected_type(p)}"
@@ -191,6 +190,17 @@ class Classes(unittest.TestCase):
         lines = text.splitlines()
         method = lines.index("function M.DataLink.destroy_port(self)")
         self.assertTrue(lines[method + 1].lstrip().startswith("assert(self._handle ~= nil"))
+
+    def test_release_never_passes_the_ffi_a_bare_nil_handle(self) -> None:
+        body = re.search(r"^function M\.Port\.destroy_port\(self\).*?\nend\n", self.text, re.M | re.S).group()
+        self.assertIn('or ffi.new("xy_port")', body)
+        self.assertNotIn("lib.xy_destroy_port(self._handle)", body)
+
+    def test_u64_argument_accepts_a_number_or_64bit_cdata(self) -> None:
+        text = mutate(KITCHEN_SINK, 'limit = { _type = "u32", _ref = "in" }', 'limit = { _type = "u64", _ref = "in" }')
+        lua = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        condition = 'type(limit) == "number" or ffi.istype("uint64_t", limit) or ffi.istype("int64_t", limit)'
+        self.assertIn(f'assert({condition}, "Port.configure: limit must be a number or 64-bit cdata")', lua)
 
 
 class Refusals(unittest.TestCase):

@@ -45,11 +45,15 @@ local function checks()
     local no_token = ffi.new("xy_token")
     assert(p:configure({count = 5, bytes = 0}, 6, M.SLOW, no_token) == true)
     assert(p:configure(ffi.new("xy_stats", {count = 5}), 6, M.SLOW, no_token) == true)
+    -- A bare struct cdata (fields unset) passes the type check; only its count matters to the library.
+    assert(pcall(p.configure, p, ffi.new("xy_stats"), 6, M.SLOW, no_token))
 
     assert(type_error("must be a string", p.send, p, 42))
     assert(type_error("must be a number", p.recv, p, "5"))
     assert(type_error("must be a number", M.Port.new, "1"))
-    assert(type_error("must be a table or cdata", p.configure, p, "x", 6, M.SLOW, no_token))
+    assert(type_error("must be a table or xy_stats", p.configure, p, "x", 6, M.SLOW, no_token))
+    assert(type_error("must be a table or xy_stats", p.configure, p, ffi.new("uint32_t[1]"), 6, M.SLOW, no_token))
+    assert(type_error("must be a xy_token", p.configure, p, {count = 5, bytes = 0}, 6, M.SLOW, 42))
     assert(type_error("must be a string", p.send, p, nil))
 
     assert(select("#", p:stats_of()) == 4)

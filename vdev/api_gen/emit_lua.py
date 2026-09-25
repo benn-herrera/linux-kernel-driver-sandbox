@@ -134,24 +134,28 @@ def _use_guard(opaque: OpaqueRef) -> str:
     return f'assert(self._handle ~= nil, "{class_display} {reason}")'
 
 
-def _type_check(api: Api, param: Param) -> tuple[tuple[str, ...], str]:
-    """The Lua `type()` results a parameter's own argument may legitimately hold, and
-    the words describing them for an assert message, keyed by the parameter's kind: a
-    memory buffer (a string, or for an `out` count a number), a struct or a by-value
-    opaque (a second handle), u64 (cdata is legitimate beside a number), or a plain
-    number (u32 and every enum)."""
+def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
+    """The Lua condition `name`'s argument must satisfy, and the words describing the
+    expected value for an assert message, keyed by the parameter's kind: a memory
+    buffer (a string, or for an `out` count a number), a struct (a table or its own
+    cdata type), a by-value opaque (its own cdata type, never bare `cdata`), u64 (a
+    number or 64-bit cdata, since a literal like `48ULL` may be `uint64_t` or
+    `int64_t`), or a plain number (u32 and every enum)."""
     if param.type == "memory":
         if param.ref == "out":
-            return ("number",), "a number"
-        return ("string",), "a string"
+            return f'type({name}) == "number"', "a number"
+        return f'type({name}) == "string"', "a string"
     kind = api.kind(param.type)
     if kind == "struct":
-        return ("table", "cdata"), "a table or cdata"
+        c_type = emit_c.c_type(api, param.type)
+        return f'type({name}) == "table" or ffi.istype("{c_type}", {name})', f"a table or {c_type}"
     if kind == "opaque":
-        return ("cdata",), "cdata"
+        c_type = emit_c.c_type(api, param.type)
+        return f'ffi.istype("{c_type}", {name})', f"a {c_type}"
     if param.type == "u64":
-        return ("number", "cdata"), "a number or cdata"
-    return ("number",), "a number"
+        condition = f'type({name}) == "number" or ffi.istype("uint64_t", {name}) or ffi.istype("int64_t", {name})'
+        return condition, "a number or 64-bit cdata"
+    return f'type({name}) == "number"', "a number"
 
 
 def _visible_args(params: tuple[Param, ...]) -> list[Param]:
@@ -166,8 +170,7 @@ def _arg_asserts(api: Api, params: tuple[Param, ...], *, context: str) -> list[s
     lines = []
     for p in _visible_args(params):
         name = _memory_arg(p) if p.type == "memory" else p.name
-        types, expected = _type_check(api, p)
-        condition = " or ".join(f'type({name}) == "{t}"' for t in types)
+        condition, expected = _type_check(api, p, name)
         lines.append(f'    assert({condition}, "{context}: {name} must be {expected}")\n')
     return lines
 
@@ -304,13 +307,15 @@ def _method(api: Api, fn: Function, *, cls: str, class_display: str, guard: str)
 
 def _release(api: Api, dtor: Function, *, cls: str) -> str:
     """The dtor as an explicit method: detaches the GC finalizer if one is attached,
-    releases whatever _handle holds (a nil handle reaches the library as NULL, and the
-    library answers), and drops the handle whatever the result."""
+    releases whatever _handle holds, or else a NULL handle of its own cdata type (the
+    FFI call takes real cdata, never a bare Lua nil; the library answers a NULL handle
+    the same as any other), and drops the handle whatever the result."""
+    opaque_type = emit_c.c_type(api, dtor.params[0].type)
     return (
         f"\n{_doc_lines(dtor)}function {cls}.{dtor.name}(self)\n"
-        "    local handle = self._handle\n"
-        "    if handle ~= nil then\n"
-        "        ffi.gc(handle, nil)\n"
+        f'    local handle = self._handle or ffi.new("{opaque_type}")\n'
+        "    if self._handle ~= nil then\n"
+        "        ffi.gc(self._handle, nil)\n"
         "    end\n"
         f"    local result = lib.{naming.function_name(api.namespace, dtor.name)}(handle)\n"
         "    self._handle = nil\n"
