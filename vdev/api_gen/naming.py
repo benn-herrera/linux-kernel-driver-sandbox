@@ -1,6 +1,11 @@
-"""Target-language names derived from an API namespace and definition keys."""
+"""Target-language names derived from an API namespace and definition names."""
 
-BUILTIN_C_TYPES = {"u32": "uint32_t", "u64": "uint64_t"}
+# Every builtin scalar type and its C spelling, which the C++ wrapper and the Lua FFI share.
+BUILTIN_C_TYPES = {
+    "i8": "int8_t", "u8": "uint8_t", "i16": "int16_t", "u16": "uint16_t",
+    "i32": "int32_t", "u32": "uint32_t", "i64": "int64_t", "u64": "uint64_t",
+    "f32": "float", "f64": "double",
+}
 # A constant group's or enum's `_base_type`, first the default, and its fixed-width C spelling.
 BASE_C_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
 VERSION_KEY = "api_version"
@@ -20,14 +25,14 @@ def count_param(name: str) -> str:
     return f"{name}_count"
 
 
-def const_name(namespace: str, key: str) -> str:
+def const_name(namespace: str, name: str) -> str:
     """C name of a constant: `TCDL_ERR_NO_DEVICE`."""
-    return f"{namespace.upper()}_{key.upper()}"
+    return f"{namespace.upper()}_{name.upper()}"
 
 
-def lua_const_name(key: str) -> str:
+def lua_const_name(name: str) -> str:
     """Lua name of a constant, the module being the namespace: `ERR_NO_DEVICE`."""
-    return key.upper()
+    return name.upper()
 
 
 def version_const(namespace: str) -> str:

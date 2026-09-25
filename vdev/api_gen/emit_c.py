@@ -1,7 +1,18 @@
 """The C header, and the declaration text the Lua module hands to ffi.cdef."""
 
 from api_gen import naming
-from api_gen.model import Api, BitConstGroup, Function, OpaqueRef, Param, Struct, TypedConst
+from api_gen.model import Api, BitConst, Function, Group, OpaqueRef, Param, Struct, TypedConst
+
+C_KEYWORDS = frozenset(
+    "auto break case char const continue default do double else enum extern float for goto if "
+    "inline int long register restrict return short signed sizeof static struct switch typedef "
+    "union unsigned void volatile while".split()
+)
+
+
+def validate(api: Api) -> list[str]:
+    """Every objection the header has to `api`: a name that is a C keyword."""
+    return [f"header: {where}: '{name}' is a C keyword" for where, name in api.names() if name in C_KEYWORDS]
 
 
 def c_type(api: Api, type_name: str) -> str:
@@ -111,7 +122,7 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
             + _anonymous_enum(
                 [
                     (
-                        naming.const_name(ns, c.key),
+                        naming.const_name(ns, c.name),
                         " + ".join(_term_text(ns, p) for p in c.parts) if c.parts else int_literal(c.value, c.format),
                         c.docstring,
                     )
@@ -124,7 +135,7 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
         blocks += [
             _comment_line(g.docstring)
             + "".join(
-                f'static const char {naming.const_name(ns, c.key)}[] = "{c.value}";{_trailing(c.docstring)}\n'
+                f'static const char {naming.const_name(ns, c.name)}[] = "{c.value}";{_trailing(c.docstring)}\n'
                 for c in g.entries
             )
             for g in api.string_const_groups
@@ -159,12 +170,12 @@ def _version_enum(api: Api) -> str:
     return _anonymous_enum([(naming.version_const(api.namespace), value, None)])
 
 
-def _bit_enum(api: Api, group: BitConstGroup) -> str:
+def _bit_enum(api: Api, group: Group[BitConst]) -> str:
     ns = api.namespace
     return _anonymous_enum(
         [
             (
-                naming.const_name(ns, c.key),
+                naming.const_name(ns, c.name),
                 f"(1u << {c.bit})" if c.bit is not None else " | ".join(_term_text(ns, p) for p in c.parts),
                 c.docstring,
             )
@@ -178,7 +189,7 @@ def _typed_enum(api: Api, typed: TypedConst) -> str:
     name = naming.type_name(ns, typed.name)
     entries = typed.entries
     lines = "".join(
-        f"  {naming.const_name(ns, e.key)} = {int_literal(e.value, e.format)}"
+        f"  {naming.const_name(ns, e.name)} = {int_literal(e.value, e.format)}"
         f"{',' if i < len(entries) - 1 else ''}{_trailing(e.docstring)}\n"
         for i, e in enumerate(entries)
     )

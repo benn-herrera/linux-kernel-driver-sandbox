@@ -1,7 +1,7 @@
 import unittest
 
 from api_gen import emit_c, model
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, param_lists
+from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate, param_lists
 
 
 class Preprocessor(unittest.TestCase):
@@ -47,8 +47,18 @@ class Declarations(unittest.TestCase):
 
     def test_type_mapping_follows_the_spec_table(self) -> None:
         rows = (
+            (("i8", None), "int8_t"),
+            (("u8", None), "uint8_t"),
+            (("i16", None), "int16_t"),
+            (("u16", None), "uint16_t"),
+            (("i32", None), "int32_t"),
             (("u32", None), "uint32_t"),
+            (("i64", None), "int64_t"),
             (("u64", None), "uint64_t"),
+            (("f32", None), "float"),
+            (("f64", None), "double"),
+            (("f64", "in"), "const double*"),
+            (("i64", "out"), "int64_t*"),
             (("status", None), "xy_status"),
             (("stats", None), "xy_stats"),
             (("port", None), "xy_port"),
@@ -96,8 +106,8 @@ class Declarations(unittest.TestCase):
     def test_each_constant_group_is_one_enum_under_its_docstring(self) -> None:
         lines = self.text.splitlines()
         for group in (*self.api.bit_const_groups, *self.api.const_groups):
-            first = next(i for i, line in enumerate(lines) if line.startswith(f"  XY_{group.entries[0].key.upper()} = "))
-            with self.subTest(first=group.entries[0].key):
+            first = next(i for i, line in enumerate(lines) if line.startswith(f"  XY_{group.entries[0].name.upper()} = "))
+            with self.subTest(first=group.entries[0].name):
                 self.assertEqual(lines[first - 1], "enum {")
                 self.assertEqual(lines[first - 2], f"/* {group.docstring} */" if group.docstring else "")
                 self.assertEqual(lines[first + len(group.entries)], "};")
@@ -121,6 +131,25 @@ class Declarations(unittest.TestCase):
         self.assertIn("/* items seen */", lines[index_of("uint32_t count;")])
         self.assertIn("buf: bytes to send", lines[index_of("XY_API xy_status xy_send(") - 1])
         self.assertEqual(lines[index_of("XY_API xy_status xy_destroy_port(") - 1], "/* release the port */")
+
+
+class Validate(unittest.TestCase):
+    def test_kitchen_sink_has_no_objection(self) -> None:
+        self.assertEqual(emit_c.validate(load(KITCHEN_SINK)), [])
+
+    def test_c_keyword_as_name(self) -> None:
+        for text, message in (
+            (mutate(FIXTURE, "bytes = ", "int = "), "header: struct.stats.int: 'int' is a C keyword"),
+            (mutate(FIXTURE, 'unit = "u32"', 'restrict = "u32"'),
+             "header: function.open_port.restrict: 'restrict' is a C keyword"),
+            (FIXTURE + '\n[function.while]\n_return = "status"\n', "header: function.while: 'while' is a C keyword"),
+        ):
+            with self.subTest(message=message):
+                self.assertIn(message, emit_c.validate(load(text)))
+
+    def test_other_languages_keywords_are_not_its_objection(self) -> None:
+        self.assertEqual(emit_c.validate(load(mutate(FIXTURE, "bytes = ", "end = "))), [])
+        self.assertEqual(emit_c.validate(load(mutate(FIXTURE, "bytes = ", "class = "))), [])
 
 
 if __name__ == "__main__":

@@ -105,3 +105,16 @@ XY_API xy_status xy_open_link(xy_link* plink) {
 XY_API xy_status xy_reset(void) {
   return XY_OK;
 }
+
+XY_API xy_status xy_seek(xy_port hport, uint64_t offset) {
+  (void)hport;
+  return offset == 1ULL << 40 ? XY_OK : XY_ERR_BUSY;
+}
+
+XY_API xy_status xy_tune(xy_port hport, int32_t delta, int64_t big, uint8_t small, double scale, int64_t* pnext,
+                         int32_t* pdelta) {
+  (void)hport;
+  *pnext = big - 1;
+  *pdelta = delta - 1;
+  return delta == -3 && big == -(1LL << 40) && small == 200 && scale == 0.5 ? XY_OK : XY_ERR_BUSY;
+}

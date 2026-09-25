@@ -41,6 +41,23 @@ class Generate(unittest.TestCase):
             self.assertEqual(stderr.count("\n"), 1)
             self.assertFalse(generated.exists())
 
+    def test_every_emitter_objection_is_reported_in_one_run_and_nothing_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.adef.toml"
+            text = mutate(mutate(FIXTURE, "bytes = ", "restrict = "), 'unit = "u32"', 'result = "u32"')
+            definition.write_text(text, encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "tiny_compute"])
+            self.assertEqual(code, 2)
+            self.assertEqual(
+                stderr.splitlines(),
+                [
+                    f"api_gen: {definition}: header: struct.stats.restrict: 'restrict' is a C keyword",
+                    f"api_gen: {definition}: lua: function.open_port.result: 'result' is a name the generated code binds",
+                ],
+            )
+            self.assertFalse(generated.exists())
+
     def test_library_flag_overrides_the_definition(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             definition = Path(tmp) / "xy_api.adef.toml"

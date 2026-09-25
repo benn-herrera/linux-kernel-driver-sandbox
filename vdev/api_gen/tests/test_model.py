@@ -10,26 +10,6 @@ class ModelErrors(unittest.TestCase):
             load(text)
         self.assertIn(fragment, str(caught.exception))
 
-    def test_keyword_as_name(self) -> None:
-        for text in (
-            mutate(FIXTURE, "bytes = ", "end = "),
-            mutate(FIXTURE, 'unit = "u32"', 'int = "u32"'),
-            FIXTURE + '\n[function.end]\n_return = "status"\n',
-        ):
-            self.assert_error(text, "keyword or a name")
-
-    def test_cpp_keyword_as_name(self) -> None:
-        for text in (
-            mutate(FIXTURE, "unit = ", "class = "),
-            mutate(FIXTURE, "count = ", "template = "),
-            FIXTURE + '\n[function.new]\n_return = "status"\n',
-        ):
-            self.assert_error(text, "keyword")
-
-    def test_generated_locals_reserved_for_parameters_only(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'unit = "u32"', 'result = "u32"'), "keyword or a name")
-        load(mutate(FIXTURE, "status", "result"))
-
     def test_function_named_like_a_type(self) -> None:
         self.assert_error(FIXTURE + '\n[function.stats]\n_return = "status"\n', "already defined by struct.stats")
 
@@ -149,9 +129,12 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, 'product = "xy', '_product = "xy'), "string_const[0]: unknown key(s) _product")
         self.assert_error(mutate(FIXTURE, '_return = "status"\nunit', "unit"), "missing '_return'")
 
-    def test_docstring_is_a_member_name_and_return_a_keyword(self) -> None:
+    def test_docstring_is_a_member_name(self) -> None:
         load(mutate(FIXTURE, "bytes = ", "docstring = "))
-        self.assert_error(mutate(FIXTURE, "bytes = ", "return = "), "keyword")
+
+    def test_keywords_are_the_emitters_concern(self) -> None:
+        load(mutate(FIXTURE, "bytes = ", "return = "))
+        load(mutate(FIXTURE, 'unit = "u32"', 'result = "u32"'))
 
     def test_single_table_constants_are_rejected(self) -> None:
         for key in ("untyped_const", "untyped_bit_const", "string_const"):
@@ -176,13 +159,35 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(
             mutate(FIXTURE, '_docstring = "call outcome"', '_base_type = "int"'), "typed_const.status._base_type"
         )
+
         u32 = '[[untyped_const]]\n_base_type = "u32"\n'
         self.assert_error(mutate(FIXTURE, "[[untyped_const]]\nmax_units = 16", u32 + "max_units = -16"), "must not be negative")
         self.assert_error(mutate(FIXTURE, "[[untyped_const]]\nmax_units = 16", u32 + "max_units = 0x80000000"), "int32 range")
         self.assertEqual(load(mutate(FIXTURE, "[[untyped_const]]\n", u32)).const_groups[0].base_type, "u32")
 
+    def test_float_constants_are_not_implemented(self) -> None:
+        for text, message in (
+            (mutate(FIXTURE, "max_units = 16", "max_units = 1.5"), "untyped_const.max_units: f64 constants are not implemented"),
+            (mutate(FIXTURE, "[[untyped_const]]\n", '[[untyped_const]]\n_base_type = "f32"\n'),
+             "untyped_const[0]._base_type: f32 constants are not implemented"),
+        ):
+            with self.subTest(message=message), self.assertRaises(model.NotImplementedDefinition) as caught:
+                load(text)
+            self.assertEqual(str(caught.exception), message)
+
+    def test_float_bit_flags_and_enums_are_errors(self) -> None:
+        for needle, replacement in (
+            ("[[untyped_bit_const]]\n", '[[untyped_bit_const]]\n_base_type = "f64"\n'),
+            ('_docstring = "call outcome"', '_base_type = "f64"'),
+        ):
+            with self.subTest(replacement=replacement):
+                with self.assertRaises(model.DefinitionError) as caught:
+                    load(mutate(FIXTURE, needle, replacement))
+                self.assertNotIsInstance(caught.exception, model.NotImplementedDefinition)
+                self.assertIn("_base_type must be one of i32, u32", str(caught.exception))
+
     def test_unknown_type(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'unit = "u32"', 'unit = "u16"'), "unknown type 'u16'")
+        self.assert_error(mutate(FIXTURE, 'unit = "u32"', 'unit = "u128"'), "unknown type 'u128'")
 
     def test_unknown_return_type(self) -> None:
         self.assert_error(mutate(FIXTURE, '_docstring = "release the port"\n_return = "status"',
@@ -216,7 +221,7 @@ class ModelErrors(unittest.TestCase):
 
     def test_plain_group_composes_by_addition(self) -> None:
         api = load(mutate(FIXTURE, "max_units = 16", 'max_units = 16\ntotal = ["max_units", "4"]'))
-        self.assertEqual(next(c for c in api.consts if c.key == "total").value, 20)
+        self.assertEqual(next(c for c in api.consts if c.name == "total").value, 20)
 
     def test_composed_entry_dict_form_equals_naked_list(self) -> None:
         api = load(KITCHEN_SINK)
@@ -228,8 +233,10 @@ class ModelErrors(unittest.TestCase):
 
     def test_memory_count(self) -> None:
         self.assert_error(mutate(FIXTURE, '_count = "u64", ', ""),
-                          "function.send.buf: a 'memory' parameter requires _count, one of u32, u64")
-        self.assert_error(mutate(FIXTURE, '_count = "u64"', '_count = "port"'), "requires _count, one of u32, u64")
+                          "function.send.buf: a 'memory' parameter requires _count, one of u8, u16, u32, u64")
+        self.assert_error(mutate(FIXTURE, '_count = "u64"', '_count = "port"'), "requires _count, one of u8, u16, u32, u64")
+        self.assert_error(mutate(FIXTURE, '_count = "u64"', '_count = "i64"'), "requires _count, one of u8, u16, u32, u64")
+        self.assert_error(mutate(FIXTURE, '_count = "u64"', '_count = "f64"'), "requires _count, one of u8, u16, u32, u64")
         self.assert_error(mutate(FIXTURE, 'unit = "u32"', 'unit = { _type = "u32", _count = "u32" }'),
                           "function.open_port.unit._count: only a 'memory' parameter has a count")
         self.assert_error(mutate(FIXTURE, 'hport = "port"\nbuf', 'buf_count = "u32"\nbuf'),
@@ -303,32 +310,32 @@ class Shape(unittest.TestCase):
     def test_groups_in_document_order_and_flat_accessors_span_them(self) -> None:
         api = load(KITCHEN_SINK)
         self.assertEqual(
-            [(g.docstring, g.base_type, [c.key for c in g.entries]) for g in api.bit_const_groups],
+            [(g.docstring, g.base_type, [c.name for c in g.entries]) for g in api.bit_const_groups],
             [("feature flags", "i32", ["feat_a", "feat_b", "feat_ab", "feat_lit"]), (None, "u32", ["feat_all"])],
         )
         self.assertEqual(
-            [(g.docstring, g.base_type, [c.key for c in g.entries]) for g in api.const_groups],
+            [(g.docstring, g.base_type, [c.name for c in g.entries]) for g in api.const_groups],
             [("limits", "i32", ["max_units", "extra", "max_total", "neg"]), ("wire values", "u32", ["magic"])],
         )
         self.assertEqual(
-            [c.key for c in api.bit_consts], ["feat_a", "feat_b", "feat_ab", "feat_lit", "feat_all"]
+            [c.name for c in api.bit_consts], ["feat_a", "feat_b", "feat_ab", "feat_lit", "feat_all"]
         )
-        self.assertEqual([c.key for c in api.consts], ["max_units", "extra", "max_total", "neg", "magic"])
+        self.assertEqual([c.name for c in api.consts], ["max_units", "extra", "max_total", "neg", "magic"])
         self.assertEqual(api.bit_consts[-1].parts, ("feat_ab",))
         self.assertEqual({t.name: t.base_type for t in api.typed_consts}, {"status": "i32", "mode": "u32"})
         self.assertEqual(
-            [(g.docstring, [c.key for c in g.entries]) for g in api.string_const_groups],
+            [(g.docstring, [c.name for c in g.entries]) for g in api.string_const_groups],
             [(None, ["product", "vendor"])],
         )
-        self.assertEqual([c.key for c in api.string_consts], ["product", "vendor"])
+        self.assertEqual([c.name for c in api.string_consts], ["product", "vendor"])
 
     def test_composed_values_sum(self) -> None:
         api = load(KITCHEN_SINK)
-        by_key = {c.key: c.value for c in api.bit_consts}
-        self.assertEqual(by_key["feat_ab"], 9)
-        self.assertEqual(by_key["feat_lit"], 5)
-        self.assertEqual(by_key["feat_all"], 9)
-        plain = {c.key: c.value for c in api.consts}
+        by_name = {c.name: c.value for c in api.bit_consts}
+        self.assertEqual(by_name["feat_ab"], 9)
+        self.assertEqual(by_name["feat_lit"], 5)
+        self.assertEqual(by_name["feat_all"], 9)
+        plain = {c.name: c.value for c in api.consts}
         self.assertEqual(plain["max_total"], 20)
 
     def test_version_value(self) -> None:

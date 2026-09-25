@@ -2,7 +2,44 @@
 per opaque ref that names a constructor."""
 
 from api_gen import emit_c, naming
-from api_gen.model import Api, DefinitionError, Function, OpaqueRef, Param
+from api_gen.model import Api, Function, OpaqueRef, Param
+
+LUA_KEYWORDS = frozenset(
+    "and break do else elseif end false for function goto if in local nil not or repeat return "
+    "then true until while".split()
+)
+# Names the generated Lua binds as locals beside a function's parameters. Other names
+# never share a scope with them, so an enum may be called `result`.
+GENERATED_LOCALS = frozenset({"self", "result", "lib", "M", "ffi", "indent"})
+# LuaJIT hands a 64-bit integer back as cdata, since a Lua number is a double; every
+# other builtin scalar, the floating-point ones included, converts to a number exactly.
+CDATA_INTEGERS = frozenset({"i64", "u64"})
+
+
+def validate(api: Api) -> list[str]:
+    """Every objection the Lua module has to `api`: a name that is a Lua keyword, a
+    parameter named like a generated local, a constant named like a class, and a class
+    member defined twice."""
+    problems = [f"{where}: '{name}' is a Lua keyword" for where, name in api.names() if name in LUA_KEYWORDS]
+    problems += [
+        f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code binds"
+        for fn in api.functions
+        for p in fn.params
+        if p.name in GENERATED_LOCALS
+    ]
+    classes = [o for o in api.opaque_refs if o.ctor is not None]
+    class_names = {naming.upper_camel(o.class_name) for o in classes}
+    problems += [
+        f"M.{name} would be both a constant and a class"
+        for _, literals in _constant_sections(api)
+        for name, _ in literals
+        if name in class_names
+    ]
+    for o in classes:
+        members = ["new", "_handle", *_method_names(api, o), *(p.name for p in _cached(_ctor(api, o), o))]
+        repeated = dict.fromkeys(m for i, m in enumerate(members) if members.index(m) != i)
+        problems += [f"M.{naming.upper_camel(o.class_name)}.{m} would be defined more than once" for m in repeated]
+    return [f"lua: {p}" for p in problems]
 
 
 def module(api: Api, *, source_name: str, library: str) -> str:
@@ -14,18 +51,13 @@ def module(api: Api, *, source_name: str, library: str) -> str:
         f'\nlocal lib = ffi.load("{library}")\n\nlocal M = {{}}\n\n',
     ]
 
-    sections = _constant_sections(api)
-    classes = {naming.upper_camel(o.class_name) for o in api.opaque_refs if o.ctor is not None}
-    clash = next((name for _, literals in sections for name, _ in literals if name in classes), None)
-    if clash is not None:
-        raise DefinitionError(f"Lua module: M.{clash} would be both a constant and a class")
-    for doc, literals in sections:
+    for doc, literals in _constant_sections(api):
         out += [f"-- {line}\n" for line in (doc or "").splitlines()]
         out += [f"M.{name} = {value}\n" for name, value in literals]
 
     for typed in api.typed_consts:
         names = "".join(
-            f'    [M.{c}] = "{c}",\n' for c in (naming.lua_const_name(e.key) for e in typed.entries)
+            f'    [M.{c}] = "{c}",\n' for c in (naming.lua_const_name(e.name) for e in typed.entries)
         )
         out.append(
             f"\nlocal {typed.name}_names = {{\n{names}}}\n"
@@ -56,17 +88,17 @@ def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]
     name = naming.lua_const_name
     sections = [(None, [(name(naming.VERSION_KEY), _version_literal(api))])]
     sections += [
-        (g.docstring, [(name(c.key), emit_c.int_literal(c.value, c.format)) for c in g.entries])
+        (g.docstring, [(name(c.name), emit_c.int_literal(c.value, c.format)) for c in g.entries])
         for g in api.bit_const_groups
     ]
     sections += [
-        (g.docstring, [(name(c.key), emit_c.int_literal(c.value, c.format)) for c in g.entries])
+        (g.docstring, [(name(c.name), emit_c.int_literal(c.value, c.format)) for c in g.entries])
         for g in api.const_groups
     ]
-    rest = [(name(e.key), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
+    rest = [(name(e.name), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
     sections.append((None, rest))
     sections += [
-        (g.docstring, [(name(c.key), f'"{c.value}"') for c in g.entries])
+        (g.docstring, [(name(c.name), f'"{c.value}"') for c in g.entries])
         for g in api.string_const_groups
     ]
     return sections
@@ -83,7 +115,7 @@ def _doc_lines(fn: Function) -> str:
 def _ok_const(api: Api, fn: Function) -> str:
     typed = next(t for t in api.typed_consts if t.name == fn.returns)
     ok = next(e for e in typed.entries if e.value == 0)
-    return naming.lua_const_name(ok.key)
+    return naming.lua_const_name(ok.name)
 
 
 def _is_opaque_value(param: Param, opaque: str) -> bool:
@@ -91,9 +123,10 @@ def _is_opaque_value(param: Param, opaque: str) -> bool:
 
 
 def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> str:
-    """u32 and enum values become Lua numbers, a struct a table of its fields converted
-    the same way (nested structs included); u64 and opaque values stay cdata. `indent`
-    is the indentation of the line the expression starts on."""
+    """Enum values and builtins narrower than 64 bits become Lua numbers, a struct a
+    table of its fields converted the same way (nested structs included); 64-bit and
+    opaque values stay cdata. `indent` is the indentation of the line the expression
+    starts on."""
     kind = api.kind(type_name)
     if kind == "struct":
         fields = next(s for s in api.structs if s.name == type_name).fields
@@ -102,7 +135,8 @@ def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> 
             f"{inner}{f.name} = {_lua_value(api, f.type, f'{expr}.{f.name}', indent=inner)},\n" for f in fields
         )
         return f"{{\n{body}{indent}}}"
-    return f"tonumber({expr})" if type_name == "u32" or kind == "enum" else expr
+    as_number = kind == "enum" or (kind == "builtin" and type_name not in CDATA_INTEGERS)
+    return f"tonumber({expr})" if as_number else expr
 
 
 def _box(api: Api, type_name: str) -> str:
@@ -138,9 +172,9 @@ def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
     """The Lua condition `name`'s argument must satisfy, and the words describing the
     expected value for an assert message, keyed by the parameter's kind: a memory
     buffer (a string, or for an `out` count a number), a struct (a table or its own
-    cdata type), a by-value opaque (its own cdata type, never bare `cdata`), u64 (a
-    number or 64-bit cdata, since a literal like `48ULL` may be `uint64_t` or
-    `int64_t`), or a plain number (u32 and every enum)."""
+    cdata type), a by-value opaque (its own cdata type, never bare `cdata`), a 64-bit
+    builtin (a number or 64-bit cdata, since a literal like `48ULL` may be `uint64_t`
+    or `int64_t`), or a plain number (every narrower builtin and every enum)."""
     if param.type == "memory":
         if param.ref == "out":
             return f'type({name}) == "number"', "a number"
@@ -152,7 +186,7 @@ def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
     if kind == "opaque":
         c_type = emit_c.c_type(api, param.type)
         return f'ffi.istype("{c_type}", {name})', f"a {c_type}"
-    if param.type == "u64":
+    if param.type in CDATA_INTEGERS:
         condition = f'type({name}) == "number" or ffi.istype("uint64_t", {name}) or ffi.istype("int64_t", {name})'
         return condition, "a number or 64-bit cdata"
     return f'type({name}) == "number"', "a number"
@@ -175,20 +209,36 @@ def _arg_asserts(api: Api, params: tuple[Param, ...], *, context: str) -> list[s
     return lines
 
 
-def _class(api: Api, opaque: OpaqueRef) -> str:
-    class_display = naming.upper_camel(opaque.class_name)
-    cls = f"M.{class_display}"
-    ctor = next(f for f in api.functions if f.name == opaque.ctor)
-    methods = [
+def _ctor(api: Api, opaque: OpaqueRef) -> Function:
+    return next(f for f in api.functions if f.name == opaque.ctor)
+
+
+def _methods(api: Api, opaque: OpaqueRef) -> list[Function]:
+    """Functions other than the ctor and dtor whose first parameter is the opaque by value."""
+    return [
         f
         for f in api.functions
         if f.name not in (opaque.ctor, opaque.dtor) and f.params and _is_opaque_value(f.params[0], opaque.name)
     ]
-    method_names = [f.name for f in methods]
-    if opaque.dtor is not None:
-        method_names.append(opaque.dtor)
+
+
+def _method_names(api: Api, opaque: OpaqueRef) -> list[str]:
+    """Every method of the class, the dtor's included."""
+    names = [f.name for f in _methods(api, opaque)]
+    return names if opaque.dtor is None else [*names, opaque.dtor]
+
+
+def _cached(ctor: Function, opaque: OpaqueRef) -> list[Param]:
+    """The ctor's `out` parameters other than the handle, each cached on the object."""
+    return [p for p in ctor.params if p.ref == "out" and p.type != opaque.name]
+
+
+def _class(api: Api, opaque: OpaqueRef) -> str:
+    class_display = naming.upper_camel(opaque.class_name)
+    cls = f"M.{class_display}"
+    methods = _methods(api, opaque)
     out = [f"\n{cls} = {{}}\n{cls}.__index = {cls}\n"]
-    out.append(_constructor(api, ctor, opaque, cls=cls, class_display=class_display, method_names=method_names))
+    out.append(_constructor(api, _ctor(api, opaque), opaque, cls=cls, class_display=class_display))
     guard = _use_guard(opaque)
     out += [_method(api, fn, cls=cls, class_display=class_display, guard=guard) for fn in methods]
     if opaque.dtor is not None:
@@ -263,17 +313,11 @@ def _result_check(api: Api, fn: Function) -> str:
     return f"    if result ~= M.{_ok_const(api, fn)} then\n        return nil, result\n    end\n"
 
 
-def _constructor(
-    api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, class_display: str, method_names: list[str]
-) -> str:
+def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, class_display: str) -> str:
     """`new`, which caches every out parameter other than the handle on the object under
     its parameter name."""
     handle = next(p for p in fn.params if p.type == opaque.name and p.ref == "out")
-    cached = [p for p in fn.params if p.ref == "out" and p is not handle]
-    members = ["new", "_handle", *method_names, *(p.name for p in cached)]
-    duplicate = next((m for m in members if members.count(m) > 1), None)
-    if duplicate is not None:
-        raise DefinitionError(f"Lua module: {cls}.{duplicate} would be defined more than once")
+    cached = _cached(fn, opaque)
     args, call, allocs, _ = _marshal(api, fn.params)
     out = [
         _doc_lines(fn),

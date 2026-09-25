@@ -1,7 +1,7 @@
 import re
 import unittest
 
-from api_gen import emit_cpp_wrapper, model, naming
+from api_gen import emit_cpp_wrapper, naming
 from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, load, mutate
 
 
@@ -56,8 +56,8 @@ class BaseTypes(unittest.TestCase):
         lines = self.text.splitlines()
         for group in (*self.api.bit_const_groups, *self.api.const_groups):
             base = C_BASE_TYPES[group.base_type]
-            expected |= {c.key.upper(): base for c in group.entries}
-            key = group.entries[0].key.upper()
+            expected |= {c.name.upper(): base for c in group.entries}
+            key = group.entries[0].name.upper()
             first = lines.index(f"inline constexpr {base} {key} = XY_{key};")
             self.assertEqual(lines[first - 1], f"// {group.docstring}" if group.docstring else "")
         self.assertEqual(types, expected)
@@ -69,17 +69,35 @@ class BaseTypes(unittest.TestCase):
             )
 
 
-class Refusals(unittest.TestCase):
-    def test_member_collision_is_an_error(self) -> None:
-        with self.assertRaises(model.DefinitionError) as caught:
-            wrapper(mutate(FIXTURE, "[function.send]", "[function.release]"))
-        self.assertIn("C++ wrapper: class Port: release would be defined more than once", str(caught.exception))
+class Validate(unittest.TestCase):
+    def validate(self, text: str) -> list[str]:
+        return emit_cpp_wrapper.validate(load(text))
 
-    def test_namespace_collision_is_an_error(self) -> None:
-        with self.assertRaises(model.DefinitionError) as caught:
-            wrapper(mutate(FIXTURE, "[[untyped_const]]\n", "[[untyped_const]]\nx = 1\n") + '\n[struct.x]\nv = "u32"\n')
-        self.assertIn("C++ wrapper: namespace xy: X would be defined more than once", str(caught.exception))
+    def test_kitchen_sink_has_no_objection(self) -> None:
+        self.assertEqual(self.validate(KITCHEN_SINK), [])
 
+    def test_cpp_keyword_as_name(self) -> None:
+        for text, message in (
+            (mutate(FIXTURE, "unit = ", "class = "), "wrapper: function.open_port.class: 'class' is a C++ keyword"),
+            (mutate(FIXTURE, "count = { _type", "template = { _type"), "wrapper: struct.stats.template: 'template' is a C++ keyword"),
+            (mutate(FIXTURE, "bytes = ", "int = "), "wrapper: struct.stats.int: 'int' is a C++ keyword"),
+            (FIXTURE + '\n[function.new]\n_return = "status"\n', "wrapper: function.new: 'new' is a C++ keyword"),
+        ):
+            with self.subTest(message=message):
+                self.assertIn(message, self.validate(text))
+
+    def test_lua_keyword_is_not_its_objection(self) -> None:
+        self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "end = ")), [])
+
+    def test_member_collision(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, "[function.send]", "[function.release]")),
+            ["wrapper: class Port: release would be defined more than once"],
+        )
+
+    def test_namespace_collision(self) -> None:
+        text = mutate(FIXTURE, "[[untyped_const]]\n", "[[untyped_const]]\nx = 1\n") + '\n[struct.x]\nv = "u32"\n'
+        self.assertEqual(self.validate(text), ["wrapper: namespace xy: X would be defined more than once"])
 
 if __name__ == "__main__":
     unittest.main()

@@ -61,8 +61,8 @@ class Constants(unittest.TestCase):
     def test_group_docstring_is_a_comment_above_its_constants(self) -> None:
         lines = self.text.splitlines()
         for group in (*self.api.bit_const_groups, *self.api.const_groups):
-            first = next(i for i, line in enumerate(lines) if line.startswith(f"M.{group.entries[0].key.upper()} = "))
-            with self.subTest(first=group.entries[0].key):
+            first = next(i for i, line in enumerate(lines) if line.startswith(f"M.{group.entries[0].name.upper()} = "))
+            with self.subTest(first=group.entries[0].name):
                 if group.docstring:
                     self.assertEqual(lines[first - 1], f"-- {group.docstring}")
                 else:
@@ -109,7 +109,7 @@ class Classes(unittest.TestCase):
             if kind in ("struct", "opaque"):
                 c_type = naming.type_name(self.api.namespace, p.type)
                 return f"a table or {c_type}" if kind == "struct" else f"a {c_type}"
-            return "a number or 64-bit cdata" if p.type == "u64" else "a number"
+            return "a number or 64-bit cdata" if p.type in ("i64", "u64") else "a number"
 
         def visible_args(params: tuple[model.Param, ...]) -> list[model.Param]:
             return [p for p in params if p.type == "memory" or p.ref != "out"]
@@ -203,19 +203,50 @@ class Classes(unittest.TestCase):
         self.assertIn(f'assert({condition}, "Port.configure: limit must be a number or 64-bit cdata")', lua)
 
 
-class Refusals(unittest.TestCase):
-    def test_constant_and_class_name_clash_is_rejected(self) -> None:
-        text = mutate(FIXTURE, "max_units = 16", "io = 16")
-        api = load(mutate(text, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "i_o"'))  # both M.IO
-        with self.assertRaises(model.DefinitionError):
-            emit_lua.module(api, source_name="x", library="libxy.so")
-
+class ErrorToStr(unittest.TestCase):
     def test_no_error_to_str_with_two_return_enums(self) -> None:
         text = mutate(FIXTURE, '[function.spend]\n_return = "status"', '[function.spend]\n_return = "other"')
         text = mutate(text, "[opaque_ref.port]", "[typed_const.other]\nfine = 0\n\n[opaque_ref.port]")
         text = emit_lua.module(load(text), source_name="x", library="libxy.so")
         self.assertNotIn("error_to_str", text)
         self.assertIn("function M.other_to_str(value)", text)
+
+
+class Validate(unittest.TestCase):
+    def validate(self, text: str) -> list[str]:
+        return emit_lua.validate(load(text))
+
+    def test_kitchen_sink_has_no_objection(self) -> None:
+        self.assertEqual(self.validate(KITCHEN_SINK), [])
+
+    def test_lua_keyword_as_name(self) -> None:
+        for text, message in (
+            (mutate(FIXTURE, "bytes = ", "end = "), "lua: struct.stats.end: 'end' is a Lua keyword"),
+            (mutate(FIXTURE, 'unit = "u32"', 'local = "u32"'), "lua: function.open_port.local: 'local' is a Lua keyword"),
+            (FIXTURE + '\n[function.end]\n_return = "status"\n', "lua: function.end: 'end' is a Lua keyword"),
+        ):
+            with self.subTest(message=message):
+                self.assertIn(message, self.validate(text))
+
+    def test_c_and_cpp_keywords_are_not_its_objection(self) -> None:
+        self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "int = ")), [])
+        self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "class = ")), [])
+
+    def test_generated_locals_are_reserved_for_parameters_only(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, 'unit = "u32"', 'result = "u32"')),
+            ["lua: function.open_port.result: 'result' is a name the generated code binds"],
+        )
+        self.assertEqual(self.validate(mutate(FIXTURE, "status", "result")), [])
+
+    def test_constant_and_class_name_clash(self) -> None:
+        text = mutate(FIXTURE, "max_units = 16", "io = 16")
+        text = mutate(text, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "i_o"')  # both M.IO
+        self.assertEqual(self.validate(text), ["lua: M.IO would be both a constant and a class"])
+
+    def test_member_collision(self) -> None:
+        text = mutate(FIXTURE, 'generation = { _type = "u32", _ref = "out" }', 'send = { _type = "u32", _ref = "out" }')
+        self.assertEqual(self.validate(text), ["lua: M.Port.send would be defined more than once"])
 
 
 if __name__ == "__main__":

@@ -196,6 +196,22 @@ plink = { _type = "link", _ref = "out" }
 [function.reset]
 _return = "status"
 
+[function.seek]
+_return = "status"
+hport = "port"
+offset = "u64"
+
+[function.tune]
+_docstring = "pnext = big - 1, pdelta = delta - 1; ok iff delta == -3, big == -(1 << 40), small == 200, scale == 0.5"
+_return = "status"
+hport = "port"
+delta = "i32"
+big = "i64"
+small = "u8"
+scale = "f64"
+pnext = { _type = "i64", _ref = "out" }
+pdelta = { _type = "i32", _ref = "out" }
+
 [_driver_data]
 _header = "xy/driver/xy_ioctl.h"
 [_driver_data.const_pins]
@@ -241,8 +257,8 @@ def expected_constants(api: model.Api) -> dict[str, int | str]:
     values (a composed entry's sum was already computed, and a bit group's overlap-
     checked, by the loader)."""
     out: dict[str, int | str] = {"API_VERSION": api.version_value()}
-    out |= {c.key.upper(): c.value for c in api.bit_consts}
-    out |= {c.key.upper(): c.value for c in api.consts}
-    out |= {e.key.upper(): e.value for t in api.typed_consts for e in t.entries}
-    out |= {c.key.upper(): c.value for c in api.string_consts}
+    out |= {c.name.upper(): c.value for c in api.bit_consts}
+    out |= {c.name.upper(): c.value for c in api.consts}
+    out |= {e.name.upper(): e.value for t in api.typed_consts for e in t.entries}
+    out |= {c.name.upper(): c.value for c in api.string_consts}
     return out

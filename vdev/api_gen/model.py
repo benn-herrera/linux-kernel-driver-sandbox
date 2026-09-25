@@ -10,31 +10,11 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Generic, TypeVar
 
 from api_gen import naming
 
-RESERVED_NAMES = frozenset(
-    (
-        # C
-        "auto break case char const continue default do double else enum extern float for goto if "
-        "inline int long register restrict return short signed sizeof static struct switch typedef "
-        "union unsigned void volatile while "
-        # C++
-        "alignas alignof and_eq asm bitand bitor bool catch char8_t char16_t char32_t class compl "
-        "concept consteval constexpr constinit const_cast co_await co_return co_yield decltype "
-        "delete dynamic_cast explicit export false friend mutable namespace new noexcept not not_eq "
-        "nullptr operator or_eq private protected public reinterpret_cast requires static_assert "
-        "static_cast template this thread_local throw true try typeid typename using virtual "
-        "wchar_t xor xor_eq "
-        # Lua
-        "and break do else elseif end false for function goto if in local nil not or repeat return "
-        "then true until while"
-    ).split()
-)
-# Names the generated Lua binds as locals beside a function's parameters. Other names
-# never share a scope with them, so an enum may be called `result`.
-GENERATED_LOCALS = frozenset({"self", "result", "lib", "M", "ffi", "indent"})
-BUILTIN_TYPES = frozenset({"u32", "u64", "memory"})
+BUILTIN_TYPES = frozenset({*naming.BUILTIN_C_TYPES, "memory"})
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
 FORMATS = ("dec", "hex")
@@ -49,106 +29,93 @@ OPAQUE_PROPERTIES = frozenset({"_docstring", "_class", "_ctor", "_dtor"})
 CONST_ATTRIBUTES = frozenset({"_value", "_docstring", "_format"})
 FIELD_ATTRIBUTES = frozenset({"_type", "_docstring"})
 PARAM_ATTRIBUTES = frozenset({"_type", "_ref", "_count", "_optional", "_docstring"})
-COUNT_TYPES = ("u32", "u64")
+COUNT_TYPES = ("u8", "u16", "u32", "u64")
+FLOAT_TYPES = ("f32", "f64")
 
 
 class DefinitionError(Exception):
     """The definition cannot be turned into an API."""
 
 
-@dataclass(frozen=True)
-class BitConst:
-    key: str
+class NotImplementedDefinition(DefinitionError):
+    """The definition says something the format allows and the generator cannot produce yet."""
+
+
+@dataclass(frozen=True, kw_only=True)
+class Node:
+    """Every item of the tree: its name as the definition writes it, and its docstring."""
+
+    name: str
+    docstring: str | None
+
+
+@dataclass(frozen=True, kw_only=True)
+class BitConst(Node):
     bit: int | None  # set for a single bit
     parts: tuple[str, ...]  # set for a sum: earlier same-table entries and literals, as written
     value: int  # the resolved value: 1 << bit, or the (overlap-checked) sum of parts
-    docstring: str | None
     format: str  # one of FORMATS: how a literal of the value is spelled
 
 
-@dataclass(frozen=True)
-class EnumEntry:
-    key: str
+@dataclass(frozen=True, kw_only=True)
+class EnumEntry(Node):
     value: int
-    docstring: str | None
     format: str  # one of FORMATS
     parts: tuple[str, ...] = ()  # set for a plain-group sum: earlier entries and literals, as written
 
 
-@dataclass(frozen=True)
-class BitConstGroup:
-    docstring: str | None
-    base_type: str  # a key of naming.BASE_C_TYPES
-    entries: tuple[BitConst, ...]
-
-
-@dataclass(frozen=True)
-class ConstGroup:
-    docstring: str | None
-    base_type: str  # a key of naming.BASE_C_TYPES
-    entries: tuple[EnumEntry, ...]  # an enum entry's shape, without the enum
-
-
-@dataclass(frozen=True)
-class StringConst:
-    key: str
+@dataclass(frozen=True, kw_only=True)
+class StringConst(Node):
     value: str  # holds no '"', '\' or newline, so it is a valid C and Lua literal as-is
-    docstring: str | None
 
 
-@dataclass(frozen=True)
-class StringConstGroup:
-    docstring: str | None
-    entries: tuple[StringConst, ...]
+Entry = TypeVar("Entry", BitConst, EnumEntry, StringConst)
 
 
-@dataclass(frozen=True)
-class TypedConst:
-    name: str
+@dataclass(frozen=True, kw_only=True)
+class Group(Node, Generic[Entry]):
+    """One table of an untyped constant array. A group has no name in the definition,
+    so `name` is where it is, `untyped_const[0]`, never an identifier."""
+
+    base_type: str | None  # a key of naming.BASE_C_TYPES; None for a string group
+    entries: tuple[Entry, ...]
+
+
+@dataclass(frozen=True, kw_only=True)
+class TypedConst(Node):
     entries: tuple[EnumEntry, ...]
-    docstring: str | None
     base_type: str  # a key of naming.BASE_C_TYPES
 
 
-@dataclass(frozen=True)
-class OpaqueRef:
-    name: str
-    docstring: str | None
+@dataclass(frozen=True, kw_only=True)
+class OpaqueRef(Node):
     ctor: str | None  # function with exactly one out parameter of this type
     dtor: str | None  # function taking only this type by value; set only with ctor
     class_name: str  # an identifier as the definition writes it; each binding applies its own idiom
 
 
-@dataclass(frozen=True)
-class Field:
-    name: str
+@dataclass(frozen=True, kw_only=True)
+class Field(Node):
     type: str
-    docstring: str | None
 
 
-@dataclass(frozen=True)
-class Struct:
-    name: str
+@dataclass(frozen=True, kw_only=True)
+class Struct(Node):
     fields: tuple[Field, ...]
-    docstring: str | None
 
 
-@dataclass(frozen=True)
-class Param:
-    name: str
+@dataclass(frozen=True, kw_only=True)
+class Param(Node):
     type: str
     ref: str | None  # one of REFS; None is by value
     count_type: str | None  # memory only, one of COUNT_TYPES: the type of its naming.count_param
     optional: bool
-    docstring: str | None
 
 
-@dataclass(frozen=True)
-class Function:
-    name: str
+@dataclass(frozen=True, kw_only=True)
+class Function(Node):
     returns: str
     params: tuple[Param, ...]
-    docstring: str | None
 
     def docs(self) -> list[str]:
         """The function's docstring, if any, followed by each parameter's as `name: text`."""
@@ -160,7 +127,7 @@ class Function:
 @dataclass(frozen=True)
 class DriverData:
     header: str  # relative to the exercises directory
-    const_pins: tuple[tuple[str, str], ...]  # (untyped_bit_const key, driver macro)
+    const_pins: tuple[tuple[str, str], ...]  # (untyped_bit_const name, driver macro)
 
 
 @dataclass(frozen=True)
@@ -168,9 +135,9 @@ class Api:
     namespace: str
     version: tuple[int, int, int, int]
     library: str | None
-    bit_const_groups: tuple[BitConstGroup, ...]
-    const_groups: tuple[ConstGroup, ...]
-    string_const_groups: tuple[StringConstGroup, ...]
+    bit_const_groups: tuple[Group[BitConst], ...]
+    const_groups: tuple[Group[EnumEntry], ...]
+    string_const_groups: tuple[Group[StringConst], ...]
     typed_consts: tuple[TypedConst, ...]
     opaque_refs: tuple[OpaqueRef, ...]
     structs: tuple[Struct, ...]
@@ -203,6 +170,29 @@ class Api:
         if any(s.name == type_name for s in self.structs):
             return "struct"
         raise KeyError(type_name)
+
+    def names(self) -> list[tuple[str, str]]:
+        """(where, name) for every name the definition gives, in document order, `where`
+        spelled as the loader's messages spell it: `function.open_port.unit`."""
+        names = [("_general._namespace", self.namespace)]
+        for kind, entries in (
+            ("untyped_bit_const", self.bit_consts),
+            ("untyped_const", self.consts),
+            ("string_const", self.string_consts),
+        ):
+            names += [(f"{kind}.{c.name}", c.name) for c in entries]
+        for t in self.typed_consts:
+            names.append((f"typed_const.{t.name}", t.name))
+            names += [(f"typed_const.{t.name}.{e.name}", e.name) for e in t.entries]
+        for o in self.opaque_refs:
+            names += [(f"opaque_ref.{o.name}", o.name), (f"opaque_ref.{o.name}._class", o.class_name)]
+        for s in self.structs:
+            names.append((f"struct.{s.name}", s.name))
+            names += [(f"struct.{s.name}.{f.name}", f.name) for f in s.fields]
+        for fn in self.functions:
+            names.append((f"function.{fn.name}", fn.name))
+            names += [(f"function.{fn.name}.{p.name}", p.name) for p in fn.params]
+        return names
 
     def version_value(self) -> int:
         """The version packed into one 32-bit value, most-significant byte first."""
@@ -252,8 +242,11 @@ def from_dict(data: Mapping) -> Api:
     bit_const_groups = _bit_const_groups(_groups(data, "untyped_bit_const"))
     const_groups = _const_groups(_groups(data, "untyped_const"))
     string_const_groups = tuple(
-        StringConstGroup(doc, tuple(_string_const(key, entry) for key, entry in members))
-        for doc, _, members in _groups(data, "string_const", properties=STRING_GROUP_PROPERTIES)
+        Group(
+            name=where, docstring=doc, base_type=None,
+            entries=tuple(_string_const(name, entry) for name, entry in members),
+        )
+        for where, doc, _, members in _groups(data, "string_const", properties=STRING_GROUP_PROPERTIES)
     )
     typed_consts = tuple(
         _typed_const(name, body)
@@ -301,7 +294,7 @@ def from_dict(data: Mapping) -> Api:
         opaque_refs=tuple(opaque_refs),
         structs=tuple(structs),
         functions=functions,
-        driver_data=_driver_data(data.get("_driver_data"), {c.key for g in bit_const_groups for c in g.entries}),
+        driver_data=_driver_data(data.get("_driver_data"), {c.name for g in bit_const_groups for c in g.entries}),
     )
     _check_unique_identifiers(api)
     return api
@@ -311,13 +304,13 @@ def _is_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _identifier(name: str, where: str, *, reserved: frozenset[str] = RESERVED_NAMES) -> str:
+def _identifier(name: str, where: str) -> str:
+    """The language-independent rule for a name; each emitter's `validate` refuses its
+    own language's keywords."""
     if name.startswith("_"):
         raise DefinitionError(f"{where}: '{name}': a key beginning with '_' is a property, not a name")
     if not _IDENTIFIER.match(name):
         raise DefinitionError(f"{where}: '{name}' is not an identifier")
-    if name in reserved:
-        raise DefinitionError(f"{where}: '{name}' is a C, C++ or Lua keyword or a name the generated code binds")
     return name
 
 
@@ -336,9 +329,9 @@ def _table(data: Mapping, key: str) -> dict:
 
 def _groups(
     data: Mapping, key: str, *, properties: frozenset[str] = GROUP_PROPERTIES
-) -> list[tuple[str | None, str | None, list[tuple[str, object]]]]:
-    """(docstring, base type, members) for each table of the array `[[key]]`; base type is
-    None where `properties` has no `_base_type` (a string constant has no fixed width)."""
+) -> list[tuple[str, str | None, str | None, list[tuple[str, object]]]]:
+    """(where, docstring, base type, members) for each table of the array `[[key]]`; base
+    type is None where `properties` has no `_base_type` (a string constant has no fixed width)."""
     groups = data.get(key, [])
     if isinstance(groups, dict):
         raise DefinitionError(f"[{key}] is now an array of tables: write each group as [[{key}]]")
@@ -350,8 +343,10 @@ def _groups(
         props, members = _split(body, properties, where)
         if not members:
             raise DefinitionError(f"{where}: has no entries")
-        base_type = _base_type(props, where) if "_base_type" in properties else None
-        result.append((_docstring(props.get("_docstring"), f"{where}._docstring"), base_type, members))
+        base_type = (
+            _base_type(props, where, floats_planned=key == "untyped_const") if "_base_type" in properties else None
+        )
+        result.append((where, _docstring(props.get("_docstring"), f"{where}._docstring"), base_type, members))
     return result
 
 
@@ -373,8 +368,12 @@ def _attributes(entry: object, *, naked: str, allowed: frozenset[str], where: st
     return entry
 
 
-def _base_type(props: Mapping, where: str) -> str:
+def _base_type(props: Mapping, where: str, *, floats_planned: bool = False) -> str:
+    """`floats_planned` marks a plain constant group, where a floating-point base type is
+    meaningful but not generated yet; for bit flags and enums it is a plain error."""
     value = props.get("_base_type", "i32")
+    if floats_planned and value in FLOAT_TYPES:
+        raise NotImplementedDefinition(f"{where}._base_type: {value} constants are not implemented")
     if not isinstance(value, str) or value not in naming.BASE_C_TYPES:
         raise DefinitionError(f"{where}._base_type must be one of {', '.join(naming.BASE_C_TYPES)}")
     return value
@@ -446,36 +445,35 @@ def _check_disjoint_bits(where: str, terms: list[tuple[str, int]]) -> None:
 
 
 def _bit_const_groups(
-    groups: list[tuple[str | None, str | None, list[tuple[str, object]]]]
-) -> tuple[BitConstGroup, ...]:
+    groups: list[tuple[str, str | None, str | None, list[tuple[str, object]]]]
+) -> tuple[Group[BitConst], ...]:
     """A composed value may name an entry of any earlier group or be a literal, so the
     groups are read as one sequence; disjoint terms sum to the same value as their OR."""
     resolved: dict[str, int] = {}
     result = []
-    for group_doc, base_type, members in groups:
+    for group_where, group_doc, base_type, members in groups:
         assert base_type is not None  # untyped_bit_const groups always carry _base_type
         consts = []
-        for key, entry in members:
-            where = f"untyped_bit_const.{key}"
-            _identifier(key, where)
+        for name, entry in members:
+            where = f"untyped_bit_const.{name}"
+            _identifier(name, where)
             raw, doc, fmt = _unwrap_value(entry, where)
             if _is_int(raw):
                 if not 0 <= raw <= 30:
                     raise DefinitionError(f"{where}: bit index must be 0..30 (enumerators must fit int)")
-                value, parts = 1 << raw, ()
-                consts.append(BitConst(key, raw, parts, value, doc, fmt))
+                bit, parts, value = raw, (), 1 << raw
             elif isinstance(raw, list) and raw and all(isinstance(p, str) for p in raw):
                 parts = tuple(raw)
                 terms = [(p, _term_value(p, resolved, where, kind="untyped_bit_const")) for p in parts]
                 _check_disjoint_bits(where, terms)
-                value = sum(v for _, v in terms)
-                consts.append(BitConst(key, None, parts, value, doc, fmt))
+                bit, value = None, sum(v for _, v in terms)
             else:
                 raise DefinitionError(
                     f"{where}: must be a bit index or a non-empty list of constant names or literals"
                 )
-            resolved[key] = value
-        result.append(BitConstGroup(group_doc, base_type, tuple(consts)))
+            consts.append(BitConst(name=name, docstring=doc, bit=bit, parts=parts, value=value, format=fmt))
+            resolved[name] = value
+        result.append(Group(name=group_where, docstring=group_doc, base_type=base_type, entries=tuple(consts)))
     return tuple(result)
 
 
@@ -486,23 +484,25 @@ def _check_int32(value: int, base_type: str, where: str) -> None:
         raise DefinitionError(f"{where}: value must not be negative: its _base_type is u32")
 
 
-def _int_entry(key: str, entry: object, where: str, *, base_type: str) -> EnumEntry:
-    _identifier(key, where)
+def _int_entry(name: str, entry: object, where: str, *, base_type: str) -> EnumEntry:
+    _identifier(name, where)
     value, doc, fmt = _unwrap_value(entry, where)
     if not _is_int(value):
         raise DefinitionError(f"{where}: value must be an integer in the int32 range")
     _check_int32(value, base_type, where)
-    return EnumEntry(key, value, doc, fmt)
+    return EnumEntry(name=name, docstring=doc, value=value, format=fmt)
 
 
 def _plain_const_entry(
-    key: str, entry: object, where: str, *, base_type: str, resolved: dict[str, int]
+    name: str, entry: object, where: str, *, base_type: str, resolved: dict[str, int]
 ) -> EnumEntry:
     """An untyped_const entry: a plain integer, or a list summing earlier untyped_const
     entries and literals, the same composition untyped_bit_const uses (without the
     disjointness rule, since a plain group is arithmetic, not bit flags)."""
-    _identifier(key, where)
+    _identifier(name, where)
     raw, doc, fmt = _unwrap_value(entry, where)
+    if isinstance(raw, float):
+        raise NotImplementedDefinition(f"{where}: f64 constants are not implemented")
     if _is_int(raw):
         value, parts = raw, ()
     elif isinstance(raw, list) and raw and all(isinstance(p, str) for p in raw):
@@ -511,36 +511,36 @@ def _plain_const_entry(
     else:
         raise DefinitionError(f"{where}: must be an integer or a non-empty list of constant names or literals")
     _check_int32(value, base_type, where)
-    resolved[key] = value
-    return EnumEntry(key, value, doc, fmt, parts)
+    resolved[name] = value
+    return EnumEntry(name=name, docstring=doc, value=value, format=fmt, parts=parts)
 
 
 def _const_groups(
-    groups: list[tuple[str | None, str | None, list[tuple[str, object]]]]
-) -> tuple[ConstGroup, ...]:
+    groups: list[tuple[str, str | None, str | None, list[tuple[str, object]]]]
+) -> tuple[Group[EnumEntry], ...]:
     """A composed value may name an entry of any earlier group, so the groups are read as one sequence."""
     resolved: dict[str, int] = {}
     result = []
-    for doc, base_type, members in groups:
+    for group_where, doc, base_type, members in groups:
         assert base_type is not None  # untyped_const groups always carry _base_type
         entries = tuple(
-            _plain_const_entry(key, entry, f"untyped_const.{key}", base_type=base_type, resolved=resolved)
-            for key, entry in members
+            _plain_const_entry(name, entry, f"untyped_const.{name}", base_type=base_type, resolved=resolved)
+            for name, entry in members
         )
-        result.append(ConstGroup(doc, base_type, entries))
+        result.append(Group(name=group_where, docstring=doc, base_type=base_type, entries=entries))
     return tuple(result)
 
 
-def _string_const(key: str, entry: object) -> StringConst:
-    where = f"string_const.{key}"
-    _identifier(key, where)
+def _string_const(name: str, entry: object) -> StringConst:
+    where = f"string_const.{name}"
+    _identifier(name, where)
     attrs = _attributes(entry, naked="_value", allowed=frozenset({"_value", "_docstring"}), where=where)
     value = attrs.get("_value")
     if not isinstance(value, str):
         raise DefinitionError(f"{where}: value must be a string")
     if any(c in value for c in '"\\\n'):
         raise DefinitionError(f"{where}: value must not contain '\"', '\\' or a newline")
-    return StringConst(key, value, _docstring(attrs.get("_docstring"), f"{where}._docstring"))
+    return StringConst(name=name, docstring=_docstring(attrs.get("_docstring"), f"{where}._docstring"), value=value)
 
 
 def _typed_const(name: str, body: dict) -> TypedConst:
@@ -550,7 +550,10 @@ def _typed_const(name: str, body: dict) -> TypedConst:
     entries = [_int_entry(key, entry, f"{where}.{key}", base_type=base_type) for key, entry in members]
     if not entries:
         raise DefinitionError(f"{where}: has no entries")
-    return TypedConst(name, tuple(entries), _docstring(props.get("_docstring"), f"{where}._docstring"), base_type)
+    return TypedConst(
+        name=name, docstring=_docstring(props.get("_docstring"), f"{where}._docstring"),
+        entries=tuple(entries), base_type=base_type,
+    )
 
 
 def _opaque_ref(name: str, body: dict) -> OpaqueRef:
@@ -566,8 +569,8 @@ def _opaque_ref(name: str, body: dict) -> OpaqueRef:
         raise DefinitionError(f"{where}._class must be an identifier")
     _identifier(class_name, f"{where}._class")
     return OpaqueRef(
-        name, _docstring(props.get("_docstring"), f"{where}._docstring"), props.get("_ctor"), props.get("_dtor"),
-        class_name,
+        name=name, docstring=_docstring(props.get("_docstring"), f"{where}._docstring"),
+        ctor=props.get("_ctor"), dtor=props.get("_dtor"), class_name=class_name,
     )
 
 
@@ -630,10 +633,10 @@ def _struct(name: str, body: dict, type_names: dict[str, str], *, defined_struct
             raise DefinitionError(f"{where}: 'memory' is not a field type")
         if type_names.get(type_name) == "struct" and type_name not in defined_structs:
             raise DefinitionError(f"{where}: struct '{type_name}' must be defined before it is used")
-        fields.append(Field(key, type_name, _docstring(attrs.get("_docstring"), f"{where}._docstring")))
+        fields.append(Field(name=key, docstring=_docstring(attrs.get("_docstring"), f"{where}._docstring"), type=type_name))
     if not fields:
         raise DefinitionError(f"struct.{name}: has no fields")
-    return Struct(name, tuple(fields), _docstring(props.get("_docstring"), f"struct.{name}._docstring"))
+    return Struct(name=name, docstring=_docstring(props.get("_docstring"), f"struct.{name}._docstring"), fields=tuple(fields))
 
 
 def _function(
@@ -651,7 +654,7 @@ def _function(
     params = []
     for key, entry in members:
         pwhere = f"{where}.{key}"
-        _identifier(key, pwhere, reserved=RESERVED_NAMES | GENERATED_LOCALS)
+        _identifier(key, pwhere)
         type_name, attrs = _variable(entry, allowed=PARAM_ATTRIBUTES, type_names=type_names, where=pwhere)
         ref = attrs.get("_ref")
         if ref is not None and ref not in REFS:
@@ -667,7 +670,10 @@ def _function(
         if not isinstance(optional, bool):
             raise DefinitionError(f"{pwhere}._optional must be true or false")
         params.append(
-            Param(key, type_name, ref, count_type, optional, _docstring(attrs.get("_docstring"), f"{pwhere}._docstring"))
+            Param(
+                name=key, docstring=_docstring(attrs.get("_docstring"), f"{pwhere}._docstring"),
+                type=type_name, ref=ref, count_type=count_type, optional=optional,
+            )
         )
     names = {p.name for p in params}
     for p in params:
@@ -675,10 +681,13 @@ def _function(
             raise DefinitionError(
                 f"{where}.{p.name}: its count parameter {naming.count_param(p.name)} is already a parameter"
             )
-    return Function(name, returns, tuple(params), _docstring(props.get("_docstring"), f"{where}._docstring"))
+    return Function(
+        name=name, docstring=_docstring(props.get("_docstring"), f"{where}._docstring"),
+        returns=returns, params=tuple(params),
+    )
 
 
-def _driver_data(body: object, bit_keys: set[str]) -> DriverData | None:
+def _driver_data(body: object, bit_names: set[str]) -> DriverData | None:
     if body is None:
         return None
     if not isinstance(body, dict):
@@ -694,7 +703,7 @@ def _driver_data(body: object, bit_keys: set[str]) -> DriverData | None:
     pins = []
     for key, macro in pins_table.items():
         where = f"_driver_data.const_pins.{key}"
-        if key not in bit_keys:
+        if key not in bit_names:
             raise DefinitionError(f"{where}: pins undefined untyped_bit_const '{key}'")
         if not isinstance(macro, str) or not _IDENTIFIER.match(macro):
             raise DefinitionError(f"{where}: must be a driver macro name")
@@ -706,12 +715,12 @@ def _check_unique_identifiers(api: Api) -> None:
     """Every generated C identifier, constants and declarations alike, is defined once."""
     ns = api.namespace
     seen = {naming.version_const(ns): "the API version constant"}
-    keys = [(c.key, f"untyped_bit_const.{c.key}") for c in api.bit_consts]
-    keys += [(c.key, f"untyped_const.{c.key}") for c in api.consts]
-    keys += [(c.key, f"string_const.{c.key}") for c in api.string_consts]
-    keys += [(e.key, f"typed_const.{t.name}.{e.key}") for t in api.typed_consts for e in t.entries]
-    for key, where in keys:
-        c_name = naming.const_name(ns, key)
+    names = [(c.name, f"untyped_bit_const.{c.name}") for c in api.bit_consts]
+    names += [(c.name, f"untyped_const.{c.name}") for c in api.consts]
+    names += [(c.name, f"string_const.{c.name}") for c in api.string_consts]
+    names += [(e.name, f"typed_const.{t.name}.{e.name}") for t in api.typed_consts for e in t.entries]
+    for name, where in names:
+        c_name = naming.const_name(ns, name)
         if c_name in seen:
             raise DefinitionError(f"{where}: constant {c_name} already defined by {seen[c_name]}")
         seen[c_name] = where

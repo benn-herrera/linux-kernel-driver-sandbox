@@ -3,9 +3,43 @@ and a move-only class per opaque ref that names a constructor, forwarding inline
 the C functions."""
 
 from api_gen import emit_c, naming
-from api_gen.model import Api, DefinitionError, Function, OpaqueRef, Param
+from api_gen.model import Api, Function, OpaqueRef, Param
 
 HANDLE_MEMBER = "handle_"
+# Every C++20 keyword and alternative token, the C keywords C++ shares included: the
+# wrapper and the stub are C++ translation units that include the C header.
+CPP_KEYWORDS = frozenset(
+    "alignas alignof and and_eq asm auto bitand bitor bool break case catch char char8_t char16_t "
+    "char32_t class compl concept const consteval constexpr constinit const_cast continue co_await "
+    "co_return co_yield decltype default delete do double dynamic_cast else enum explicit export "
+    "extern false float for friend goto if inline int long mutable namespace new noexcept not "
+    "not_eq nullptr operator or or_eq private protected public register reinterpret_cast requires "
+    "return short signed sizeof static static_assert static_cast struct switch template this "
+    "thread_local throw true try typedef typeid typename union unsigned using virtual void "
+    "volatile wchar_t while xor xor_eq".split()
+)
+
+
+def validate(api: Api) -> list[str]:
+    """Every objection the wrapper has to `api`: a name that is a C++ keyword, and a name
+    the wrapper would define twice in the namespace, an enum class or a class."""
+    problems = [f"{where}: '{name}' is a C++ keyword" for where, name in api.names() if name in CPP_KEYWORDS]
+    classes = [o for o in api.opaque_refs if o.ctor is not None]
+    const_names = [naming.VERSION_KEY] + [c.name for c in (*api.bit_consts, *api.consts, *api.string_consts)]
+    problems += _duplicates(
+        [naming.lua_const_name(n) for n in const_names]
+        + [naming.upper_camel(n) for n in [t.name for t in api.typed_consts] + [s.name for s in api.structs]]
+        + [naming.upper_camel(o.class_name) for o in classes],
+        f"namespace {api.namespace}",
+    )
+    for t in api.typed_consts:
+        problems += _duplicates([naming.upper_camel(e.name) for e in t.entries], f"enum class {naming.upper_camel(t.name)}")
+    for o in classes:
+        cls = naming.upper_camel(o.class_name)
+        members = [cls, "create", "handle", "release", HANDLE_MEMBER]
+        members += [f.name for f in _methods(api, o)] + [p.name for p in _cached(_ctor(api, o), o)]
+        problems += _duplicates(members, f"class {cls}")
+    return [f"wrapper: {p}" for p in problems]
 
 
 def wrapper(api: Api, *, source_name: str, stem: str) -> str:
@@ -17,54 +51,66 @@ def wrapper(api: Api, *, source_name: str, stem: str) -> str:
         "#include <utility>\n\n",
         f"namespace {ns} {{\n",
     ]
-    classes = [o for o in api.opaque_refs if o.ctor is not None]
-    const_keys = [naming.VERSION_KEY] + [c.key for c in (*api.bit_consts, *api.consts, *api.string_consts)]
-    _check_unique(
-        [naming.lua_const_name(k) for k in const_keys]
-        + [naming.upper_camel(n) for n in [t.name for t in api.typed_consts] + [s.name for s in api.structs]]
-        + [naming.upper_camel(o.class_name) for o in classes],
-        f"C++ wrapper: namespace {ns}",
-    )
 
-    def constant(c_type: str, key: str) -> str:
-        return f"inline constexpr {c_type} {naming.lua_const_name(key)} = {naming.const_name(ns, key)};\n"
+    def constant(c_type: str, name: str) -> str:
+        return f"inline constexpr {c_type} {naming.lua_const_name(name)} = {naming.const_name(ns, name)};\n"
 
     runs = [constant("uint32_t", naming.VERSION_KEY)]
     runs += [
-        _comment(g.docstring) + "".join(constant(naming.BASE_C_TYPES[g.base_type], c.key) for c in g.entries)
+        _comment(g.docstring) + "".join(constant(naming.BASE_C_TYPES[g.base_type], c.name) for c in g.entries)
         for g in (*api.bit_const_groups, *api.const_groups)
     ]
     runs += [
-        _comment(g.docstring) + "".join(constant("const char*", c.key) for c in g.entries)
+        _comment(g.docstring) + "".join(constant("const char*", c.name) for c in g.entries)
         for g in api.string_const_groups
     ]
     out += ["\n" + run for run in runs]
     out += [_enum(api, t.name) for t in api.typed_consts]
     if api.structs:
         out.append("\n" + "".join(f"using {naming.upper_camel(s.name)} = {naming.type_name(ns, s.name)};\n" for s in api.structs))
-    out += [_class(api, o) for o in classes]
+    out += [_class(api, o) for o in api.opaque_refs if o.ctor is not None]
     out.append(f"\n}}  // namespace {ns}\n")
     return "".join(out)
 
 
-def _check_unique(names: list[str], where: str) -> None:
-    duplicate = next((n for n in names if names.count(n) > 1), None)
-    if duplicate is not None:
-        raise DefinitionError(f"{where}: {duplicate} would be defined more than once")
+def _duplicates(names: list[str], where: str) -> list[str]:
+    """One objection per name that appears more than once in `names`, in first-seen order."""
+    repeated = [n for i, n in enumerate(names) if names.count(n) > 1 and names.index(n) == i]
+    return [f"{where}: {n} would be defined more than once" for n in repeated]
+
+
+def _ctor(api: Api, opaque: OpaqueRef) -> Function:
+    return next(f for f in api.functions if f.name == opaque.ctor)
+
+
+def _methods(api: Api, opaque: OpaqueRef) -> list[Function]:
+    """Functions other than the ctor and dtor whose first parameter is the opaque by value."""
+    return [
+        f
+        for f in api.functions
+        if f.name not in (opaque.ctor, opaque.dtor)
+        and f.params
+        and f.params[0].type == opaque.name
+        and f.params[0].ref is None
+    ]
+
+
+def _cached(ctor: Function, opaque: OpaqueRef) -> list[Param]:
+    """The ctor's `out` parameters other than the handle, each a member of the object."""
+    return [p for p in ctor.params if p.ref == "out" and p.type != opaque.name]
 
 
 def _enum(api: Api, name: str) -> str:
     typed = next(t for t in api.typed_consts if t.name == name)
     cls = naming.upper_camel(name)
-    keys = [naming.upper_camel(e.key) for e in typed.entries]
-    _check_unique(keys, f"C++ wrapper: enum class {cls}")
+    keys = [naming.upper_camel(e.name) for e in typed.entries]
     entries = "".join(
-        f"  {k} = {naming.const_name(api.namespace, e.key)},\n" for k, e in zip(keys, typed.entries)
+        f"  {k} = {naming.const_name(api.namespace, e.name)},\n" for k, e in zip(keys, typed.entries)
     )
     # One case per value, named by its last entry, as the Lua module's _to_str: duplicate case labels do not compile.
     by_value = {e.value: (k, e) for k, e in zip(keys, typed.entries)}
     cases = "".join(
-        f'    case {cls}::{k}: return "{naming.lua_const_name(e.key)}";\n' for k, e in by_value.values()
+        f'    case {cls}::{k}: return "{naming.lua_const_name(e.name)}";\n' for k, e in by_value.values()
     )
     return (
         f"\nenum class [[nodiscard]] {cls} : {naming.BASE_C_TYPES[typed.base_type]} {{\n{entries}}};\n\n"
@@ -120,22 +166,11 @@ def _c_call(api: Api, fn: Function, args: list[str]) -> str:
 def _class(api: Api, opaque: OpaqueRef) -> str:
     cls = naming.upper_camel(opaque.class_name)
     handle_type = naming.type_name(api.namespace, opaque.name)
-    ctor = next(f for f in api.functions if f.name == opaque.ctor)
+    ctor = _ctor(api, opaque)
     dtor = next((f for f in api.functions if f.name == opaque.dtor), None)
-    methods = [
-        f
-        for f in api.functions
-        if f not in (ctor, dtor)
-        and f.params
-        and f.params[0].type == opaque.name
-        and f.params[0].ref is None
-    ]
+    methods = _methods(api, opaque)
     handle = next(p for p in ctor.params if p.type == opaque.name and p.ref == "out")
-    cached = [p for p in ctor.params if p.ref == "out" and p is not handle]
-    _check_unique(
-        [cls, "create", "handle", "release", HANDLE_MEMBER, *(f.name for f in methods), *(p.name for p in cached)],
-        f"C++ wrapper: class {cls}",
-    )
+    cached = _cached(ctor, opaque)
 
     ret = naming.upper_camel(ctor.returns)
     zero = next(e for e in next(t for t in api.typed_consts if t.name == ctor.returns).entries if e.value == 0)
@@ -151,7 +186,7 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
         f"{locals_}"
         f"    const {ret} {status} = {_c_call(api, ctor, call)};\n"
         f"    if (result) {{\n      *result = {status};\n    }}\n"
-        f"    if ({status} != {ret}::{naming.upper_camel(zero.key)}) {{\n      return {failure};\n    }}\n"
+        f"    if ({status} != {ret}::{naming.upper_camel(zero.name)}) {{\n      return {failure};\n    }}\n"
         f"    return {cls}({', '.join([handle.name, *(p.name for p in cached)])});\n"
         "  }\n"
     )

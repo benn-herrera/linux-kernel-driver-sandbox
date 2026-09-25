@@ -1,9 +1,23 @@
 """A C++ implementation stub: every function defined, every body a placeholder failure."""
 
 from api_gen import emit_c, naming
-from api_gen.model import Api, DefinitionError, Function
+from api_gen.emit_cpp_wrapper import CPP_KEYWORDS
+from api_gen.model import Api, EnumEntry, Function
 
-UNSUPPORTED_KEY = "err_unsupported"
+UNSUPPORTED_NAME = "err_unsupported"
+
+
+def validate(api: Api) -> list[str]:
+    """Every objection the stub has to `api`: a name that is a C++ keyword, and a return
+    enum with no nonzero entry to return as the placeholder failure."""
+    problems = [f"{where}: '{name}' is a C++ keyword" for where, name in api.names() if name in CPP_KEYWORDS]
+    problems += [
+        f"function.{fn.name}._return: typed_const '{fn.returns}' has no nonzero entry: "
+        "cannot pick a failure result for the stub"
+        for fn in api.functions
+        if _failure_entry(api, fn) is None
+    ]
+    return [f"stub: {p}" for p in problems]
 
 
 def stub(api: Api, *, source_name: str, stem: str) -> str:
@@ -36,13 +50,14 @@ def _definition(api: Api, fn: Function) -> str:
 
 
 def _failure(api: Api, fn: Function) -> str:
-    """C name of the return enum's `err_unsupported` entry, else its first nonzero entry."""
+    """C name of the entry `_failure_entry` chooses; `validate` refuses an API where there is none."""
+    chosen = _failure_entry(api, fn)
+    assert chosen is not None
+    return naming.const_name(api.namespace, chosen.name)
+
+
+def _failure_entry(api: Api, fn: Function) -> EnumEntry | None:
+    """The return enum's `err_unsupported` entry, else its first nonzero entry, else None."""
     entries = next(t for t in api.typed_consts if t.name == fn.returns).entries
-    chosen = next((e for e in entries if e.key == UNSUPPORTED_KEY), None)
-    chosen = chosen or next((e for e in entries if e.value != 0), None)
-    if chosen is None:
-        raise DefinitionError(
-            f"function.{fn.name}._return: typed_const '{fn.returns}' has no nonzero entry: "
-            "cannot pick a failure result for the stub"
-        )
-    return naming.const_name(api.namespace, chosen.key)
+    chosen = next((e for e in entries if e.name == UNSUPPORTED_NAME), None)
+    return chosen or next((e for e in entries if e.value != 0), None)
