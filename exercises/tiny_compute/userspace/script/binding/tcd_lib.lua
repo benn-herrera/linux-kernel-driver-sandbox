@@ -67,8 +67,9 @@ function M.TcdlDevice.new(device_idx)
     local pinfo = ffi.new("tcdl_info")
     local phandle = ffi.new("tcdl_handle[1]")
     local result = lib_tcd.tcdl_create_device(device_idx, phandle, pinfo)
+    result = tonumber(result)
     if result ~= M.TCDL_OK then
-        return nil, tonumber(result)
+        return nil, result
     end
     self = setmetatable({}, M.TcdlDevice)
     self.info = {
@@ -104,8 +105,9 @@ end
 
 function M.TcdlDevice.check_alive(self)
     local result = lib_tcd.tcdl_check_alive(self._handle)
+    result = tonumber(result)
     if result ~= M.TCDL_OK then
-        return false, tonumber(result)
+        return false, result
     end
     return true, nil
 end
@@ -114,8 +116,9 @@ function M.TcdlDevice.compute_factorial(self, arg)
     assert(type(arg) == "number")
     local pfact = ffi.new("uint32_t[1]")
     local result = lib_tcd.tcdl_compute_factorial(self._handle, arg, pfact)
+    result = tonumber(result)
     if result ~= M.TCDL_OK then
-        return nil, tonumber(result)
+        return nil, result
     end
     return tonumber(pfact[0]), nil
 end
@@ -125,8 +128,9 @@ function M.TcdlDevice.dma_from_device(self, device_offset, count)
     assert(type(count) == "number")
     local buffer = ffi.new("char[?]", count)
     local result = lib_tcd.tcdl_dma_from_device(self._handle, buffer, device_offset, count)
+    result = tonumber(result)
     if result ~= M.TCDL_OK then
-        return nil, tonumber(result)
+        return nil, result
     end
     return ffi.string(buffer), nil
 end
@@ -136,8 +140,9 @@ function M.TcdlDevice.dma_to_device(self, text, device_offset)
     assert(type(device_offset) == "number")
     local buffer = ffi.new("char[?]", #text + 1, text)
     local result = lib_tcd.tcdl_dma_to_device(self._handle, buffer, device_offset, ffi.sizeof(buffer))
+    result = tonumber(result)
     if result ~= M.TCDL_OK then
-        return nil, tonumber(result)
+        return nil, result
     end
     return true, nil
 end
