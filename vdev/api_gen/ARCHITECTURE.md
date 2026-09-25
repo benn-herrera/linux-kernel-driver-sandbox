@@ -35,7 +35,7 @@ Order is document order because `tomllib` builds insertion-ordered dicts, a guar
 
 ## Tests
 
-`tests/test_model.py` (the loader's rules, one test per validation error with its message) and `tests/test_api_gen.py` (naming, the header, the cdef, the Lua module's constants, class and methods, `gendeps`, and the command line), standard `unittest` over a small fixture definition in a namespace of its own, so a test failure is about the generator and not about `tiny_compute`. Each SPEC.md contract line has a test; a line without one is a gap to close. `just api-gen-test` runs them in the container.
+`tests/test_model.py` (the loader's rules, one test per validation error with its message) and `tests/test_api_gen.py` (naming, the header, the cdef, the Lua module's constants, class and methods, `gendeps`, and the command line), standard `unittest` over a small fixture definition in a namespace of its own, so a test failure is about the generator and not about `tiny_compute`. Each SPEC.md contract line has a test; a line without one is a gap to close. `just api-gen-test` runs them in the container. The suite's next shape, compiled and executed checks first, is `TEST_PLAN.md` beside this file.
 
 The end-to-end check is the project's own loop: `just test` generates from the real definition, builds the library against the generated header with the pins active, builds the test program, and runs the Lua test through the generated module in the guest.
 

@@ -84,6 +84,7 @@ The API definition, then three consumers of the driver, each one layer up from t
 
 The stack from driver to script, one host coordinating several accelerators through a library and a binding, is in place. Remaining, in order:
 
+- The generator's test suite restructured per `vdev/api_gen/TEST_PLAN.md`: compiled and executed checks against the fixture's fake library, text assertions converted to properties, files split by output. First task of the next round.
 - DONE 2026-09-25: the API generator's emitters, C header with ABI pins, Lua module, header-only C++ wrapper and implementation stub; the test program runs on the wrapper and the Lua test on the module.
 - The torture suite in Lua against the binding, multi-process, across the two instances the test machine boots: the isolation check (a DMA pattern written to one device must not be readable from the other, and operations on the two must not serialise on each other), then `open`/`release` under contention and the per-device locks. The driver side is done. The C++ program shrinks to a smoke test through the library plus its one threaded case.
 - proper dmsg logging
