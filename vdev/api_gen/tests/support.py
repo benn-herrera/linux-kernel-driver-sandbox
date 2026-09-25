@@ -4,7 +4,6 @@ import contextlib
 import io
 import re
 import tomllib
-import unittest
 from pathlib import Path
 
 from api_gen import __main__ as api_gen_main
@@ -229,9 +228,6 @@ C_BASE_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
 
 MINIMAL = '[_general]\n_namespace = "xy"\n_version = [0,0,0,1]\n'
 
-IN_CONTAINER = Path("/work/vdev").is_dir()
-CONTAINER_ONLY_REASON = "compiled and executed checks run only in the build container; run `just api-gen-test-vdev`"
-container_only = unittest.skipUnless(IN_CONTAINER, CONTAINER_ONLY_REASON)
 EXERCISES = Path("/work/exercises")
 
 

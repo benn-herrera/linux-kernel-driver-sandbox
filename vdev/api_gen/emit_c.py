@@ -8,11 +8,12 @@ C_KEYWORDS = frozenset(
     "inline int long register restrict return short signed sizeof static struct switch typedef "
     "union unsigned void volatile while".split()
 )
+LABEL = "header"
 
 
 def validate(api: Api) -> list[str]:
     """Every objection the header has to `api`: a name that is a C keyword."""
-    return [f"header: {where}: '{name}' is a C keyword" for where, name in api.names() if name in C_KEYWORDS]
+    return [f"{LABEL}: {where}: '{name}' is a C keyword" for where, name in api.names() if name in C_KEYWORDS]
 
 
 def c_type(api: Api, type_name: str) -> str:
@@ -46,6 +47,13 @@ def c_params(api: Api, param: Param) -> list[tuple[str, str]]:
     if param.count_type is not None:
         params.append((naming.BUILTIN_C_TYPES[param.count_type], naming.count_param(param.name)))
     return params
+
+
+def param_list(api: Api, fn: Function) -> str:
+    """A function's C parameter list text, `void` for none: every parameter's `c_params()`
+    pairs, joined in signature order. The one join the header's declaration and the
+    stub's definition both use, so their signatures can never drift apart."""
+    return ", ".join(f"{t} {n}" for p in fn.params for t, n in c_params(api, p)) or "void"
 
 
 def param_type(api: Api, param: Param) -> str:
@@ -217,7 +225,6 @@ def _struct(api: Api, struct: Struct) -> str:
 
 
 def _function(api: Api, fn: Function, prefix: str) -> str:
-    params = ", ".join(f"{t} {n}" for p in fn.params for t, n in c_params(api, p)) or "void"
     returns = c_type(api, fn.returns)
     name = naming.function_name(api.namespace, fn.name)
-    return f"{_comment_line(' '.join(fn.docs()))}{prefix}{returns} {name}({params});\n"
+    return f"{_comment_line(' '.join(fn.docs()))}{prefix}{returns} {name}({param_list(api, fn)});\n"

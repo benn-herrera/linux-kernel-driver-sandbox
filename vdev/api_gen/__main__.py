@@ -35,6 +35,18 @@ def main(argv: list[str] | None = None) -> int:
     return _generate_main(argv)
 
 
+def _objections(api: model.Api) -> list[str]:
+    """Every emitter's objection to `api`, one line per distinct message: objections from
+    different emitters that share the same text after their own `<emitter>: ` prefix are
+    reported once, under every emitter that raised it, comma-joined in `EMITTERS` order."""
+    labels_by_message: dict[str, list[str]] = {}
+    for emitter in EMITTERS:
+        for p in emitter.validate(api):
+            message = p.removeprefix(f"{emitter.LABEL}: ")
+            labels_by_message.setdefault(message, []).append(emitter.LABEL)
+    return [f"{', '.join(labels)}: {message}" for message, labels in labels_by_message.items()]
+
+
 def _generate_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
         description="generate userspace API artifacts from an API definition"
@@ -63,7 +75,7 @@ def _generate_main(argv: list[str]) -> int:
         print(f"api_gen: {definition}: {e}", file=sys.stderr)
         return 2
     library = args.library or api.library
-    problems = [p for emitter in EMITTERS for p in emitter.validate(api)]
+    problems = _objections(api)
     if library is None:
         problems.append("lua: no library to load: pass --library or set _general._library")
     if problems:

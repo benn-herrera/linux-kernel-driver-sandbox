@@ -30,8 +30,10 @@ def const_name(namespace: str, name: str) -> str:
     return f"{namespace.upper()}_{name.upper()}"
 
 
-def lua_const_name(name: str) -> str:
-    """Lua name of a constant, the module being the namespace: `ERR_NO_DEVICE`."""
+def unprefixed_const_name(name: str) -> str:
+    """A constant's name with no namespace prefix, the rule the Lua module (whose module
+    table is the namespace) and the C++ wrapper (whose C++ namespace already is) share:
+    `ERR_NO_DEVICE`."""
     return name.upper()
 
 

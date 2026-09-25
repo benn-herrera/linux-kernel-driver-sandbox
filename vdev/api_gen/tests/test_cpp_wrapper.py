@@ -102,11 +102,18 @@ class Validate(unittest.TestCase):
         for text, message in (
             (mutate(FIXTURE, "unit = ", "class = "), "wrapper: function.open_port.class: 'class' is a C++ keyword"),
             (mutate(FIXTURE, "count = { _type", "template = { _type"), "wrapper: struct.stats.template: 'template' is a C++ keyword"),
-            (mutate(FIXTURE, "bytes = ", "int = "), "wrapper: struct.stats.int: 'int' is a C++ keyword"),
             (FIXTURE + '\n[function.new]\n_return = "status"\n', "wrapper: function.new: 'new' is a C++ keyword"),
         ):
             with self.subTest(message=message):
                 self.assertIn(message, self.validate(text))
+
+    def test_name_that_is_also_a_c_keyword_is_worded_as_one(self) -> None:
+        # C already forbids it (the header refuses it too), so the wrapper's message
+        # matches the header's word for word: `__main__` collapses both into one line.
+        self.assertIn(
+            "wrapper: struct.stats.int: 'int' is a C keyword",
+            self.validate(mutate(FIXTURE, "bytes = ", "int = ")),
+        )
 
     def test_lua_keyword_is_not_its_objection(self) -> None:
         self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "end = ")), [])

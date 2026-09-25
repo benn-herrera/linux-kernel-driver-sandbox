@@ -82,7 +82,7 @@ A C++20 header beside the C header, including it and nothing but the standard li
 
 ### `stub/<stem>.cpp` — the implementation stub
 
-A C++ translation unit to copy into `lib/` once when starting an implementation, never staged and never touched by the generator afterwards: the implementation-macro define around the header include, so the ABI pins compile, the standard headers `<cerrno>`, `<cstdint>` and `<cstring>`, and one definition per function in document order whose body voids every parameter and returns the return enum's `err_unsupported` entry, or its first nonzero entry if there is none. A return enum with no nonzero entry is an error. The signatures match the header byte for byte.
+A C++ translation unit to copy into `lib/` once when starting an implementation, never staged and never touched by the generator afterwards: the implementation-macro define around the header include, so the ABI pins compile, the standard headers `<cerrno>`, `<cstdint>` and `<cstring>`, and one definition per function in document order whose body voids every parameter with a `(void)` line, then a `// replace: not implemented` comment, then `return {};`, which C++ value-initialises the return enum to its zero entry. The signatures match the header byte for byte.
 
 ### `binding/<stem>.lua` — the LuaJIT module
 

@@ -1,5 +1,6 @@
 """Compiled and executed checks of the generated outputs. They need clang, clang++,
-luajit and make, so they run only inside the build container and skip elsewhere."""
+luajit and make, the build container's pinned toolchain; `just api-gen-test-vdev`
+runs them there."""
 
 import os
 import shutil
@@ -10,12 +11,9 @@ from pathlib import Path
 
 from api_gen import emit_c, emit_cpp_wrapper
 from api_gen.tests.support import (
-    CONTAINER_ONLY_REASON,
     EXERCISES,
     FIXTURE,
-    IN_CONTAINER,
     KITCHEN_SINK,
-    container_only,
     expected_constants,
     load,
     mutate,
@@ -74,8 +72,6 @@ def require_tools() -> None:
 
 def setUpModule() -> None:
     global _build, TMP, INC
-    if not IN_CONTAINER:
-        return
     require_tools()
     _build = tempfile.TemporaryDirectory()
     TMP = Path(_build.name)
@@ -101,7 +97,6 @@ def tearDownModule() -> None:
         _build.cleanup()
 
 
-@container_only
 class HeaderC(unittest.TestCase):
     def compile_values(self, *extra: str) -> subprocess.CompletedProcess:
         return run(["clang", "-x", "c", *CFLAGS, f"-I{INC}", *extra, TMP / "values.c"])
@@ -119,7 +114,6 @@ class HeaderC(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-@container_only
 class Stub(unittest.TestCase):
     def compile_stub(self, pins: Path) -> subprocess.CompletedProcess:
         return run([*CXX_SYNTAX, f"-I{INC}", f"-I{pins}", TMP / "generated" / "stub" / "xy_api.cpp"])
@@ -134,7 +128,6 @@ class Stub(unittest.TestCase):
         self.assertIn("XY_FEAT_A must match XYD_FEAT_A", result.stderr)
 
 
-@container_only
 class Wrapper(unittest.TestCase):
     def test_consumer_builds_and_runs(self) -> None:
         code = run([TMP / "consumer"]).returncode
@@ -156,7 +149,6 @@ class Wrapper(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
-@container_only
 class Lua(unittest.TestCase):
     def test_module_byte_compiles(self) -> None:
         result = run(["luajit", "-bl", TMP / "generated" / "binding" / "xy_api.lua"])
@@ -187,7 +179,6 @@ class Lua(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stderr)
 
 
-@container_only
 class Gendeps(unittest.TestCase):
     def test_fragment_drives_gnu_make(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -203,9 +194,7 @@ class Gendeps(unittest.TestCase):
             self.assertIn("python3 -m api_gen xy_api.adef.toml --generated OUTDIR --exercise xy", result.stdout)
 
 
-@container_only
 class RealDefinition(unittest.TestCase):
-    @unittest.skipUnless(EXERCISES.is_dir(), CONTAINER_ONLY_REASON)
     def test_every_exercise_definition_round_trips(self) -> None:
         api_defs = sorted(EXERCISES.glob("*/userspace/api_def"))
         self.assertTrue(api_defs, f"no */userspace/api_def under {EXERCISES}")

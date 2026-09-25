@@ -294,7 +294,7 @@ class Naming(unittest.TestCase):
         self.assertEqual(naming.opaque_struct("tcdl", "handle"), "tcdl_handle_opaque")
         self.assertEqual(naming.version_const("tcdl"), "TCDL_API_VERSION")
         self.assertEqual(naming.api_macro("tcdl"), "TCDL_API")
-        self.assertEqual(naming.lua_const_name("err_no_device"), "ERR_NO_DEVICE")
+        self.assertEqual(naming.unprefixed_const_name("err_no_device"), "ERR_NO_DEVICE")
         self.assertEqual(naming.upper_camel("my_ns"), "MyNs")
 
 

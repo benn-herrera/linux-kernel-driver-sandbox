@@ -18,16 +18,28 @@ CPP_KEYWORDS = frozenset(
     "thread_local throw true try typedef typeid typename union unsigned using virtual void "
     "volatile wchar_t while xor xor_eq".split()
 )
+LABEL = "wrapper"
+
+
+def cpp_keyword_objections(api: Api) -> list[str]:
+    """Every name that is a C++ keyword, unprefixed by an output: 'C keyword' for one C
+    already reserves (the header refuses it too), 'C++ keyword' for one unique to C++.
+    Shared by the wrapper and the stub, the two C++ translation units."""
+    return [
+        f"{where}: '{name}' is a {'C' if name in emit_c.C_KEYWORDS else 'C++'} keyword"
+        for where, name in api.names()
+        if name in CPP_KEYWORDS
+    ]
 
 
 def validate(api: Api) -> list[str]:
     """Every objection the wrapper has to `api`: a name that is a C++ keyword, and a name
     the wrapper would define twice in the namespace, an enum class or a class."""
-    problems = [f"{where}: '{name}' is a C++ keyword" for where, name in api.names() if name in CPP_KEYWORDS]
+    problems = cpp_keyword_objections(api)
     classes = [o for o in api.opaque_refs if o.ctor is not None]
     const_names = [naming.VERSION_KEY] + [c.name for c in (*api.bit_consts, *api.consts, *api.string_consts)]
     problems += _duplicates(
-        [naming.lua_const_name(n) for n in const_names]
+        [naming.unprefixed_const_name(n) for n in const_names]
         + [naming.upper_camel(n) for n in [t.name for t in api.typed_consts] + [s.name for s in api.structs]]
         + [naming.upper_camel(o.class_name) for o in classes],
         f"namespace {api.namespace}",
@@ -39,7 +51,7 @@ def validate(api: Api) -> list[str]:
         members = [cls, "create", "handle", "release", HANDLE_MEMBER]
         members += [f.name for f in _methods(api, o)] + [p.name for p in _cached(_ctor(api, o), o)]
         problems += _duplicates(members, f"class {cls}")
-    return [f"wrapper: {p}" for p in problems]
+    return [f"{LABEL}: {p}" for p in problems]
 
 
 def wrapper(api: Api, *, source_name: str, stem: str) -> str:
@@ -53,7 +65,7 @@ def wrapper(api: Api, *, source_name: str, stem: str) -> str:
     ]
 
     def constant(c_type: str, name: str) -> str:
-        return f"inline constexpr {c_type} {naming.lua_const_name(name)} = {naming.const_name(ns, name)};\n"
+        return f"inline constexpr {c_type} {naming.unprefixed_const_name(name)} = {naming.const_name(ns, name)};\n"
 
     runs = [constant("uint32_t", naming.VERSION_KEY)]
     runs += [
@@ -110,7 +122,7 @@ def _enum(api: Api, name: str) -> str:
     # One case per value, named by its last entry, as the Lua module's _to_str: duplicate case labels do not compile.
     by_value = {e.value: (k, e) for k, e in zip(keys, typed.entries)}
     cases = "".join(
-        f'    case {cls}::{k}: return "{naming.lua_const_name(e.name)}";\n' for k, e in by_value.values()
+        f'    case {cls}::{k}: return "{naming.unprefixed_const_name(e.name)}";\n' for k, e in by_value.values()
     )
     return (
         f"\nenum class [[nodiscard]] {cls} : {naming.BASE_C_TYPES[typed.base_type]} {{\n{entries}}};\n\n"

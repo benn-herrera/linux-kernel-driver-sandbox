@@ -1,23 +1,15 @@
-"""A C++ implementation stub: every function defined, every body a placeholder failure."""
+"""A C++ implementation stub: every function defined, every body `return {};` to be replaced."""
 
 from api_gen import emit_c, naming
-from api_gen.emit_cpp_wrapper import CPP_KEYWORDS
-from api_gen.model import Api, EnumEntry, Function
+from api_gen.emit_cpp_wrapper import cpp_keyword_objections
+from api_gen.model import Api, Function
 
-UNSUPPORTED_NAME = "err_unsupported"
+LABEL = "stub"
 
 
 def validate(api: Api) -> list[str]:
-    """Every objection the stub has to `api`: a name that is a C++ keyword, and a return
-    enum with no nonzero entry to return as the placeholder failure."""
-    problems = [f"{where}: '{name}' is a C++ keyword" for where, name in api.names() if name in CPP_KEYWORDS]
-    problems += [
-        f"function.{fn.name}._return: typed_const '{fn.returns}' has no nonzero entry: "
-        "cannot pick a failure result for the stub"
-        for fn in api.functions
-        if _failure_entry(api, fn) is None
-    ]
-    return [f"stub: {p}" for p in problems]
+    """Every objection the stub has to `api`: a name that is a C++ keyword."""
+    return [f"{LABEL}: {p}" for p in cpp_keyword_objections(api)]
 
 
 def stub(api: Api, *, source_name: str, stem: str) -> str:
@@ -37,27 +29,12 @@ def stub(api: Api, *, source_name: str, stem: str) -> str:
 
 def _definition(api: Api, fn: Function) -> str:
     ns = api.namespace
-    c_params = [c for p in fn.params for c in emit_c.c_params(api, p)]
-    params = ", ".join(f"{t} {n}" for t, n in c_params) or "void"
-    voids = "".join(f"  (void){n};\n" for _, n in c_params)
+    voids = "".join(f"  (void){n};\n" for p in fn.params for _, n in emit_c.c_params(api, p))
     return (
-        f"{naming.api_macro(ns)} {emit_c.c_type(api, fn.returns)} {naming.function_name(ns, fn.name)}({params}) {{\n"
+        f"{naming.api_macro(ns)} {emit_c.c_type(api, fn.returns)} {naming.function_name(ns, fn.name)}"
+        f"({emit_c.param_list(api, fn)}) {{\n"
         f"{voids}"
-        f"  // replace: not implemented\n"
-        f"  return {_failure(api, fn)};\n"
-        f"}}\n"
+        "  // replace: not implemented\n"
+        "  return {};\n"
+        "}\n"
     )
-
-
-def _failure(api: Api, fn: Function) -> str:
-    """C name of the entry `_failure_entry` chooses; `validate` refuses an API where there is none."""
-    chosen = _failure_entry(api, fn)
-    assert chosen is not None
-    return naming.const_name(api.namespace, chosen.name)
-
-
-def _failure_entry(api: Api, fn: Function) -> EnumEntry | None:
-    """The return enum's `err_unsupported` entry, else its first nonzero entry, else None."""
-    entries = next(t for t in api.typed_consts if t.name == fn.returns).entries
-    chosen = next((e for e in entries if e.name == UNSUPPORTED_NAME), None)
-    return chosen or next((e for e in entries if e.value != 0), None)

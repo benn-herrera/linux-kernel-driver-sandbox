@@ -14,6 +14,7 @@ GENERATED_LOCALS = frozenset({"self", "result", "lib", "M", "ffi", "indent"})
 # LuaJIT hands a 64-bit integer back as cdata, since a Lua number is a double; every
 # other builtin scalar, the floating-point ones included, converts to a number exactly.
 CDATA_INTEGERS = frozenset({"i64", "u64"})
+LABEL = "lua"
 
 
 def validate(api: Api) -> list[str]:
@@ -45,7 +46,7 @@ def validate(api: Api) -> list[str]:
         members = ["new", "_handle", *_method_names(api, o), *(p.name for p in _cached(_ctor(api, o), o))]
         repeated = dict.fromkeys(m for i, m in enumerate(members) if members.index(m) != i)
         problems += [f"M.{naming.upper_camel(o.class_name)}.{m} would be defined more than once" for m in repeated]
-    return [f"lua: {p}" for p in problems]
+    return [f"{LABEL}: {p}" for p in problems]
 
 
 def module(api: Api, *, source_name: str, library: str) -> str:
@@ -63,7 +64,7 @@ def module(api: Api, *, source_name: str, library: str) -> str:
 
     for typed in api.typed_consts:
         names = "".join(
-            f'    [M.{c}] = "{c}",\n' for c in (naming.lua_const_name(e.name) for e in typed.entries)
+            f'    [M.{c}] = "{c}",\n' for c in (naming.unprefixed_const_name(e.name) for e in typed.entries)
         )
         zero = _zero_entry(typed)
         nil_clause = f'    if value == nil then return "{zero}" end\n' if zero is not None else ""
@@ -93,7 +94,7 @@ def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]
     as (docstring, literals) sections: one per constant group, the rest undocumented.
     Every value is the model's already-resolved one; a composed entry's sum was computed,
     and a bit group's overlap-checked, once in model.py."""
-    name = naming.lua_const_name
+    name = naming.unprefixed_const_name
     sections = [(None, [(name(naming.VERSION_KEY), _version_literal(api))])]
     sections += [
         (g.docstring, [(name(c.name), emit_c.int_literal(c.value, c.format)) for c in g.entries])
@@ -121,16 +122,19 @@ def _doc_lines(fn: Function) -> str:
 
 
 def _ok_const(api: Api, fn: Function) -> str:
+    """The Lua constant name of `fn`'s return enum's zero-valued entry: the model
+    requires one on every return enum, so it always exists here."""
     typed = next(t for t in api.typed_consts if t.name == fn.returns)
-    ok = next(e for e in typed.entries if e.value == 0)
-    return naming.lua_const_name(ok.name)
+    zero = _zero_entry(typed)
+    assert zero is not None
+    return zero
 
 
 def _zero_entry(typed: TypedConst) -> str | None:
     """The Lua constant name of `typed`'s zero-valued entry, or None if it has none.
     A return enum always has one (SPEC.md requires it); any other typed_const may not."""
     zero = next((e for e in typed.entries if e.value == 0), None)
-    return None if zero is None else naming.lua_const_name(zero.name)
+    return None if zero is None else naming.unprefixed_const_name(zero.name)
 
 
 def _is_opaque_value(param: Param, opaque: str) -> bool:
