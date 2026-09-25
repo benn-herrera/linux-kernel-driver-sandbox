@@ -23,7 +23,7 @@ int tcd_init(void)
 {
 	int result = pci_register_driver(&tcd_driver);
 
-	pr_info("%s: %s\n", TCD_NAME,
+	pr_info(pr_fmt("%s\n"),
 		result == 0 ? "registered." : "REGISTRATION FAILED!");
 	return result;
 }
@@ -31,5 +31,5 @@ int tcd_init(void)
 void tcd_exit(void)
 {
 	pci_unregister_driver(&tcd_driver);
-	pr_info("%s: unloaded.\n", TCD_NAME);
+	pr_info(pr_fmt("unloaded.\n"));
 }

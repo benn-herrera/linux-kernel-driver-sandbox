@@ -76,8 +76,16 @@ static int tcd_dma_xfer(struct tcd_dev *tcd, u64 src, u64 dst, u64 count,
 					return -EFAULT;
 			} else
 				result = 0;
-		} else
+		} else {
 			result = (result == 0) ? -ETIMEDOUT : -ERESTARTSYS;
+			if (result == -ETIMEDOUT)
+				dev_err_ratelimited(
+					&tcd->pdev->dev,
+					"dma %s device timed out. status: 0x%08x\n",
+					(dir == DMA_FROM_DEVICE ? "from" :
+								  "to"),
+					ioread32(tcd->regs + TCD_REG_STATUS));
+		}
 	}
 
 	return result;

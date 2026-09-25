@@ -93,9 +93,17 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 			iowrite32(val, mfile->tcd->regs + TCD_REG_COMPUTE);
 			result = wait_for_completion_interruptible_timeout(
 				&mfile->tcd->compute_done, HZ);
-			if (result <= 0)
-				return (result == 0) ? -ETIMEDOUT :
-						       -ERESTARTSYS;
+			if (result <= 0) {
+				result = (result == 0) ? -ETIMEDOUT :
+							 -ERESTARTSYS;
+				if (result == -ETIMEDOUT)
+					dev_err_ratelimited(
+						&mfile->tcd->pdev->dev,
+						"compute timed out. status: 0x%08x\n",
+						ioread32(mfile->tcd->regs +
+							 TCD_REG_STATUS));
+				return result;
+			}
 			val = ioread32(mfile->tcd->regs + TCD_REG_COMPUTE);
 			result = 0;
 		}

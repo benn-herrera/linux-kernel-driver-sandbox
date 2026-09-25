@@ -4,6 +4,8 @@ mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 printf 'lkds: userspace reached\n'
 uname -r
+# Lua modules staged beside the test scripts resolve from any cwd
+export LUA_PATH='/usr/bin/?.lua;;'
 # lkds_test on the kernel command line (from `just test-vtarget`): run the suite,
 # report its exit status on its own line for the host, and power off.
 if grep -qw lkds_test /proc/cmdline; then

@@ -181,6 +181,7 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 ### Initramfs
 
 - `vdev/initramfs/init`, a POSIX sh script: mounts proc, sysfs and devtmpfs,
+  exports `LUA_PATH` (see "Userspace programs"),
   prints the marker `lkds: userspace reached` and `uname -r`, then, if
   `lkds_test` is a word of `/proc/cmdline`, runs `lkds-test`, prints
   `lkds-test: exit <status>` and `poweroff -f` (see "Boot"); otherwise
@@ -201,7 +202,11 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   staged at `/usr/bin/` mode 755 with no closure of its own (its shebang
   names the interpreter); otherwise `file` decides: an ELF executable
   (PIE included) is staged at `/usr/bin/`, an ELF shared object at
-  `/lib/`, anything else fails the recipe. Otherwise the archive is built
+  `/lib/`, anything else fails the recipe. A subdirectory of
+  `out/userspace/` other than `include/` is script support (Lua modules
+  beside the scripts that `require` them): it is staged whole under
+  `/usr/bin/` under its own name, never classified and never in the
+  manifest. Otherwise the archive is built
   without userspace programs and says so on stderr.
   `out/userspace/include/`, if present, is excluded from that
   classification and staged whole to `/usr/include/`, preserving its
@@ -271,7 +276,12 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   no build step, and run as tests through `lkds-test`; each must start
   with a `#!` line naming its interpreter, and `/usr/bin/luajit` is the
   interpreter the guest provides today. Such a script reads the
-  exercise's API header from `/usr/include/<name>/` at runtime. The
+  exercise's API header from `/usr/include/<name>/` at runtime.
+  Subdirectories of `script/` hold modules the scripts `require`; they
+  ship whole and are never run. `init` exports `LUA_PATH` as
+  `/usr/bin/?.lua;;` so `require("binding.x")` resolves to
+  `/usr/bin/binding/x.lua` from any cwd, the trailing `;;` keeping
+  LuaJIT's default path behind it. The
   contract is in CONVENTIONS.md.
 - `just userspace-vdev` runs `make -C /work/exercises/<name>/userspace/lib`
   then `make -C /work/exercises/<name>/userspace/app`, each with `CC=clang
@@ -279,8 +289,8 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   DRIVER_INCLUDE=/work/exercises`, for the active exercise (failing if the
   exercise directory, its `lib/Makefile` or its `app/Makefile` is
   missing), then copies the executable `<name>` and every `lib*.so*` from
-  that tree, every regular file under
-  `exercises/<name>/userspace/script/`, and every `lib/*.h` header (to
+  that tree, the whole `exercises/<name>/userspace/script/` tree
+  (subdirectories included), and every `lib/*.h` header (to
   `out/userspace/include/<name>/`), to `out/userspace/`, which holds only
   what the initramfs ships (cleared first). It does not depend on the
   kernel recipes.

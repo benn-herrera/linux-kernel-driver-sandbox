@@ -100,7 +100,7 @@ driver-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
-[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus every regular file in /work/exercises/EXERCISE/userspace/script/ as-is, are copied to OUT/userspace/ (cleared first); every lib/*.h header is copied to OUT/userspace/include/EXERCISE/ (created)")]
+[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header is copied to OUT/userspace/include/EXERCISE/ (created)")]
 userspace: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
@@ -118,10 +118,9 @@ userspace: exercise-check
   for lib in "${build}"/lib*.so*; do
     cp "${lib}" "{{OUT}}/userspace/"
   done
-  for script in "${dir}/script"/*; do
-    [[ -f "${script}" ]] || continue
-    cp "${script}" "{{OUT}}/userspace/"
-  done
+  if [[ -d "${dir}/script" ]]; then
+    cp -r "${dir}/script/." "{{OUT}}/userspace/"
+  fi
   include="{{OUT}}/userspace/include/{{EXERCISE}}"
   mkdir -p "${include}"
   for header in "${dir}/lib"/*.h; do
@@ -169,7 +168,7 @@ compile-commands: exercise-check
   )"
   printf 'wrote %s/compile_commands.json: %s entries\n' "{{OUT}}" "${n}" >&2
 
-[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test and this image's /usr/bin/luajit at /usr/bin, any OUT/driver/*.ko at /lib/modules, any OUT/userspace/* by what it is: a file starting with `#!` is a script and, like an ELF executable (per `file`), goes to /usr/bin and into the /etc/lkds/tests manifest (executables first, then scripts); ELF shared objects go to /lib; anything else fails; OUT/userspace/include/, skipped by that classification, is staged whole to /usr/include/, preserving its per-exercise subdirectory; plus the loader at its PT_INTERP path and every library ldd resolves for luajit and the ELF files copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
+[doc("stage a busybox root with /work/vdev/initramfs/init, /work/vdev/initramfs/lkds-test and this image's /usr/bin/luajit at /usr/bin, any OUT/driver/*.ko at /lib/modules, any OUT/userspace/* by what it is: a file starting with `#!` is a script and, like an ELF executable (per `file`), goes to /usr/bin and into the /etc/lkds/tests manifest (executables first, then scripts); ELF shared objects go to /lib; anything else fails; a subdirectory of OUT/userspace/ other than include/ is staged whole under /usr/bin/ and never enters the manifest; OUT/userspace/include/, skipped by that classification, is staged whole to /usr/include/, preserving its per-exercise subdirectory; plus the loader at its PT_INTERP path and every library ldd resolves for luajit and the ELF files copied from this image to /lib; then pack it to OUT/initramfs.cpio.gz")]
 initramfs:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -208,6 +207,11 @@ initramfs:
       for bin in "{{OUT}}/userspace"/*; do
         # headers are staged separately below; not a program, library or script
         [[ "$(basename "${bin}")" == include ]] && continue
+        # a subdirectory is script support (Lua modules): staged whole under /usr/bin, never a test
+        if [[ -d "${bin}" ]]; then
+          cp -r "${bin}" "${root}/usr/bin/"
+          continue
+        fi
         [[ -f "${bin}" ]] || continue
         if [[ "$(head -c 2 "${bin}")" == '#!' ]]; then
           # a script names its interpreter in the shebang; it has no ldd closure of its own
