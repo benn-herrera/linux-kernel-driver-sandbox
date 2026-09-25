@@ -124,9 +124,6 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
     ]
     handle = next(p for p in ctor.params if p.type == opaque.name and p.outref)
     cached = [p for p in ctor.params if p.outref and p is not handle]
-    memory = next((p for p in cached if p.type == "memory"), None)
-    if memory is not None:
-        raise DefinitionError(f"C++ wrapper: function.{ctor.name}.{memory.name}: a constructor cannot cache a memory outref")
     _check_unique(
         [cls, "create", "handle", "release", HANDLE_MEMBER, *(f.name for f in methods), *(p.name for p in cached)],
         f"C++ wrapper: class {cls}",

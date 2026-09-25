@@ -413,6 +413,11 @@ def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Func
             raise DefinitionError(
                 f"{where}.ctor: '{o.ctor}' must name a function with exactly one {o.name} outref"
             )
+        memory = next((p for p in ctor.params if p.outref and p.type == "memory"), None)
+        if memory is not None:
+            raise DefinitionError(
+                f"{where}.ctor: function.{ctor.name}.{memory.name}: a constructor cannot cache a memory outref"
+            )
         if o.dtor is not None:
             dtor = functions.get(o.dtor)
             if dtor is None or [(p.type, p.outref, p.inref) for p in dtor.params] != [(o.name, False, False)]:

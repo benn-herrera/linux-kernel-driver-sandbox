@@ -184,9 +184,6 @@ def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_
     parameter name."""
     handle = next(p for p in fn.params if p.type == opaque.name and p.outref)
     cached = [p for p in fn.params if p.outref and p is not handle]
-    memory = next((p for p in cached if p.type == "memory"), None)
-    if memory is not None:
-        raise DefinitionError(f"Lua module: function.{fn.name}.{memory.name}: a constructor cannot cache a memory outref")
     members = ["new", "_handle", *method_names, *(p.name for p in cached)]
     duplicate = next((m for m in members if members.count(m) > 1), None)
     if duplicate is not None:

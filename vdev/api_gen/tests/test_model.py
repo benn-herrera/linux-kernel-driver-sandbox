@@ -88,6 +88,16 @@ class ModelErrors(unittest.TestCase):
     def test_string_const_rejects_newline(self) -> None:
         self.assert_error(FIXTURE.replace('product = "xy widget"', 'product = "xy\\nwidget"'), "newline")
 
+    def test_ctor_cannot_cache_a_memory_outref(self) -> None:
+        self.assert_error(
+            FIXTURE.replace(
+                'generation = { type = "u32", outref = true }',
+                'generation = { type = "u32", outref = true }\n'
+                'blob = { type = "memory", outref = true, size = "unit" }',
+            ),
+            "a constructor cannot cache a memory outref",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -27,6 +27,7 @@ Rules a definition must satisfy:
 - A composed constant names only entries defined before it. A pin names an existing `untyped_bit_const` entry. Constant names are unique across the bit constants, the plain and string constants, every enum, and the version constant; the C identifiers of enums, opaque refs and their tags, structs and functions are unique together.
 - Docstrings contain neither `*/` nor `]]`.
 - Order is meaning: parameters and fields appear in every output in the order written.
+- A ctor has no memory outref: the bindings cache every other outref of the ctor on the object, and a buffer has no owner there.
 
 ## Naming
 

@@ -27,8 +27,8 @@ def output_paths(*, stem: str, exercise: str) -> tuple[Path, Path, Path, Path]:
     )
 
 
-def main() -> int:
-    argv = sys.argv[1:]
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
     if argv[:1] == ["gendeps"]:
         return _gendeps_main(argv[1:])
     return _generate_main(argv)
