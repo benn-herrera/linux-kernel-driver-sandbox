@@ -55,9 +55,9 @@ XY_API xy_status xy_destroy_port(xy_port hport) {
   return XY_OK;
 }
 
-XY_API xy_status xy_send(xy_port hport, const void* buf, uint64_t len) {
+XY_API xy_status xy_send(xy_port hport, const void* buf, uint64_t buf_count) {
   (void)hport;
-  return buf != nullptr && len == 4 ? XY_OK : XY_ERR_BUSY;
+  return buf != nullptr && buf_count == 4 ? XY_OK : XY_ERR_BUSY;
 }
 
 XY_API xy_status xy_spend(xy_token htoken) {
@@ -65,10 +65,10 @@ XY_API xy_status xy_spend(xy_token htoken) {
   return XY_OK;
 }
 
-XY_API xy_status xy_recv(xy_port hport, void* pdst, uint32_t n) {
+XY_API xy_status xy_recv(xy_port hport, void* pdst, uint32_t pdst_count) {
   (void)hport;
-  memset(pdst, 'r', n);
-  if (n > 2) {
+  memset(pdst, 'r', pdst_count);
+  if (pdst_count > 2) {
     static_cast<char*>(pdst)[2] = '\0';
   }
   return XY_OK;
@@ -84,6 +84,16 @@ XY_API xy_status xy_stats_of(xy_port hport, xy_stats* out, uint32_t* pcount, xy_
   out->count = 42;
   *pcount = 43;
   *plink = &the_link;
+  return XY_OK;
+}
+
+XY_API xy_status xy_bump(xy_port hport, uint32_t* level, xy_stats* tally, void* data, uint32_t data_count) {
+  (void)hport;
+  *level += 1;
+  tally->count *= 2;
+  for (uint32_t i = 0; i < data_count; ++i) {
+    static_cast<uint8_t*>(data)[i] += 1;
+  }
   return XY_OK;
 }
 

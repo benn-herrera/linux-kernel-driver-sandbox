@@ -15,6 +15,11 @@ def function_name(namespace: str, name: str) -> str:
     return f"{namespace}_{name}"
 
 
+def count_param(name: str) -> str:
+    """The byte-count parameter a `memory` parameter expands to beside itself: `psrc_count`."""
+    return f"{name}_count"
+
+
 def const_name(namespace: str, key: str) -> str:
     """C name of a constant: `TCDL_ERR_NO_DEVICE`."""
     return f"{namespace.upper()}_{key.upper()}"

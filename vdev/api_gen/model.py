@@ -38,7 +38,17 @@ BUILTIN_TYPES = frozenset({"u32", "u64", "memory"})
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 _INT32_MIN, _INT32_MAX = -(2**31), 2**31 - 1
 FORMATS = ("dec", "hex")
+REFS = ("in", "out", "inout")
+TABLES = frozenset(
+    {"general", "untyped_bit_const", "untyped_const", "string_const", "typed_const", "opaque_ref", "struct", "function",
+     "driver_data"}
+)
 GROUP_PROPERTIES = frozenset({"_docstring", "_base_type"})
+OPAQUE_PROPERTIES = frozenset({"_docstring", "_class", "_ctor", "_dtor"})
+CONST_ATTRIBUTES = frozenset({"_value", "_docstring", "_format"})
+FIELD_ATTRIBUTES = frozenset({"_type", "_docstring"})
+PARAM_ATTRIBUTES = frozenset({"_type", "_ref", "_count", "_optional", "_docstring"})
+COUNT_TYPES = ("u32", "u64")
 
 
 class DefinitionError(Exception):
@@ -95,7 +105,7 @@ class TypedConst:
 class OpaqueRef:
     name: str
     docstring: str | None
-    ctor: str | None  # function with exactly one outref of this type
+    ctor: str | None  # function with exactly one out parameter of this type
     dtor: str | None  # function taking only this type by value; set only with ctor
     class_name: str  # an identifier as the definition writes it; each binding applies its own idiom
 
@@ -118,10 +128,9 @@ class Struct:
 class Param:
     name: str
     type: str
-    outref: bool
-    inref: bool
-    nullsafe: bool
-    size: str | None  # memory only: the sibling parameter holding the byte count
+    ref: str | None  # one of REFS; None is by value
+    count_type: str | None  # memory only, one of COUNT_TYPES: the type of its naming.count_param
+    optional: bool
     docstring: str | None
 
 
@@ -197,6 +206,9 @@ def load(path: Path) -> Api:
 
 
 def from_dict(data: Mapping) -> Api:
+    unknown = sorted(set(data) - TABLES)
+    if unknown:
+        raise DefinitionError(f"unknown table(s) {', '.join(f'[{k}]' for k in unknown)}")
     general = data.get("general")
     if not isinstance(general, dict):
         raise DefinitionError("missing [general] table")
@@ -338,6 +350,17 @@ def _split(body: dict, properties: frozenset[str], where: str) -> tuple[dict, li
     return props, [(k, v) for k, v in body.items() if not k.startswith("_")]
 
 
+def _attributes(entry: object, *, naked: str, allowed: frozenset[str], where: str) -> dict:
+    """An entry's attributes; a value that is not a table is sugar for `{ <naked> = value }`."""
+    if not isinstance(entry, dict):
+        return {naked: entry}
+    plain = next((k for k in entry if not k.startswith("_")), None)
+    if plain is not None:
+        raise DefinitionError(f"{where}: '{plain}': entry attributes begin with _")
+    _reject_unknown(entry, allowed, where)
+    return entry
+
+
 def _base_type(props: Mapping, where: str) -> str:
     value = props.get("_base_type", "i32")
     if not isinstance(value, str) or value not in naming.BASE_C_TYPES:
@@ -373,19 +396,13 @@ def _reject_unknown(body: Mapping, allowed: set[str], where: str) -> None:
         raise DefinitionError(f"{where}: unknown key(s) {', '.join(unknown)}")
 
 
-def _format(attrs: Mapping, where: str) -> str:
-    value = attrs.get("format", "dec")
-    if value not in FORMATS:
-        raise DefinitionError(f"{where}.format must be one of {', '.join(FORMATS)}")
-    return value
-
-
 def _unwrap_value(entry: object, where: str) -> tuple[object, str | None, str]:
-    """Split a bare value or a { value, docstring, format } table into (value, docstring, format)."""
-    if not isinstance(entry, dict):
-        return entry, None, "dec"
-    _reject_unknown(entry, {"value", "docstring", "format"}, where)
-    return entry.get("value"), _docstring(entry.get("docstring"), f"{where}.docstring"), _format(entry, where)
+    """A constant entry as (value, docstring, format)."""
+    attrs = _attributes(entry, naked="_value", allowed=CONST_ATTRIBUTES, where=where)
+    fmt = attrs.get("_format", "dec")
+    if fmt not in FORMATS:
+        raise DefinitionError(f"{where}._format must be one of {', '.join(FORMATS)}")
+    return attrs.get("_value"), _docstring(attrs.get("_docstring"), f"{where}._docstring"), fmt
 
 
 def _bit_const_groups(
@@ -414,8 +431,7 @@ def _bit_const_groups(
                 consts.append(BitConst(key, None, tuple(entry), doc, fmt))
             else:
                 raise DefinitionError(
-                    f"{where}: must be a bit index, a non-empty list of constant names, "
-                    "or {value=..., docstring=...}"
+                    f"{where}: must be a bit index or a non-empty list of constant names"
                 )
             defined.add(key)
         result.append(BitConstGroup(group_doc, base_type, tuple(consts)))
@@ -435,15 +451,13 @@ def _int_entry(key: str, entry: object, where: str, *, base_type: str) -> EnumEn
 def _string_const(key: str, entry: object) -> StringConst:
     where = f"string_const.{key}"
     _identifier(key, where)
-    doc = None
-    if isinstance(entry, dict):
-        _reject_unknown(entry, {"value", "docstring"}, where)
-        entry, doc = entry.get("value"), _docstring(entry.get("docstring"), f"{where}.docstring")
-    if not isinstance(entry, str):
-        raise DefinitionError(f"{where}: must be a string or {{value=..., docstring=...}}")
-    if any(c in entry for c in '"\\\n'):
+    attrs = _attributes(entry, naked="_value", allowed=frozenset({"_value", "_docstring"}), where=where)
+    value = attrs.get("_value")
+    if not isinstance(value, str):
+        raise DefinitionError(f"{where}: value must be a string")
+    if any(c in value for c in '"\\\n'):
         raise DefinitionError(f"{where}: value must not contain '\"', '\\' or a newline")
-    return StringConst(key, entry, doc)
+    return StringConst(key, value, _docstring(attrs.get("_docstring"), f"{where}._docstring"))
 
 
 def _typed_const(name: str, body: dict) -> TypedConst:
@@ -458,16 +472,19 @@ def _typed_const(name: str, body: dict) -> TypedConst:
 
 def _opaque_ref(name: str, body: dict) -> OpaqueRef:
     where = f"opaque_ref.{name}"
-    _reject_unknown(body, {"docstring", "ctor", "dtor", "class"}, where)
-    for key in ("ctor", "dtor"):
-        if not isinstance(body.get(key, ""), str):
+    props, members = _split(body, OPAQUE_PROPERTIES, where)
+    if members:
+        raise DefinitionError(f"{where}: '{members[0][0]}': an opaque_ref has no members; its properties begin with _")
+    for key in ("_ctor", "_dtor"):
+        if not isinstance(props.get(key, ""), str):
             raise DefinitionError(f"{where}.{key} must be a function name")
-    class_name = body.get("class", name)
+    class_name = props.get("_class", name)
     if not isinstance(class_name, str) or not _IDENTIFIER.match(class_name):
-        raise DefinitionError(f"{where}.class must be an identifier")
-    _identifier(class_name, f"{where}.class")
+        raise DefinitionError(f"{where}._class must be an identifier")
+    _identifier(class_name, f"{where}._class")
     return OpaqueRef(
-        name, _docstring(body.get("docstring"), f"{where}.docstring"), body.get("ctor"), body.get("dtor"), class_name
+        name, _docstring(props.get("_docstring"), f"{where}._docstring"), props.get("_ctor"), props.get("_dtor"),
+        class_name,
     )
 
 
@@ -476,43 +493,47 @@ def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Func
     for o in opaque_refs:
         where = f"opaque_ref.{o.name}"
         if o.dtor is not None and o.ctor is None:
-            raise DefinitionError(f"{where}.dtor: requires ctor")
+            raise DefinitionError(f"{where}._dtor: requires _ctor")
         if o.ctor is None:
             continue
         ctor = functions.get(o.ctor)
-        if ctor is None or sum(p.type == o.name and p.outref for p in ctor.params) != 1:
+        if ctor is None or sum(p.type == o.name and p.ref == "out" for p in ctor.params) != 1:
             raise DefinitionError(
-                f"{where}.ctor: '{o.ctor}' must name a function with exactly one {o.name} outref"
+                f"{where}._ctor: '{o.ctor}' must name a function with exactly one {o.name} parameter of _ref \"out\""
             )
-        memory = next((p for p in ctor.params if p.outref and p.type == "memory"), None)
+        memory = next((p for p in ctor.params if p.ref == "out" and p.type == "memory"), None)
         if memory is not None:
             raise DefinitionError(
-                f"{where}.ctor: function.{ctor.name}.{memory.name}: a constructor cannot cache a memory outref"
+                f"{where}._ctor: function.{ctor.name}.{memory.name}: a constructor cannot cache a memory out parameter"
+            )
+        inout = next((p for p in ctor.params if p.ref == "inout"), None)
+        if inout is not None:
+            raise DefinitionError(
+                f"{where}._ctor: function.{ctor.name}.{inout.name}: a constructor has no inout parameter"
             )
         if o.dtor is not None:
             dtor = functions.get(o.dtor)
-            if dtor is None or [(p.type, p.outref, p.inref) for p in dtor.params] != [(o.name, False, False)]:
+            if dtor is None or [(p.type, p.ref) for p in dtor.params] != [(o.name, None)]:
                 raise DefinitionError(
-                    f"{where}.dtor: '{o.dtor}' must name a function whose only parameter is a {o.name} by value"
+                    f"{where}._dtor: '{o.dtor}' must name a function whose only parameter is a {o.name} by value"
                 )
         class_name = naming.upper_camel(o.class_name)
         if class_name in classes:
-            raise DefinitionError(f"{where}.class: {class_name} is already the class of opaque_ref.{classes[class_name]}")
+            raise DefinitionError(f"{where}._class: {class_name} is already the class of opaque_ref.{classes[class_name]}")
         classes[class_name] = o.name
 
 
-def _member_type(entry: object, where: str) -> tuple[str, dict]:
-    """Split a bare type string or an inline table into (type, attributes)."""
-    if isinstance(entry, str):
-        return entry, {}
-    if isinstance(entry, dict) and isinstance(entry.get("type"), str):
-        return entry["type"], entry
-    raise DefinitionError(f"{where}: must be a type name or {{type=..., ...}}")
-
-
-def _check_type(type_name: str, type_names: dict[str, str], where: str) -> None:
+def _variable(
+    entry: object, *, allowed: frozenset[str], type_names: dict[str, str], where: str
+) -> tuple[str, dict]:
+    """A field or parameter as (type, attributes), its type checked to exist."""
+    attrs = _attributes(entry, naked="_type", allowed=allowed, where=where)
+    type_name = attrs.get("_type")
+    if not isinstance(type_name, str):
+        raise DefinitionError(f"{where}: must be a type name or a table with _type")
     if type_name not in BUILTIN_TYPES and type_name not in type_names:
         raise DefinitionError(f"{where}: unknown type '{type_name}'")
+    return type_name, attrs
 
 
 def _struct(name: str, body: dict, type_names: dict[str, str], *, defined_structs: set[str]) -> Struct:
@@ -521,24 +542,15 @@ def _struct(name: str, body: dict, type_names: dict[str, str], *, defined_struct
     for key, entry in members:
         where = f"struct.{name}.{key}"
         _identifier(key, where)
-        type_name, attrs = _member_type(entry, where)
-        _reject_unknown(attrs, {"type", "docstring"}, where)
-        _check_type(type_name, type_names, where)
+        type_name, attrs = _variable(entry, allowed=FIELD_ATTRIBUTES, type_names=type_names, where=where)
         if type_name == "memory":
             raise DefinitionError(f"{where}: 'memory' is not a field type")
         if type_names.get(type_name) == "struct" and type_name not in defined_structs:
             raise DefinitionError(f"{where}: struct '{type_name}' must be defined before it is used")
-        fields.append(Field(key, type_name, _docstring(attrs.get("docstring"), f"{where}.docstring")))
+        fields.append(Field(key, type_name, _docstring(attrs.get("_docstring"), f"{where}._docstring")))
     if not fields:
         raise DefinitionError(f"struct.{name}: has no fields")
     return Struct(name, tuple(fields), _docstring(props.get("_docstring"), f"struct.{name}._docstring"))
-
-
-def _flag(attrs: Mapping, key: str, where: str) -> bool:
-    value = attrs.get(key, False)
-    if not isinstance(value, bool):
-        raise DefinitionError(f"{where}.{key} must be true or false")
-    return value
 
 
 def _function(
@@ -557,44 +569,29 @@ def _function(
     for key, entry in members:
         pwhere = f"{where}.{key}"
         _identifier(key, pwhere, reserved=RESERVED_NAMES | GENERATED_LOCALS)
-        type_name, attrs = _member_type(entry, pwhere)
-        _reject_unknown(attrs, {"type", "outref", "inref", "nullsafe", "size", "docstring"}, pwhere)
-        _check_type(type_name, type_names, pwhere)
-        outref, inref = _flag(attrs, "outref", pwhere), _flag(attrs, "inref", pwhere)
-        if outref and inref:
-            raise DefinitionError(f"{pwhere}: outref and inref are exclusive")
-        if type_name == "memory" and not (outref or inref):
-            raise DefinitionError(f"{pwhere}: a 'memory' parameter must be inref or outref")
-        size = attrs.get("size")
-        if size is not None and (type_name != "memory" or not isinstance(size, str)):
-            raise DefinitionError(f"{pwhere}.size: only a 'memory' parameter names a size parameter")
-        if type_name == "memory" and size is None:
-            raise DefinitionError(f"{pwhere}: a 'memory' parameter names its 'size' parameter")
+        type_name, attrs = _variable(entry, allowed=PARAM_ATTRIBUTES, type_names=type_names, where=pwhere)
+        ref = attrs.get("_ref")
+        if ref is not None and ref not in REFS:
+            raise DefinitionError(f"{pwhere}._ref must be one of {', '.join(REFS)}")
+        if type_name == "memory" and ref is None:
+            raise DefinitionError(f"{pwhere}: a 'memory' parameter needs _ref")
+        count_type = attrs.get("_count")
+        if type_name == "memory" and count_type not in COUNT_TYPES:
+            raise DefinitionError(f"{pwhere}: a 'memory' parameter requires _count, one of {', '.join(COUNT_TYPES)}")
+        if type_name != "memory" and count_type is not None:
+            raise DefinitionError(f"{pwhere}._count: only a 'memory' parameter has a count")
+        optional = attrs.get("_optional", False)
+        if not isinstance(optional, bool):
+            raise DefinitionError(f"{pwhere}._optional must be true or false")
         params.append(
-            Param(
-                key,
-                type_name,
-                outref,
-                inref,
-                _flag(attrs, "nullsafe", pwhere),
-                size,
-                _docstring(attrs.get("docstring"), f"{pwhere}.docstring"),
-            )
+            Param(key, type_name, ref, count_type, optional, _docstring(attrs.get("_docstring"), f"{pwhere}._docstring"))
         )
-    by_name = {p.name: p for p in params}
-    buffer_of: dict[str, str] = {}  # size parameter -> the memory parameter it measures
+    names = {p.name for p in params}
     for p in params:
-        if p.size is None:
-            continue
-        target = by_name.get(p.size)
-        if target is None or target.type not in ("u32", "u64") or target.outref or target.inref:
+        if p.count_type is not None and naming.count_param(p.name) in names:
             raise DefinitionError(
-                f"{where}.{p.name}.size: '{p.size}' must name a u32 or u64 parameter "
-                "of the same function passed by value"
+                f"{where}.{p.name}: its count parameter {naming.count_param(p.name)} is already a parameter"
             )
-        if p.size in buffer_of:
-            raise DefinitionError(f"{where}.{p.name}.size: '{p.size}' is already the size of '{buffer_of[p.size]}'")
-        buffer_of[p.size] = p.name
     return Function(name, returns, tuple(params), _docstring(props.get("_docstring"), f"{where}._docstring"))
 
 

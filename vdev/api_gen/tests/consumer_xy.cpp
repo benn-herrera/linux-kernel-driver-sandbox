@@ -1,7 +1,7 @@
 // A consumer of support.KITCHEN_SINK's C++ wrapper, run against fake_xy.cpp's libxy.so.
 // Exit codes: 0 all steps passed; 1 create(99) failure result; 2 create(3) and its cached
-// outrefs; 3 send; 4 recv; 5 configure; 6 stats_of; 7 move construction; 8 move assignment;
-// 9 release; 10 destructors freed the slots; 11 PRODUCT; 12 DataLink::create.
+// out parameters; 3 send; 4 recv; 5 configure; 6 stats_of; 7 move construction; 8 move assignment;
+// 9 release; 10 destructors freed the slots; 11 PRODUCT; 12 DataLink::create; 13 bump.
 #include "xy_api.hpp"
 
 #include <cstring>
@@ -60,6 +60,15 @@ int main() {
   xy_link l = nullptr;
   if (port.stats_of(st, c, l) != xy::Status::Ok || st.count != 42 || c != 43 || l == nullptr) {
     return 6;
+  }
+
+  uint32_t level = 4;
+  xy::Stats tally{};
+  tally.count = 5;
+  char data[3] = {'a', 'b', 'c'};
+  if (port.bump(level, tally, data, 3) != xy::Status::Ok || level != 5 || tally.count != 10 ||
+      std::memcmp(data, "bcd", 3) != 0) {
+    return 13;
   }
 
   xy::Port moved = std::move(port);

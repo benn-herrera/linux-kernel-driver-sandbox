@@ -23,8 +23,9 @@ def stub(api: Api, *, source_name: str, stem: str) -> str:
 
 def _definition(api: Api, fn: Function) -> str:
     ns = api.namespace
-    params = ", ".join(f"{emit_c.param_type(api, p)} {p.name}" for p in fn.params) or "void"
-    voids = "".join(f"  (void){p.name};\n" for p in fn.params)
+    c_params = [c for p in fn.params for c in emit_c.c_params(api, p)]
+    params = ", ".join(f"{t} {n}" for t, n in c_params) or "void"
+    voids = "".join(f"  (void){n};\n" for _, n in c_params)
     return (
         f"{naming.api_macro(ns)} {emit_c.c_type(api, fn.returns)} {naming.function_name(ns, fn.name)}({params}) {{\n"
         f"{voids}"

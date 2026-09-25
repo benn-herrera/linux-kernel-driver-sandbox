@@ -20,39 +20,39 @@ library = "libxy.so"
 
 [[untyped_bit_const]]
 feat_a = 0
-feat_b = { value = 3, docstring = "the b feature" }
-feat_ab = { value = ["feat_a", "feat_b"], format = "hex" }
+feat_b = { _value = 3, _docstring = "the b feature" }
+feat_ab = { _value = ["feat_a", "feat_b"], _format = "hex" }
 
 [[untyped_const]]
 max_units = 16
-magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
+magic = { _value = 0xbeef, _format = "hex", _docstring = "wire magic" }
 
 [string_const]
 product = "xy widget"
-vendor = { value = "acme", docstring = "who made it" }
+vendor = { _value = "acme", _docstring = "who made it" }
 
 [typed_const.status]
 _docstring = "call outcome"
 ok = 0
-err_busy = { value = 9, docstring = "try later" }
-err_other = { value = 0x7fffffff, format = "hex" }
+err_busy = { _value = 9, _docstring = "try later" }
+err_other = { _value = 0x7fffffff, _format = "hex" }
 
 [opaque_ref.port]
-ctor = "open_port"
-dtor = "destroy_port"
+_ctor = "open_port"
+_dtor = "destroy_port"
 
 [opaque_ref.token]
 
 [struct.stats]
-count = { type = "u32", docstring = "items seen" }
+count = { _type = "u32", _docstring = "items seen" }
 bytes = "u64"
 
 [function.open_port]
 _return = "status"
 unit = "u32"
-pport = { type = "port", outref = true }
-pstats = { type = "stats", outref = true, nullsafe = true }
-generation = { type = "u32", outref = true }
+pport = { _type = "port", _ref = "out" }
+pstats = { _type = "stats", _ref = "out", _optional = true }
+generation = { _type = "u32", _ref = "out" }
 
 [function.destroy_port]
 _docstring = "release the port"
@@ -62,8 +62,7 @@ hport = "port"
 [function.send]
 _return = "status"
 hport = "port"
-buf = { type = "memory", inref = true, size = "len", docstring = "bytes to send" }
-len = "u64"
+buf = { _type = "memory", _ref = "in", _count = "u64", _docstring = "bytes to send" }
 
 [function.spend]
 _return = "status"
@@ -86,8 +85,8 @@ library = "libxy.so"
 [[untyped_bit_const]]
 _docstring = "feature flags"
 feat_a = 0
-feat_b = { value = 3, docstring = "the b feature" }
-feat_ab = { value = ["feat_a", "feat_b"], format = "hex" }
+feat_b = { _value = 3, _docstring = "the b feature" }
+feat_ab = { _value = ["feat_a", "feat_b"], _format = "hex" }
 
 [[untyped_bit_const]]
 _base_type = "u32"
@@ -96,22 +95,22 @@ feat_all = ["feat_ab"]
 [[untyped_const]]
 _docstring = "limits"
 max_units = 16
-neg = { value = -5, format = "hex" }
+neg = { _value = -5, _format = "hex" }
 
 [[untyped_const]]
 _docstring = "wire values"
 _base_type = "u32"
-magic = { value = 0xbeef, format = "hex", docstring = "wire magic" }
+magic = { _value = 0xbeef, _format = "hex", _docstring = "wire magic" }
 
 [string_const]
 product = "xy widget"
-vendor = { value = "acme", docstring = "who made it" }
+vendor = { _value = "acme", _docstring = "who made it" }
 
 [typed_const.status]
 _docstring = "call outcome"
 ok = 0
-err_busy = { value = 9, docstring = "try later" }
-err_other = { value = 0x7fffffff, format = "hex" }
+err_busy = { _value = 9, _docstring = "try later" }
+err_other = { _value = 0x7fffffff, _format = "hex" }
 err_again = 9
 err_unsupported = 12
 
@@ -120,33 +119,32 @@ _base_type = "u32"
 fine = 0
 slow = 1
 
-[opaque_ref.port]
-docstring = "a port"
-ctor = "open_port"
-dtor = "destroy_port"
+[opaque_ref]
+port = { _docstring = "a port", _ctor = "open_port", _dtor = "destroy_port" }
 
 [opaque_ref.token]
 
 [opaque_ref.link]
-ctor = "open_link"
-class = "data_link"
+_ctor = "open_link"
+_class = "data_link"
 
 [struct.stats]
 _docstring = "counters"
-count = { type = "u32", docstring = "items seen" }
+count = { _type = "u32", _docstring = "items seen" }
 bytes = "u64"
 
 [struct.wrap]
 inner = "stats"
-n = "u32"
+[struct.wrap.n]
+_type = "u32"
 
 [function.open_port]
 _return = "status"
 unit = "u32"
-pport = { type = "port", outref = true }
-pstats = { type = "stats", outref = true, nullsafe = true }
-generation = { type = "u32", outref = true }
-pwrap = { type = "wrap", outref = true }
+pport = { _type = "port", _ref = "out" }
+pstats = { _type = "stats", _ref = "out", _optional = true }
+generation = { _type = "u32", _ref = "out" }
+pwrap = { _type = "wrap", _ref = "out" }
 
 [function.destroy_port]
 _docstring = "release the port"
@@ -156,8 +154,7 @@ hport = "port"
 [function.send]
 _return = "status"
 hport = "port"
-buf = { type = "memory", inref = true, size = "len", docstring = "bytes to send" }
-len = "u64"
+buf = { _type = "memory", _ref = "in", _count = "u64", _docstring = "bytes to send" }
 
 [function.spend]
 _return = "status"
@@ -166,27 +163,34 @@ htoken = "token"
 [function.recv]
 _return = "status"
 hport = "port"
-pdst = { type = "memory", outref = true, size = "n" }
-n = "u32"
+pdst = { _type = "memory", _ref = "out", _count = "u32" }
 
 [function.configure]
 _return = "status"
 hport = "port"
-cfg = { type = "stats", inref = true }
-limit = { type = "u32", inref = true }
+cfg = { _type = "stats", _ref = "in" }
+limit = { _type = "u32", _ref = "in" }
 mode = "mode"
 who = "token"
 
 [function.stats_of]
 _return = "status"
 hport = "port"
-out = { type = "stats", outref = true }
-pcount = { type = "u32", outref = true }
-plink = { type = "link", outref = true }
+out = { _type = "stats", _ref = "out" }
+pcount = { _type = "u32", _ref = "out" }
+plink = { _type = "link", _ref = "out" }
+
+[function.bump]
+_docstring = "level + 1, tally.count * 2, each byte of data + 1"
+_return = "status"
+hport = "port"
+level = { _type = "u32", _ref = "inout" }
+tally = { _type = "stats", _ref = "inout" }
+data = { _type = "memory", _ref = "inout", _count = "u32" }
 
 [function.open_link]
 _return = "status"
-plink = { type = "link", outref = true }
+plink = { _type = "link", _ref = "out" }
 
 [function.reset]
 _return = "status"

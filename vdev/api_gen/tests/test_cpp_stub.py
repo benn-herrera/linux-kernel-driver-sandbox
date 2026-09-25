@@ -4,7 +4,7 @@ import unittest
 from api_gen import emit_c, emit_cpp_stub, model
 from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate, param_lists
 
-STATUS_ERRORS = 'err_busy = { value = 9, docstring = "try later" }\nerr_other = { value = 0x7fffffff, format = "hex" }\n'
+STATUS_ERRORS = 'err_busy = { _value = 9, _docstring = "try later" }\nerr_other = { _value = 0x7fffffff, _format = "hex" }\n'
 
 
 def stub(text: str = FIXTURE) -> str:

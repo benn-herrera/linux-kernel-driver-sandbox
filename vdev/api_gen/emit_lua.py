@@ -94,7 +94,7 @@ def _ok_const(api: Api, fn: Function) -> str:
 
 
 def _is_opaque_value(param: Param, opaque: str) -> bool:
-    return param.type == opaque and not (param.outref or param.inref)
+    return param.type == opaque and param.ref is None
 
 
 def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> str:
@@ -119,12 +119,17 @@ def _box(api: Api, type_name: str) -> str:
     return c_type if api.kind(type_name) == "struct" else f"{c_type}[1]"
 
 
-def _copy_in(api: Api, p: Param) -> str:
-    """A non-memory inref arrives as a Lua value (a table or cdata for a struct) and is
-    copied into cdata the C call can point at; empty for any other parameter."""
-    if not p.inref or p.type == "memory":
-        return ""
-    return f'    local {p.name} = ffi.new("{_box(api, p.type)}", {p.name})\n'
+def _alloc(api: Api, p: Param) -> str:
+    """The cdata a non-memory reference parameter's C pointer reaches: an `in` or `inout`
+    value arrives as a Lua value (a table or cdata for a struct) and is copied in; an
+    `out` value starts zeroed."""
+    init = "" if p.ref == "out" else f", {p.name}"
+    return f'    local {p.name} = ffi.new("{_box(api, p.type)}"{init})\n'
+
+
+def _read_back(api: Api, p: Param) -> str:
+    """The Lua value of what the C call wrote through a reference parameter."""
+    return _lua_value(api, p.type, p.name if api.kind(p.type) == "struct" else f"{p.name}[0]")
 
 
 def _use_guard(opaque: OpaqueRef) -> str:
@@ -156,25 +161,61 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
     return "".join(out)
 
 
+def _memory_arg(p: Param) -> str:
+    """The Lua-visible name in a memory parameter's own signature position: the
+    parameter's name for `in`/`inout`, where the caller passes a string; its count
+    name for `out`, where the caller says how many bytes to allocate instead."""
+    return f"{p.name}_count" if p.ref == "out" else p.name
+
+
+def _memory_alloc(p: Param) -> str | None:
+    """The buffer a memory parameter's C pointer reaches: `out` allocates one sized by
+    the caller's count; `inout` first captures the caller's string length in a local,
+    since a cdata array has no length operator once it replaces the string under the
+    same name, then copies the string into a buffer that size; `in` needs no buffer, a
+    Lua string converts straight to `const void*`."""
+    if p.ref == "in":
+        return None
+    if p.ref == "out":
+        return f'    local {p.name} = ffi.new("uint8_t[?]", {p.name}_count)\n'
+    return (
+        f"    local {p.name}_count = #{p.name}\n"
+        f'    local {p.name} = ffi.new("uint8_t[?]", {p.name}_count, {p.name})\n'
+    )
+
+
+def _memory_count(p: Param) -> str:
+    """The byte count passed to the C call and read back for the returned string:
+    `#` of the caller's string for `in`; the count local, either the caller's `out`
+    argument or the one `_memory_alloc` captured for `inout`, otherwise."""
+    return f"#{p.name}" if p.ref == "in" else f"{p.name}_count"
+
+
 def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str], list[str], list[str]]:
-    """Lua arguments, C call arguments, allocations and returned values for plain parameters."""
-    sized_inputs = {p.size: p.name for p in params if p.type == "memory" and p.inref}
+    """Lua arguments, C call arguments, allocations and returned values. A `memory`
+    parameter is a Lua string, never cdata the consumer sees: `in` passes the caller's
+    string straight through; `out` and `inout` allocate a buffer and return its bytes
+    as a string, exactly as a scalar `out`/`inout` is returned. Every other `out` is
+    allocated and returned rather than taken."""
     args, call, allocs, rets = [], [], [], []
     for p in params:
-        if p.name in sized_inputs:
-            call.append(f"#{sized_inputs[p.name]}")
-        elif not p.outref:
+        if p.type == "memory":
+            args.append(_memory_arg(p))
+            alloc = _memory_alloc(p)
+            if alloc is not None:
+                allocs.append(alloc)
+            count = _memory_count(p)
+            call += [p.name, count]
+            if p.ref != "in":
+                rets.append(f"ffi.string({p.name}, {count})")
+            continue
+        call.append(p.name)
+        if p.ref != "out":
             args.append(p.name)
-            call.append(p.name)
-            allocs.append(_copy_in(api, p))
-        elif p.type == "memory":
-            allocs.append(f'    local {p.name} = ffi.new("uint8_t[?]", {p.size})\n')
-            call.append(p.name)
-            rets.append(f"ffi.string({p.name}, {p.size})")
-        else:
-            allocs.append(f'    local {p.name} = ffi.new("{emit_c.c_type(api, p.type)}[1]")\n')
-            call.append(p.name)
-            rets.append(_lua_value(api, p.type, f"{p.name}[0]"))
+        if p.ref is not None:
+            allocs.append(_alloc(api, p))
+            if p.ref != "in":
+                rets.append(_read_back(api, p))
     return args, call, allocs, rets
 
 
@@ -188,28 +229,23 @@ def _result_check(api: Api, fn: Function) -> str:
 
 
 def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_names: list[str]) -> str:
-    """`new`, which caches every outref other than the handle on the object under its
-    parameter name."""
-    handle = next(p for p in fn.params if p.type == opaque.name and p.outref)
-    cached = [p for p in fn.params if p.outref and p is not handle]
+    """`new`, which caches every out parameter other than the handle on the object under
+    its parameter name."""
+    handle = next(p for p in fn.params if p.type == opaque.name and p.ref == "out")
+    cached = [p for p in fn.params if p.ref == "out" and p is not handle]
     members = ["new", "_handle", *method_names, *(p.name for p in cached)]
     duplicate = next((m for m in members if members.count(m) > 1), None)
     if duplicate is not None:
         raise DefinitionError(f"Lua module: {cls}.{duplicate} would be defined more than once")
-    # _marshal supplies the arguments and call; the constructor allocates its outrefs itself.
-    args, call, _, _ = _marshal(api, fn.params)
-    out = [_doc_lines(fn), f"function {cls}.new({', '.join(args)})\n"]
-    for p in fn.params:
-        out.append(f'    local {p.name} = ffi.new("{_box(api, p.type)}")\n' if p.outref else _copy_in(api, p))
+    args, call, allocs, _ = _marshal(api, fn.params)
+    out = [_doc_lines(fn), f"function {cls}.new({', '.join(args)})\n", *allocs]
     out.append(_call(api, fn, call))
     handle_value = f"{handle.name}[0]"
     if opaque.dtor is not None:
         dtor_call = f"lib.{naming.function_name(api.namespace, opaque.dtor)}"
         handle_value = f"ffi.gc({handle_value}, function(h) {dtor_call}(h) end)"
     out.append(f"    local self = setmetatable({{}}, {cls})\n    self._handle = {handle_value}\n")
-    for p in cached:
-        value = p.name if api.kind(p.type) == "struct" else f"{p.name}[0]"
-        out.append(f"    self.{p.name} = {_lua_value(api, p.type, value)}\n")
+    out += [f"    self.{p.name} = {_read_back(api, p)}\n" for p in cached]
     out.append("    return self, nil\nend\n")
     return "\n" + "".join(out)
 

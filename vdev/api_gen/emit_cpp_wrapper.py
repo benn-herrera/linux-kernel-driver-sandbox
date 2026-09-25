@@ -80,21 +80,22 @@ def _ref_type(api: Api, type_name: str) -> str:
 
 
 def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -> tuple[list[str], list[str]]:
-    """The C++ parameter list and the C call arguments. A `memory` parameter and its size
-    parameter are forwarded exactly as the C header declares them; with
-    `outrefs_are_locals`, a non-memory outref is the caller's local, passed by address
-    and absent from the signature."""
+    """The C++ parameter list and the C call arguments. A `memory` parameter is forwarded
+    exactly as the C header declares it, pointer and count; with `outrefs_are_locals`, a
+    non-memory out parameter is the caller's local, passed by address and absent from the
+    signature."""
     sig, call = [], []
     for p in params:
         if p.type == "memory":
-            sig.append(f"{'const void*' if p.inref else 'void*'} {p.name}")
-            call.append(p.name)
-        elif p.outref:
-            if not outrefs_are_locals:
-                sig.append(f"{_ref_type(api, p.type)}& {p.name}")
-            call.append(f"&{p.name}")
-        elif p.inref:
+            for c_type, name in emit_c.c_params(api, p):
+                sig.append(f"{c_type} {name}")
+                call.append(name)
+        elif p.ref == "in":
             sig.append(f"const {_ref_type(api, p.type)}& {p.name}")
+            call.append(f"&{p.name}")
+        elif p.ref is not None:
+            if not (outrefs_are_locals and p.ref == "out"):
+                sig.append(f"{_ref_type(api, p.type)}& {p.name}")
             call.append(f"&{p.name}")
         elif api.kind(p.type) == "enum":
             sig.append(f"{naming.upper_camel(p.type)} {p.name}")
@@ -125,10 +126,10 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
         if f not in (ctor, dtor)
         and f.params
         and f.params[0].type == opaque.name
-        and not (f.params[0].outref or f.params[0].inref)
+        and f.params[0].ref is None
     ]
-    handle = next(p for p in ctor.params if p.type == opaque.name and p.outref)
-    cached = [p for p in ctor.params if p.outref and p is not handle]
+    handle = next(p for p in ctor.params if p.type == opaque.name and p.ref == "out")
+    cached = [p for p in ctor.params if p.ref == "out" and p is not handle]
     _check_unique(
         [cls, "create", "handle", "release", HANDLE_MEMBER, *(f.name for f in methods), *(p.name for p in cached)],
         f"C++ wrapper: class {cls}",
@@ -140,7 +141,7 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
     status = "status"
     while status in {p.name for p in ctor.params}:
         status += "_"
-    locals_ = "".join(f"    {_ref_type(api, p.type)} {p.name}{{}};\n" for p in ctor.params if p.outref)
+    locals_ = "".join(f"    {_ref_type(api, p.type)} {p.name}{{}};\n" for p in ctor.params if p.ref == "out")
     failure = f"{cls}({', '.join(['nullptr', *('{}' for _ in cached)])})"
     create = (
         f"{_doc(ctor)}"

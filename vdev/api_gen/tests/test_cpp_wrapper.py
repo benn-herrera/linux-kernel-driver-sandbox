@@ -30,10 +30,18 @@ class Wrapper(unittest.TestCase):
         self.assertNotIn("xy_spend", self.text)
 
     def test_no_dtor_no_release(self) -> None:
-        text = wrapper(mutate(FIXTURE, 'dtor = "destroy_port"\n', ""))
+        text = wrapper(mutate(FIXTURE, '_dtor = "destroy_port"\n', ""))
         self.assertNotIn("~Port", text)
         self.assertNotIn("release()", text)
         self.assertIn("  Status destroy_port() {\n", text)
+
+    def test_references_by_ref(self) -> None:
+        text = wrapper(KITCHEN_SINK)
+        self.assertIn("  Status configure(const Stats& cfg, const uint32_t& limit, Mode mode, xy_token who) {\n", text)
+        self.assertIn("  Status stats_of(Stats& out, uint32_t& pcount, xy_link& plink) {\n", text)
+        self.assertIn("  Status bump(uint32_t& level, Stats& tally, void* data, uint32_t data_count) {\n", text)
+        self.assertIn("  Status send(const void* buf, uint64_t buf_count) {\n", text)
+        self.assertIn("    return Status(xy_send(handle_, buf, buf_count));\n", text)
 
 
 class BaseTypes(unittest.TestCase):

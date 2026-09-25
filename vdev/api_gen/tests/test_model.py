@@ -36,12 +36,58 @@ class ModelErrors(unittest.TestCase):
     def test_struct_named_like_an_opaque_tag(self) -> None:
         self.assert_error(FIXTURE + '\n[struct.port_opaque]\nx = "u32"\n', "already defined by opaque_ref.port")
 
-    def test_memory_needs_size(self) -> None:
-        self.assert_error(mutate(FIXTURE, ', size = "len"', ""), "names its 'size' parameter")
+    def test_unknown_top_level_table(self) -> None:
+        self.assert_error(mutate(FIXTURE, "[opaque_ref.token]", "[opque_ref.token]"), "unknown table(s) [opque_ref]")
 
-    def test_size_serves_one_buffer(self) -> None:
-        text = mutate(FIXTURE, 'len = "u64"', 'len = "u64"\nbuf2 = { type = "memory", outref = true, size = "len" }')
-        self.assert_error(text, "already the size of 'buf'")
+    def test_entry_attributes_begin_with_underscore(self) -> None:
+        for needle, plain, where in (
+            ('_value = 9, _docstring = "try later"', "value", "typed_const.status.err_busy"),
+            ('_type = "u32", _docstring = "items seen"', "type", "struct.stats.count"),
+            ('_type = "stats", _ref = "out", _optional', "type", "function.open_port.pstats"),
+            ('_value = "acme"', "value", "string_const.vendor"),
+        ):
+            with self.subTest(where=where):
+                text = mutate(FIXTURE, needle, needle.replace(f"_{plain} = ", f"{plain} = ", 1))
+                self.assert_error(text, f"{where}: '{plain}': entry attributes begin with _")
+
+    def test_unknown_underscore_attribute_names_key_and_context(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_value = 3,', '_value = 3, _colour = "red",'),
+                          "untyped_bit_const.feat_b: unknown key(s) _colour")
+        self.assert_error(mutate(FIXTURE, '_ref = "in", ', '_ref = "in", _size = "len", '),
+                          "function.send.buf: unknown key(s) _size")
+        self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_colour = "red"'),
+                          "opaque_ref.port: unknown key(s) _colour")
+
+    def test_opaque_ref_has_only_properties(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_ctor = "open_port"', 'ctor = "open_port"'),
+                          "opaque_ref.port: 'ctor': an opaque_ref has no members")
+
+    def test_naked_values_are_sugar_and_nested_tables_equal_inline_ones(self) -> None:
+        api = load()
+        for needle, spelled_out in (
+            ("ok = 0", "ok = { _value = 0 }"),
+            ("feat_a = 0", "feat_a = { _value = 0 }"),
+            ('product = "xy widget"', 'product = { _value = "xy widget" }'),
+            ('bytes = "u64"', 'bytes = { _type = "u64" }'),
+            ('unit = "u32"', 'unit = { _type = "u32" }'),
+            ('hport = "port"\nbuf', 'hport = { _type = "port" }\nbuf'),
+            ('err_other = { _value = 0x7fffffff, _format = "hex" }',
+             '[typed_const.status.err_other]\n_value = 0x7fffffff\n_format = "hex"'),
+            ('[opaque_ref.port]\n_ctor = "open_port"\n_dtor = "destroy_port"',
+             '[opaque_ref]\nport = { _ctor = "open_port", _dtor = "destroy_port" }'),
+        ):
+            with self.subTest(needle=needle):
+                self.assertEqual(load(mutate(FIXTURE, needle, spelled_out)), api)
+
+    def test_ref_values(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_ref = "in"', '_ref = "both"'), "function.send.buf._ref must be one of in, out, inout")
+        self.assertEqual(
+            [p.ref for p in load().functions[0].params], [None, "out", "out", "out"]
+        )
+
+    def test_optional_is_a_boolean(self) -> None:
+        self.assert_error(mutate(FIXTURE, "_optional = true", '_optional = "yes"'), "_optional must be true or false")
+        self.assertTrue(load().functions[0].params[2].optional)
 
     def test_return_enum_needs_zero(self) -> None:
         self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 1"), "no zero-valued entry")
@@ -51,15 +97,15 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, 'header = "xy/', 'header = "xy\\\\'), "must not contain")
 
     def test_bit_index_range(self) -> None:
-        self.assert_error(mutate(FIXTURE, "value = 3,", "value = 31,"), "bit index must be 0..30")
-        load(mutate(FIXTURE, "value = 3,", "value = 30,"))
+        self.assert_error(mutate(FIXTURE, "_value = 3,", "_value = 31,"), "bit index must be 0..30")
+        load(mutate(FIXTURE, "_value = 3,", "_value = 30,"))
 
     def test_version_first_byte_range(self) -> None:
         self.assert_error(mutate(FIXTURE, "[1, 2, 3, 4]", "[128, 2, 3, 4]"), "first byte must be 0..127")
         load(mutate(FIXTURE, "[1, 2, 3, 4]", "[127, 2, 3, 4]"))
 
     def test_docstring_terminators_rejected(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'docstring = "wire magic"', 'docstring = "wire */ magic"'), "must not contain")
+        self.assert_error(mutate(FIXTURE, '_docstring = "wire magic"', '_docstring = "wire */ magic"'), "must not contain")
 
     def test_int32_range(self) -> None:
         self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 0x80000000"), "int32 range")
@@ -80,14 +126,19 @@ class ModelErrors(unittest.TestCase):
     def test_string_const_rejects_newline(self) -> None:
         self.assert_error(mutate(FIXTURE, 'product = "xy widget"', 'product = "xy\\nwidget"'), "newline")
 
-    def test_ctor_cannot_cache_a_memory_outref(self) -> None:
+    def test_ctor_cannot_cache_a_memory_out(self) -> None:
         self.assert_error(
-            mutate(FIXTURE, 
-                'generation = { type = "u32", outref = true }',
-                'generation = { type = "u32", outref = true }\n'
-                'blob = { type = "memory", outref = true, size = "unit" }',
+            mutate(FIXTURE,
+                'generation = { _type = "u32", _ref = "out" }',
+                'generation = { _type = "u32", _ref = "out" }\nblob = { _type = "memory", _ref = "out", _count = "u32" }',
             ),
-            "a constructor cannot cache a memory outref",
+            "a constructor cannot cache a memory out parameter",
+        )
+
+    def test_ctor_has_no_inout_parameter(self) -> None:
+        self.assert_error(
+            mutate(FIXTURE, 'generation = { _type = "u32", _ref = "out" }', 'generation = { _type = "u32", _ref = "inout" }'),
+            "function.open_port.generation: a constructor has no inout parameter",
         )
 
     def test_underscore_keys_are_properties_not_members(self) -> None:
@@ -141,11 +192,18 @@ class ModelErrors(unittest.TestCase):
         text = mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "feat_c"]')
         self.assert_error(text, "unknown constant 'feat_c'")
 
-    def test_size_must_name_a_sibling_integer(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'size = "len"', 'size = "hport"'), "must name a u32 or u64")
+    def test_memory_needs_a_ref(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_ref = "in", ', ""), "function.send.buf: a 'memory' parameter needs _ref")
 
-    def test_memory_needs_direction(self) -> None:
-        self.assert_error(mutate(FIXTURE, "inref = true, ", ""), "must be inref or outref")
+    def test_memory_count(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_count = "u64", ', ""),
+                          "function.send.buf: a 'memory' parameter requires _count, one of u32, u64")
+        self.assert_error(mutate(FIXTURE, '_count = "u64"', '_count = "port"'), "requires _count, one of u32, u64")
+        self.assert_error(mutate(FIXTURE, 'unit = "u32"', 'unit = { _type = "u32", _count = "u32" }'),
+                          "function.open_port.unit._count: only a 'memory' parameter has a count")
+        self.assert_error(mutate(FIXTURE, 'hport = "port"\nbuf', 'buf_count = "u32"\nbuf'),
+                          "function.send.buf: its count parameter buf_count is already a parameter")
+        self.assertEqual(load().functions[2].params[1].count_type, "u64")
 
     def test_missing_general(self) -> None:
         self.assert_error("[function]\n", "missing [general] table")
@@ -154,16 +212,16 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, "[general]\n", '[general]\nname = "xy_api"\n'), "file name is the output stem")
 
     def test_unknown_format(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'format = "hex" }\n\n[opaque', 'format = "oct" }\n\n[opaque'), "format must be one of")
+        self.assert_error(mutate(FIXTURE, '_format = "hex" }\n\n[opaque', '_format = "oct" }\n\n[opaque'), "_format must be one of")
 
-    def test_ctor_needs_one_outref_of_the_opaque(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'ctor = "open_port"', 'ctor = "send"'), "exactly one port outref")
+    def test_ctor_needs_one_out_of_the_opaque(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_ctor = "open_port"', '_ctor = "send"'), "exactly one port parameter of _ref \"out\"")
 
     def test_dtor_takes_only_the_opaque(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'dtor = "destroy_port"', 'dtor = "send"'), "only parameter is a port")
+        self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "send"'), "only parameter is a port")
 
     def test_dtor_requires_ctor(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'ctor = "open_port"\n', ""), "dtor: requires ctor")
+        self.assert_error(mutate(FIXTURE, '_ctor = "open_port"\n', ""), "_dtor: requires _ctor")
 
     def test_string_const_rejects_a_quote(self) -> None:
         self.assert_error(mutate(FIXTURE, 'product = "xy widget"', "product = 'xy \"widget\"'"), "string_const.product")
@@ -173,8 +231,8 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, 'product = "xy widget"', 'max_units = "x"'), "XY_MAX_UNITS already defined")
 
     def test_class_must_be_an_identifier(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'dtor = "destroy_port"', 'dtor = "destroy_port"\nclass = "a-b"'),
-                          "class must be an identifier")
+        self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "a-b"'),
+                          "_class must be an identifier")
 
 
 class Naming(unittest.TestCase):

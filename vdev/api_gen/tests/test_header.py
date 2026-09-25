@@ -46,26 +46,26 @@ class Declarations(unittest.TestCase):
         self.text = emit_c.header(self.api, source_name="xy_api.adef.toml")
 
     def test_type_mapping_follows_the_spec_table(self) -> None:
-        F, T = False, True
         rows = (
-            (("u32", F, F), "uint32_t"),
-            (("u64", F, F), "uint64_t"),
-            (("status", F, F), "xy_status"),
-            (("stats", F, F), "xy_stats"),
-            (("port", F, F), "xy_port"),
-            (("stats", F, T), "const xy_stats*"),
-            (("stats", T, F), "xy_stats*"),
-            (("u32", T, F), "uint32_t*"),
-            (("u32", F, T), "const uint32_t*"),
-            (("memory", F, T), "const void*"),
-            (("memory", T, F), "void*"),
+            (("u32", None), "uint32_t"),
+            (("u64", None), "uint64_t"),
+            (("status", None), "xy_status"),
+            (("stats", None), "xy_stats"),
+            (("port", None), "xy_port"),
+            (("stats", "in"), "const xy_stats*"),
+            (("stats", "out"), "xy_stats*"),
+            (("stats", "inout"), "xy_stats*"),
+            (("u32", "in"), "const uint32_t*"),
+            (("u32", "out"), "uint32_t*"),
+            (("u32", "inout"), "uint32_t*"),
+            (("memory", "in"), "const void*"),
+            (("memory", "out"), "void*"),
+            (("memory", "inout"), "void*"),
         )
-        for (type_name, outref, inref), expected in rows:
-            param = model.Param(
-                name="p", type=type_name, outref=outref, inref=inref, nullsafe=False,
-                size="n" if type_name == "memory" else None, docstring=None,
-            )
-            with self.subTest(type=type_name, outref=outref, inref=inref):
+        for (type_name, ref), expected in rows:
+            count_type = "u32" if type_name == "memory" else None
+            param = model.Param(name="p", type=type_name, ref=ref, count_type=count_type, optional=False, docstring=None)
+            with self.subTest(type=type_name, ref=ref):
                 self.assertEqual(emit_c.param_type(self.api, param), expected)
 
     def test_functions_declared_in_document_order_with_parameters_in_order(self) -> None:
@@ -75,9 +75,18 @@ class Declarations(unittest.TestCase):
             with self.subTest(function=f.name):
                 if f.params:
                     names = [s.rsplit(" ", 1)[1] for s in decls[f.name].split(", ")]
-                    self.assertEqual(names, [p.name for p in f.params])
+                    expected = [n for p in f.params for n in ([p.name, f"{p.name}_count"] if p.type == "memory" else [p.name])]
+                    self.assertEqual(names, expected)
                 else:
                     self.assertEqual(decls[f.name], "void")
+
+    def test_memory_is_a_pointer_and_count_pair(self) -> None:
+        decls = param_lists(self.text, r"XY_API xy_status ")
+        self.assertEqual(decls["send"], "xy_port hport, const void* buf, uint64_t buf_count")
+        self.assertEqual(decls["recv"], "xy_port hport, void* pdst, uint32_t pdst_count")
+        self.assertEqual(
+            decls["bump"], "xy_port hport, uint32_t* level, xy_stats* tally, void* data, uint32_t data_count"
+        )
 
     def test_bit_constants_use_the_spec_spelling(self) -> None:
         self.assertRegex(self.text, r"XY_FEAT_B = \(1u << 3\)")

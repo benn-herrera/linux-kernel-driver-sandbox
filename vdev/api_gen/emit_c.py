@@ -18,14 +18,23 @@ def int_literal(value: int, fmt: str) -> str:
     return str(value)
 
 
+def c_params(api: Api, param: Param) -> list[tuple[str, str]]:
+    """(C type, name) of each C parameter a definition parameter becomes: a `memory`
+    parameter is the pointer and its byte count, every other parameter itself."""
+    params = [(param_type(api, param), param.name)]
+    if param.count_type is not None:
+        params.append((naming.BUILTIN_C_TYPES[param.count_type], naming.count_param(param.name)))
+    return params
+
+
 def param_type(api: Api, param: Param) -> str:
     if param.type == "memory":
-        return "const void*" if param.inref else "void*"
+        return "const void*" if param.ref == "in" else "void*"
     base = c_type(api, param.type)
-    if param.outref:
-        return f"{base}*"
-    if param.inref:
+    if param.ref == "in":
         return f"const {base}*"
+    if param.ref is not None:
+        return f"{base}*"
     return base
 
 
@@ -179,7 +188,7 @@ def _struct(api: Api, struct: Struct) -> str:
 
 
 def _function(api: Api, fn: Function, prefix: str) -> str:
-    params = ", ".join(f"{param_type(api, p)} {p.name}" for p in fn.params) or "void"
+    params = ", ".join(f"{t} {n}" for p in fn.params for t, n in c_params(api, p)) or "void"
     returns = c_type(api, fn.returns)
     name = naming.function_name(api.namespace, fn.name)
     return f"{_comment_line(' '.join(fn.docs()))}{prefix}{returns} {name}({params});\n"

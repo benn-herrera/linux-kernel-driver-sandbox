@@ -90,7 +90,7 @@ class Classes(unittest.TestCase):
         return [
             f for f in self.api.functions
             if f.name != opaque.ctor and f.params and f.params[0].type == opaque.name
-            and not (f.params[0].inref or f.params[0].outref)
+            and f.params[0].ref is None
         ]
 
     def test_class_functions_are_new_the_methods_and_the_dtor(self) -> None:
@@ -103,43 +103,57 @@ class Classes(unittest.TestCase):
         # The GC finalizer's call to the dtor is excluded: its argument is whatever the
         # finalizer receives, and check_xy.lua shows the finalizer releasing the handle.
         body = "\n".join(line for line in self.text.splitlines() if "ffi.gc(" not in line)
-        calls = dict(re.findall(r"lib\.xy_(\w+)\(([^)]*)\)", body))
+        calls = dict(re.findall(r"lib\.xy_(\w+)\((.*)\)$", body, re.M))
         ctors = {o.ctor for _, o in self.classes()}
         dtors = {o.dtor for _, o in self.classes()} - {None}
         for fn in self.api.functions:
             if fn.name not in calls:
                 continue
-            sizes = {p.size: p.name for p in fn.params if p.type == "memory" and p.inref}
-            expected = []
-            for i, p in enumerate(fn.params):
-                if i == 0 and fn.name not in ctors:
-                    expected.append("handle" if fn.name in dtors else "self._handle")
-                elif p.name in sizes:
-                    expected.append(f"#{sizes[p.name]}")
-                else:
-                    expected.append(p.name)
+            def memory_call(p: model.Param) -> list[str]:
+                count = f"#{p.name}" if p.ref == "in" else f"{p.name}_count"
+                return [p.name, count]
+
+            expected = [n for p in fn.params for n in (memory_call(p) if p.type == "memory" else [p.name])]
+            if fn.name not in ctors:
+                expected[0] = "handle" if fn.name in dtors else "self._handle"
             with self.subTest(function=fn.name):
                 self.assertEqual(calls[fn.name].split(", ") if calls[fn.name] else [], expected)
         called = ctors | {f.name for _, o in self.classes() for f in self.methods(o)}
         self.assertEqual(set(calls), called)
 
-    def test_lua_arguments_are_non_outref_parameters_minus_inref_sizes(self) -> None:
-        def lua_args(fn: model.Function, params: tuple[model.Param, ...]) -> list[str]:
-            sizes = {p.size for p in fn.params if p.type == "memory" and p.inref}
-            return [p.name for p in params if not p.outref and p.name not in sizes]
+    def test_lua_arguments_are_every_parameter_but_non_memory_outs(self) -> None:
+        def lua_args(params: tuple[model.Param, ...]) -> list[str]:
+            return [
+                f"{p.name}_count" if p.type == "memory" and p.ref == "out" else p.name
+                for p in params
+                if p.ref != "out" or p.type == "memory"
+            ]
 
         for cls, opaque in self.classes():
             with self.subTest(cls=cls):
                 sigs = dict(re.findall(rf"^function M\.{cls}\.(\w+)\((.*)\)$", self.text, re.M))
                 ctor = next(f for f in self.api.functions if f.name == opaque.ctor)
-                expected = {"new": lua_args(ctor, ctor.params)}
-                expected |= {f.name: ["self", *lua_args(f, f.params[1:])] for f in self.methods(opaque)}
+                expected = {"new": lua_args(ctor.params)}
+                expected |= {f.name: ["self", *lua_args(f.params[1:])] for f in self.methods(opaque)}
                 self.assertEqual({k: v.split(", ") if v else [] for k, v in sigs.items()}, expected)
                 if opaque.dtor is not None:
                     self.assertEqual(sigs[opaque.dtor], "self")
 
+    def test_memory_is_marshalled_as_a_lua_string(self) -> None:
+        self.assertNotIn("ffi.sizeof(", self.text)
+        self.assertIn("function M.Port.send(self, buf)", self.text)
+        self.assertIn("lib.xy_send(self._handle, buf, #buf)", self.text)
+        self.assertIn("function M.Port.recv(self, pdst_count)", self.text)
+        self.assertIn('local pdst = ffi.new("uint8_t[?]", pdst_count)', self.text)
+        self.assertIn("lib.xy_recv(self._handle, pdst, pdst_count)", self.text)
+        self.assertIn("return ffi.string(pdst, pdst_count), nil", self.text)
+        self.assertIn("local data_count = #data", self.text)
+        self.assertIn('local data = ffi.new("uint8_t[?]", data_count, data)', self.text)
+        self.assertIn("lib.xy_bump(self._handle, level, tally, data, data_count)", self.text)
+        self.assertIn("ffi.string(data, data_count), nil", self.text)
+
     def test_without_dtor_no_finalizer_and_dtor_is_an_ordinary_method(self) -> None:
-        text = mutate(FIXTURE, 'dtor = "destroy_port"', 'class = "data_link"')
+        text = mutate(FIXTURE, '_dtor = "destroy_port"', '_class = "data_link"')
         text = emit_lua.module(load(text), source_name="x", library="libxy.so")
         self.assertNotIn("ffi.gc", text)
         self.assertIn("function M.DataLink.new(unit)", text)
@@ -151,7 +165,7 @@ class Classes(unittest.TestCase):
 class Refusals(unittest.TestCase):
     def test_constant_and_class_name_clash_is_rejected(self) -> None:
         text = mutate(FIXTURE, "max_units = 16", "io = 16")
-        api = load(mutate(text, 'dtor = "destroy_port"', 'dtor = "destroy_port"\nclass = "i_o"'))  # both M.IO
+        api = load(mutate(text, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "i_o"'))  # both M.IO
         with self.assertRaises(model.DefinitionError):
             emit_lua.module(api, source_name="x", library="libxy.so")
 
