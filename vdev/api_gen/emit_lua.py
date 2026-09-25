@@ -196,7 +196,8 @@ def _constructor(api: Api, fn: Function, opaque: OpaqueRef, *, cls: str, method_
     out.append(_call(api, fn, call))
     handle_value = f"{handle.name}[0]"
     if opaque.dtor is not None:
-        handle_value = f"ffi.gc({handle_value}, lib.{naming.function_name(api.namespace, opaque.dtor)})"
+        dtor_call = f"lib.{naming.function_name(api.namespace, opaque.dtor)}"
+        handle_value = f"ffi.gc({handle_value}, function(h) {dtor_call}(h) end)"
     out.append(f"    local self = setmetatable({{}}, {cls})\n    self._handle = {handle_value}\n")
     for p in cached:
         value = p.name if api.kind(p.type) == "struct" else f"{p.name}[0]"

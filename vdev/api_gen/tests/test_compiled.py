@@ -168,6 +168,20 @@ class Lua(unittest.TestCase):
             found[name] = int(value) if value.lstrip("-").isdigit() else value
         self.assertEqual(found, expected_constants(load(KITCHEN_SINK)))
 
+    def test_finalizer_runs_after_module_is_unreachable(self) -> None:
+        module = TMP / "generated" / "binding" / "xy_api.lua"
+        env = {**os.environ, "LD_LIBRARY_PATH": str(TMP)}
+
+        result = run(["luajit", TESTS / "gc_xy.lua", module], env=env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        error_script = write(
+            TMP / "gc_error_xy.lua",
+            'local M = dofile(arg[1])\nlocal p = M.Port.new(1)\nerror("x")\n',
+        )
+        result = run(["luajit", error_script, module], env=env)
+        self.assertEqual(result.returncode, 1, result.stderr)
+
 
 @container_only
 class Gendeps(unittest.TestCase):
