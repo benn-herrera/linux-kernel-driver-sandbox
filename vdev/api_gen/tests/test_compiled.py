@@ -66,13 +66,17 @@ def values_tu() -> str:
     return "\n".join(lines) + "\n"
 
 
+def require_tools() -> None:
+    missing = [tool for tool in TOOLS if shutil.which(tool) is None]
+    if missing:
+        raise RuntimeError(f"the build container lacks {', '.join(missing)} on PATH")
+
+
 def setUpModule() -> None:
     global _build, TMP, INC
     if not IN_CONTAINER:
         return
-    missing = [tool for tool in TOOLS if shutil.which(tool) is None]
-    if missing:
-        raise RuntimeError(f"the build container lacks {', '.join(missing)} on PATH")
+    require_tools()
     _build = tempfile.TemporaryDirectory()
     TMP = Path(_build.name)
     INC = TMP / "generated" / "include" / "xy"

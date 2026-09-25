@@ -1,11 +1,7 @@
-import contextlib
-import io
 import re
-import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from api_gen import __main__ as api_gen_main
 from api_gen import emit_c, emit_cpp_stub, emit_cpp_wrapper, emit_lua
@@ -39,12 +35,10 @@ class Generate(unittest.TestCase):
             definition = Path(tmp) / "xy_api.adef.toml"
             definition.write_text("", encoding="utf-8")
             generated = Path(tmp) / "generated"
-            argv = ["api_gen", str(definition), "--generated", str(generated), "--exercise", "tiny_compute"]
-            stderr = io.StringIO()
-            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(stderr):
-                code = api_gen_main.main()
+            code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "tiny_compute"])
             self.assertEqual(code, 2)
-            self.assertTrue(stderr.getvalue().startswith(f"api_gen: {definition}: "))
+            self.assertTrue(stderr.startswith(f"api_gen: {definition}: "))
+            self.assertEqual(stderr.count("\n"), 1)
             self.assertFalse(generated.exists())
 
     def test_library_flag_overrides_the_definition(self) -> None:
@@ -85,11 +79,8 @@ class Generate(unittest.TestCase):
 
 class Gendeps(unittest.TestCase):
     def run_gendeps(self, args: list[str]) -> tuple[int, str]:
-        argv = ["api_gen", "gendeps", *args]
-        stdout = io.StringIO()
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(stdout):
-            code = api_gen_main.main()
-        return code, stdout.getvalue()
+        code, stdout, _ = run_main(["gendeps", *args])
+        return code, stdout
 
     def test_fragment_lists_the_output_paths_in_one_grouped_rule(self) -> None:
         code, out = self.run_gendeps(["a.adef.toml"])
@@ -103,28 +94,16 @@ class Gendeps(unittest.TestCase):
         self.assertIn("$(GENERATED) &: a.adef.toml\n\t", out)
 
     def test_no_definitions_exits_2_with_nothing_on_stdout(self) -> None:
-        stderr = io.StringIO()
-        argv = ["api_gen", "gendeps"]
-        stdout = io.StringIO()
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(
-            stdout
-        ), contextlib.redirect_stderr(stderr):
-            code = api_gen_main.main()
+        code, stdout, stderr = run_main(["gendeps"])
         self.assertEqual(code, 2)
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(stderr.getvalue(), "api_gen: gendeps takes exactly one definition\n")
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "api_gen: gendeps takes exactly one definition\n")
 
     def test_two_definitions_exits_2_with_nothing_on_stdout(self) -> None:
-        stderr = io.StringIO()
-        argv = ["api_gen", "gendeps", "a.adef.toml", "b.adef.toml"]
-        stdout = io.StringIO()
-        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(
-            stdout
-        ), contextlib.redirect_stderr(stderr):
-            code = api_gen_main.main()
+        code, stdout, stderr = run_main(["gendeps", "a.adef.toml", "b.adef.toml"])
         self.assertEqual(code, 2)
-        self.assertEqual(stdout.getvalue(), "")
-        self.assertEqual(stderr.getvalue(), "api_gen: gendeps takes exactly one definition\n")
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "api_gen: gendeps takes exactly one definition\n")
 
     def test_bad_name_exits_2_with_nothing_on_stdout(self) -> None:
         code, out = self.run_gendeps(["not_a_definition.txt"])

@@ -5,11 +5,9 @@ import functools
 import io
 import operator
 import re
-import sys
 import tomllib
 import unittest
 from pathlib import Path
-from unittest import mock
 
 from api_gen import __main__ as api_gen_main
 from api_gen import model
@@ -215,12 +213,8 @@ def param_lists(text: str, pattern: str) -> dict[str, str]:
 def run_main(argv: list[str]) -> tuple[int, str, str]:
     """Run the CLI with `argv` (no program name); return (exit code, stdout, stderr)."""
     stdout, stderr = io.StringIO(), io.StringIO()
-    with (
-        mock.patch.object(sys, "argv", ["api_gen", *argv]),
-        contextlib.redirect_stdout(stdout),
-        contextlib.redirect_stderr(stderr),
-    ):
-        code = api_gen_main.main()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        code = api_gen_main.main(argv)
     return code, stdout.getvalue(), stderr.getvalue()
 
 
