@@ -5,6 +5,7 @@ function printf(f, ...)
     print(string.format(f, ...))
 end
 
+-- binding.tcdl_api is generated from api_dev/tcld_api.adef.toml by api_gen - see vdev/justfile recipe 'generate'
 local tcdl = require("binding.tcdl_api")
 local tcdl_dev = tcdl.TcdlDevice.new(0)
 

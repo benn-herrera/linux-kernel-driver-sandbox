@@ -1,5 +1,5 @@
 /*
- * userspace test of tiny_compute driver ABI
+ * entry point for userspace test of Tiny Compute Device Library API
  */
 
 #include "common.h"

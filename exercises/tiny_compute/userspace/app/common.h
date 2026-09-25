@@ -2,12 +2,10 @@
 
 #include <stdio.h>
 #include <unistd.h>
-
-#include <cstdint>
 #include <cstring>
-#include <string>
-#include <vector>
 
+// binding.tcdl_api.h is generated from api_def/tcdl_api.adef.toml by api_gen
+// see vdev/justfile recipe 'generate'
 #include "tcdl_api.h"
 
 // unique auto tiny compute device handle

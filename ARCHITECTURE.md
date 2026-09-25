@@ -306,10 +306,10 @@ defined in CONVENTIONS.md and are cited, not restated, below.
 
 - An exercise's userspace API is defined once, in
   `exercises/<name>/userspace/api_def/<api>.adef.toml`, and the artifacts
-  every consumer needs are generated from it: the C header, a translation
-  unit of `static_assert` lines pinning library constants to the driver's
-  UAPI header, and a LuaJIT base module carrying the `ffi.cdef` text as a
-  long string. A header-only C++ wrapper is a planned fourth emitter. The
+  every consumer needs are generated from it: the C header, which also
+  carries `static_assert` lines pinning library constants to the driver's
+  UAPI header inside its implementation-only block, and a LuaJIT base
+  module carrying the `ffi.cdef` text as a long string. A header-only C++ wrapper is a planned fourth emitter. The
   kernel ioctl header is never generated; its shape is too far from a
   userspace API's, and it is hand-written UAPI under `driver/`.
 - The definition format, as the loader reads it: `[general]` with
@@ -331,12 +331,18 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   which `tomllib` preserves because Python dicts do; the loader states
   that reliance.
 - The generator is `vdev/api_gen/`, a standard-library-only Python
-  package run in the container as `python3 -m api_gen <definition>
+  package with its own SPEC.md (the definition language and the output
+  contracts) and ARCHITECTURE.md (the loader and emitters), run in the
+  container as `python3 -m api_gen <definition>
   --generated <dir>` with `PYTHONPATH=/work/vdev` and
   `PYTHONDONTWRITEBYTECODE=1`, since `/work/vdev` is read-only and Python
   would otherwise try to write `__pycache__` beside it. Outputs are build
-  products at `out/userspace-build/<name>/generated/`, named by the
-  definition's stem: `<stem>.h`, `<stem>_pins.cpp`, `<stem>.lua`. The
+  products at `out/userspace-build/<name>/generated/`, laid out as their
+  destination so the tree states where each lands: `include/<name>/<stem>.h`
+  (to `out/userspace/include/<name>/`, then `/usr/include/<name>/`),
+  and `binding/<stem>.lua` (to `out/userspace/binding/`, then
+  `/usr/bin/binding/`). The recipe passes `--exercise` for the include
+  subdirectory, which the definition does not know. The
   package is `model.py` (load, validate, normalise into frozen
   dataclasses), `naming.py` (the prefix and case rules), one
   `emit_*.py` per output, and `tests/` (stdlib `unittest` on a small
@@ -347,26 +353,32 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   module beside the definition is reserved for peculiarities, its
   interface to be cut from the first real case.
 - `just generate-vdev` runs the `generate` recipe in `vdev/justfile`:
-  every `api_def/*.adef.toml` through the generator, then `clang++
-  -fsyntax-only` on each `<stem>_pins.cpp` with the exercises directory,
-  the generated directory and `lib/` on the include path. That compile is
-  the ABI pin check: a constant that disagrees with `tcd_ioctl.h` fails
-  here, before the library or the app builds. An exercise with no
-  definitions passes with a note. `userspace` depends on `generate`, so
-  `stage` and `just test` run it.
-- `exercises/cpp.mk` adds `-I$(OUT)/generated`, derived from the `OUT`
-  it already receives, so `lib/` and `app/` sources include the generated
-  header by name. A quoted include searches the including file's
+  every `api_def/*.adef.toml` through the generator. The ABI pin check
+  runs when the library compiles: `tcdl_api.cpp` defines `TCDL_IMPL`
+  before including the header, which brings in the driver's UAPI header
+  and the `static_assert` lines, so a constant that disagrees with
+  `tcd_ioctl.h` fails the library build. An exercise with no definitions
+  passes with a note. `userspace` depends on `generate`, so `stage` and
+  `just test` run it.
+- `exercises/cpp.mk` adds `-I$(OUT)/generated/include/<exercise>`,
+  derived from the `OUT` and the exercise name it already has, so `lib/`
+  and `app/` sources include the generated header by bare name, the way
+  a library includes its own header. A quoted include searches the including file's
   directory first, so a hand-written header of the same name beside a
   source would shadow the generated one; none exists. The compile rules
   record header dependencies with `-MMD`, so a regenerated header
   rebuilds every object that includes it.
-- The `userspace` recipe stages the generated artifacts: every generated
-  `.lua` module to `out/userspace/binding/`, where `require` finds it
-  through `LUA_PATH`, and every generated header to
-  `out/userspace/include/<name>/` for a reader at the guest prompt. The
+- The `userspace` recipe stages the generated `include/` and `binding/`
+  subtrees whole onto `out/userspace/`, with no per-file knowledge:
+  `require` finds the module through `LUA_PATH`, and the header is there
+  for a reader at the guest prompt. The
   generated Lua module embeds its `ffi.cdef` text, so it reads no header
-  at run time.
+  at run time, and that text holds only what calls need: the opaque and
+  struct types, `typedef int32_t` for each result enum, and the function
+  declarations. Every constant is written into the module as a Lua
+  literal from the same model value the C header gets, so results and
+  constants are plain numbers on the Lua side with no `ffi.C` lookup and
+  no cdata conversion.
 - The implementation of the API (`lib/tcdl_api.cpp`) stays hand-written;
   the generator will emit a stub of it once, to be copied into `lib/` when
   absent, and never touch it after.
@@ -405,10 +417,13 @@ defined in CONVENTIONS.md and are cited, not restated, below.
   `out/driver-build/<name>/` through the kernel tree's
   `scripts/clang-tools/gen_compile_commands.py`; userspace entries come
   from the per-object fragments `exercises/cpp.mk` has clang emit with
-  `-MJ` under `out/userspace-build/<name>/`. The recipe fails naming
+  `-MJ` under `out/userspace-build/<name>/<lib|app>/`, where the objects
+  live so same-named sources in `lib/` and `app/` cannot collide; only
+  the products land at the top of that tree. The recipe fails naming
   `driver` or `userspace` when either input is absent. Make does not
   track `cpp.mk` as a prerequisite, so a change to its flags needs
-  `just userspace-clean-vdev` before the fragments reflect it.
+  `just userspace-clean-vdev` before the fragments reflect it; header
+  changes are tracked by `-MMD`, so only a flag change needs that.
 - Paths under `/kernel` have no host counterpart: a diagnostic or a
   go-to-definition into a kernel header returns a container path the
   host cannot open. That is the one gap; closing it would mean a host

@@ -83,8 +83,8 @@
   the recipe prints. The ioctl header under `driver/` is hand-written
   UAPI and is never generated. Every constant the library relays from the
   driver is pinned in the definition's `[driver_data.const_pins]` and
-  checked by compiling the generated pin unit; a new relayed constant
-  without a pin is a review finding.
+  checked when the library compiles against the generated header; a new
+  relayed constant without a pin is a review finding.
 - The active exercise is `EXERCISE` in `active_exercise.just` at the repo
   root, imported by both justfiles. Every build, stage, test and style recipe
   operates on that exercise only; `just EXERCISE=<name> <recipe>` overrides it

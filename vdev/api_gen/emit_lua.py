@@ -20,10 +20,7 @@ def module(api: Api, *, source_name: str, library: str) -> str:
         f'\nlocal lib = ffi.load("{library}")\n\nlocal M = {{}}\n\n',
     ]
 
-    constants = [naming.version_const(ns)]
-    constants += [naming.const_name(ns, c.key) for c in api.bit_consts]
-    constants += [naming.const_name(ns, e.key) for t in api.typed_consts for e in t.entries]
-    out += [f"M.{c} = tonumber(ffi.C.{c})\n" for c in constants]
+    out += [f"M.{name} = {value}\n" for name, value in _constant_literals(api)]
 
     for typed in api.typed_consts:
         names = "".join(
@@ -52,6 +49,35 @@ def module(api: Api, *, source_name: str, library: str) -> str:
 
     out.append("\nreturn M\n")
     return "".join(out)
+
+
+def _version_literal(api: Api) -> str:
+    shifts = (24, 16, 8, 0)
+    value = sum(b << s for b, s in zip(api.version, shifts))
+    return f"0x{value:08x}"
+
+
+def _bit_const_values(api: Api) -> dict[str, int]:
+    """Each untyped_bit_const's value, in document order so a composed mask can OR
+    the values of the earlier entries it names."""
+    values: dict[str, int] = {}
+    for c in api.bit_consts:
+        values[c.key] = 1 << c.bit if c.bit is not None else 0
+        for part in c.parts:
+            values[c.key] |= values[part]
+    return values
+
+
+def _constant_literals(api: Api) -> list[tuple[str, str]]:
+    """Every constant's (name, Lua literal), in the same order the C header defines them."""
+    ns = api.namespace
+    bit_values = _bit_const_values(api)
+    literals = [(naming.version_const(ns), _version_literal(api))]
+    literals += [(naming.const_name(ns, c.key), str(bit_values[c.key])) for c in api.bit_consts]
+    literals += [
+        (naming.const_name(ns, e.key), str(e.value)) for t in api.typed_consts for e in t.entries
+    ]
+    return literals
 
 
 def _cdef(text: str) -> str:
@@ -137,7 +163,7 @@ def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str],
 def _call(api: Api, fn: Function, call: list[str]) -> str:
     c_name = naming.function_name(api.namespace, fn.name)
     return (
-        f"    local result = tonumber(lib.{c_name}({', '.join(call)}))\n"
+        f"    local result = lib.{c_name}({', '.join(call)})\n"
         f"    if result ~= M.{_ok_const(api, fn)} then\n        return nil, result\n    end\n"
     )
 

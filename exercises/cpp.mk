@@ -4,8 +4,8 @@
 #   SO:  builds $(OUT)/lib<exercise>.so with a matching SONAME
 # <exercise> is the name of the directory two levels above this Makefile's
 # directory: exercises/<exercise>/userspace/{app,lib}/Makefile.
-# Each object also gets a compile_commands fragment, $(OUT)/<obj>.o.json.
-# Generated headers are found at $(OUT)/generated (see the generate recipe).
+# Each object also gets a compile_commands fragment, $(OUT)/<lib|app>/<obj>.o.json.
+# Generated headers are found at $(OUT)/generated/include/<exercise> (see the generate recipe).
 ifeq ($(strip $(OUT)),)
 $(error OUT is not set: make OUT=<out_dir> DRIVER_INCLUDE=<exercises_dir>)
 endif
@@ -30,13 +30,16 @@ else
 $(error LINK_TYPE must be EXE or SO)
 endif
 
-COMMON_FLAGS := -g -fvisibility=hidden -Wall -Wextra $(PIC) -I$(DRIVER_INCLUDE) -I$(OUT)/generated -I..
+COMMON_FLAGS := -g -fvisibility=hidden -Wall -Wextra $(PIC) -I$(DRIVER_INCLUDE) -I$(OUT)/generated/include/$(BASE) -I..
 CFLAGS := --std=c17 $(COMMON_FLAGS)
 CXXFLAGS := --std=c++20 $(COMMON_FLAGS)
 
+# objects live under $(OUT)/<lib|app>/ so same-named sources in lib/ and app/ cannot collide;
+# only the products land at the top of $(OUT)
+OBJDIR := $(OUT)/$(notdir $(CURDIR))
 SRCS := $(wildcard *.c) $(wildcard *.cpp)
-OBJS := $(SRCS:%.c=$(OUT)/%.o)
-OBJS := $(OBJS:%.cpp=$(OUT)/%.o)
+OBJS := $(SRCS:%.c=$(OBJDIR)/%.o)
+OBJS := $(OBJS:%.cpp=$(OBJDIR)/%.o)
 
 .PHONY: all clean
 
@@ -45,12 +48,12 @@ all: $(OUT)/$(NAME)
 $(OUT)/$(NAME): $(OBJS) $(LINK_DEPS)
 	$(CXX) $(CXXFLAGS) -o $@ $(OBJS) $(LINK_OPTS)
 
-$(OUT)/%.o: %.c
-	@mkdir -p $(OUT)
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(OBJDIR)
 	$(CC) $(CFLAGS) -MMD -MP -MJ $@.json -c -o $@ $<
 
-$(OUT)/%.o: %.cpp
-	@mkdir -p $(OUT)
+$(OBJDIR)/%.o: %.cpp
+	@mkdir -p $(OBJDIR)
 	$(CXX) $(CXXFLAGS) -MMD -MP -MJ $@.json -c -o $@ $<
 
 # header dependencies recorded by -MMD, so a regenerated header rebuilds its includers

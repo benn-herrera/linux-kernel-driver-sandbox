@@ -1,4 +1,9 @@
+/*
+ * implementation of userspace tests of Tiny Compute Device Library API
+ */
 #include "common.h"
+#include <cstdint>
+#include <vector>
 
 namespace {
 

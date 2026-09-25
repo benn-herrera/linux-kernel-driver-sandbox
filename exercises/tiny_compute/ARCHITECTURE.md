@@ -81,8 +81,9 @@ from the last:
   the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to
   `TCDL_ERR_UNSUPPORTED`
 - the definition is the source of truth. `api_def/tcdl_api.adef.toml`
-  states the API once, and the header, the ABI pin unit and the Lua base
-  module are generated from it by the framework's `vdev/api_gen/` (root
+  states the API once, and the header (with the ABI pins in its
+  implementation-only block) and the Lua base module are generated from
+  it by the framework's `vdev/api_gen/` (root
   ARCHITECTURE.md "API generation"). Until the emitters exist the
   hand-written `lib/tcdl_api.h` is the header and the definition mirrors
   it; the switch-over replaces the header with the generated one and

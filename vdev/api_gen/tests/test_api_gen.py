@@ -1,7 +1,12 @@
+import sys
+import tempfile
 import tomllib
 import unittest
+from pathlib import Path
+from unittest import mock
 
-from api_gen import emit_c, emit_lua, emit_pins, model, naming
+from api_gen import __main__ as api_gen_main
+from api_gen import emit_c, emit_lua, model, naming
 
 FIXTURE = """
 [general]
@@ -130,18 +135,33 @@ class Header(unittest.TestCase):
             self.assertIn(expected, self.text)
 
     def test_only_permitted_preprocessor_lines(self) -> None:
-        allowed = ("#pragma once", "#include", "#if", "#else", "#endif", "# define")
+        allowed = ("#pragma once", "#include", "#if", "#else", "#endif", "# define", "# include")
         for line in self.text.splitlines():
             if line.startswith("#"):
                 self.assertTrue(line.startswith(allowed), line)
 
+    def test_abi_pins_present_with_driver_data(self) -> None:
+        last_function = self.text.rindex("XY_API xy_status xy_send(")
+        block = self.text[last_function:]
+        self.assertIn(
+            "\n\n"
+            "#if defined(XY_IMPL)\n"
+            "/* ABI pins: the implementation build fails if a relayed constant disagrees "
+            "with the driver's UAPI header */",
+            block,
+        )
+        for expected in (
+            '# include <assert.h>',
+            '# include "xy/driver/xy_ioctl.h"',
+            'static_assert(XY_FEAT_A == XYD_FEAT_A, "XY_FEAT_A must match XYD_FEAT_A");',
+            "#endif",
+        ):
+            self.assertIn(expected, block)
 
-class Pins(unittest.TestCase):
-    def test_pins(self) -> None:
-        text = emit_pins.pins(load(), source_name="xy_api.adef.toml", stem="xy_api")
-        self.assertIn('#include "xy/driver/xy_ioctl.h"\n#include "xy_api.h"\n', text)
-        self.assertIn('static_assert(XY_FEAT_A == XYD_FEAT_A, "XY_FEAT_A must match XYD_FEAT_A");', text)
-        self.assertEqual(text.count("static_assert"), 1)
+    def test_abi_pins_absent_without_driver_data(self) -> None:
+        text = emit_c.header(load(FIXTURE[: FIXTURE.index("[driver_data]")]), source_name="xy_api.adef.toml")
+        self.assertNotIn("ABI pins", text)
+        self.assertNotIn("static_assert", text)
 
 
 class Lua(unittest.TestCase):
@@ -152,13 +172,22 @@ class Lua(unittest.TestCase):
         start = self.text.index("ffi.cdef[[") + len("ffi.cdef[[")
         cdef = self.text[start : self.text.index("]]", start)]
         self.assertIn("xy_status xy_send(", cdef)
+        self.assertIn("typedef int32_t xy_status;", cdef)
         self.assertNotIn("XY_API ", cdef)
+        self.assertNotIn("enum {", cdef)
+        self.assertNotIn("XY_API_VERSION", cdef)
+        self.assertNotIn("static_assert", cdef)
+        self.assertNotIn("assert.h", cdef)
         self.assertFalse([line for line in cdef.splitlines() if line.startswith("#")])
 
     def test_module_surface(self) -> None:
         for expected in (
             'local lib = ffi.load("libxy.so")',
-            "M.XY_ERR_BUSY = tonumber(ffi.C.XY_ERR_BUSY)",
+            "M.XY_API_VERSION = 0x01020304",
+            "M.XY_FEAT_B = 8",
+            "M.XY_FEAT_AB = 9",
+            "M.XY_OK = 0",
+            "M.XY_ERR_BUSY = 9",
             "M.error_to_str = M.status_to_str",
             "    send = lib.xy_send,",
             "function M.XyDevice.new(unit)",
@@ -168,11 +197,31 @@ class Lua(unittest.TestCase):
         ):
             self.assertIn(expected, self.text)
         self.assertNotIn("M.XyDevice.destroy_port", self.text)
+        self.assertNotIn("tonumber(lib.", self.text)
+        self.assertNotIn("ffi.C.", self.text)
 
     def test_memory_without_size_is_rejected(self) -> None:
         api = load(FIXTURE.replace(', size = "len"', ""))
         with self.assertRaises(model.DefinitionError):
             emit_lua.module(api, source_name="x", library="libxy.so")
+
+
+class Main(unittest.TestCase):
+    def test_writes_destination_layout_under_generated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.adef.toml"
+            definition.write_text(FIXTURE, encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            argv = [
+                "api_gen",
+                str(definition),
+                "--generated", str(generated),
+                "--exercise", "tiny_compute",
+            ]
+            with mock.patch.object(sys, "argv", argv):
+                self.assertEqual(api_gen_main.main(), 0)
+            self.assertTrue((generated / "include" / "tiny_compute" / "xy_api.h").is_file())
+            self.assertTrue((generated / "binding" / "xy_api.lua").is_file())
 
 
 if __name__ == "__main__":

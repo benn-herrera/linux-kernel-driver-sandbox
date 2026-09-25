@@ -100,7 +100,7 @@ driver-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
-[doc("generate the active exercise's userspace API artifacts from /work/exercises/EXERCISE/userspace/api_def/*.adef.toml with vdev/api_gen into OUT/userspace-build/EXERCISE/generated/ (the C header, the ABI pin translation unit, the Lua base module), then compile the pin unit with -fsyntax-only against the driver's ioctl header; no-op with a note when the exercise has no definitions")]
+[doc("generate the active exercise's userspace API artifacts from /work/exercises/EXERCISE/userspace/api_def/*.adef.toml with vdev/api_gen into OUT/userspace-build/EXERCISE/generated/, laid out as its destination: include/EXERCISE/ (the C header, carrying the ABI pins in its implementation-only block) and binding/ (the Lua module); no-op with a note when the exercise has no definitions")]
 generate: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
@@ -117,11 +117,7 @@ generate: exercise-check
   for def in "${defs[@]}"; do
     stem="$(basename "${def}" .adef.toml)"
     stems+=("${stem}")
-    PYTHONPATH=/work/vdev PYTHONDONTWRITEBYTECODE=1 python3 -m api_gen "${def}" --generated "${gen}"
-    pins="${gen}/${stem}_pins.cpp"
-    if [[ -f "${pins}" ]]; then
-      clang++ --std=c++20 -fsyntax-only -I/work/exercises -I"${gen}" -I"{{EXERCISE_DIR}}/userspace/lib" "${pins}"
-    fi
+    PYTHONPATH=/work/vdev PYTHONDONTWRITEBYTECODE=1 python3 -m api_gen "${def}" --generated "${gen}" --exercise "{{EXERCISE}}"
   done
   printf 'generated %s: %s\n' "${gen}" "${stems[*]}" >&2
 
@@ -131,7 +127,7 @@ api-gen-test:
   set -euo pipefail
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s /work/vdev/api_gen/tests -t /work/vdev
 
-[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header and every generated header is copied to OUT/userspace/include/EXERCISE/ (created); every generated .lua module goes to OUT/userspace/binding/")]
+[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); every lib/*.h header is copied to OUT/userspace/include/EXERCISE/ (created); the generated include/ and binding/ subtrees are staged whole onto OUT/userspace/")]
 userspace: exercise-check generate
   #!/usr/bin/env bash
   set -euo pipefail
@@ -157,16 +153,13 @@ userspace: exercise-check generate
   for header in "${dir}/lib"/*.h; do
     cp "${header}" "${include}/"
   done
-  # generated artifacts: the Lua base module beside the scripts' modules, the header for the guest prompt
-  if [[ -d "${build}/generated" ]]; then
-    mkdir -p "{{OUT}}/userspace/binding"
-    for lua in "${build}/generated"/*.lua; do
-      cp "${lua}" "{{OUT}}/userspace/binding/"
-    done
-    for header in "${build}/generated"/*.h; do
-      cp "${header}" "${include}/"
-    done
-  fi
+  # generated artifacts: generated/ mirrors OUT/userspace/, so each subtree is staged whole
+  for sub in include binding; do
+    if [[ -d "${build}/generated/${sub}" ]]; then
+      mkdir -p "{{OUT}}/userspace/${sub}"
+      cp -r "${build}/generated/${sub}/." "{{OUT}}/userspace/${sub}/"
+    fi
+  done
   printf 'built %s/userspace: %s\n' "{{OUT}}" "{{EXERCISE}}" >&2
 
 [doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/ for every exercise, not only the active one")]
@@ -183,8 +176,8 @@ compile-commands: exercise-check
   [[ -d "${mo}" ]] || { printf "%s missing: run 'driver' first\n" "${mo}" >&2; exit 1; }
   build="{{OUT}}/userspace-build/{{EXERCISE}}"
   shopt -s nullglob
-  frags=("${build}"/*.o.json)
-  (( ${#frags[@]} > 0 )) || { printf "%s has no *.o.json fragments: run 'userspace' first\n" "${build}" >&2; exit 1; }
+  frags=("${build}"/*/*.o.json)
+  (( ${#frags[@]} > 0 )) || { printf "%s has no */*.o.json fragments: run 'userspace' first\n" "${build}" >&2; exit 1; }
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp}"' EXIT
   python3 "{{KERNEL_SRC}}/scripts/clang-tools/gen_compile_commands.py" -d "${mo}" -o "${tmp}/kernel.json"
@@ -196,7 +189,7 @@ compile-commands: exercise-check
   kernel_json, build, out_path = sys.argv[1:4]
   with open(kernel_json) as f:
       entries = json.load(f)
-  for frag in sorted(glob.glob(f"{build}/*.o.json")):
+  for frag in sorted(glob.glob(f"{build}/*/*.o.json")):
       with open(frag) as f:
           text = f.read().rstrip()
       if text.endswith(','):
