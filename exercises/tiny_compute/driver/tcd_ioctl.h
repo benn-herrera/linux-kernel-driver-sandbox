@@ -29,9 +29,6 @@
 #define TCD_DEVICE_CAP_COMPUTE (1u << 0)
 #define TCD_DEVICE_CAP_DMA_READ (1u << 1)
 #define TCD_DEVICE_CAP_DMA_WRITE (1u << 2)
-#define TCD_DEVICE_CAP_ALL                                  \
-	(TCD_DEVICE_CAP_COMPUTE | TCD_DEVICE_CAP_DMA_READ | \
-	 TCD_DEVICE_CAP_DMA_WRITE)
 
 #define TCD_DEVICE_NAME_BASE "tiny_compute"
 

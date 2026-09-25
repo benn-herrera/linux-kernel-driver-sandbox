@@ -41,14 +41,14 @@ enum tcd_register {
 };
 
 enum tcd_compute_status_bit {
-	TCD_COMPUTE_STATUS_BIT_WORKING = 0x01,
-	TCD_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION = 0x80,
+	TCD_COMPUTE_STATUS_BIT_WORKING = (1u << 0),
+	TCD_COMPUTE_STATUS_BIT_RAISE_ON_COMPLETION = (1u << 7),
 };
 
 enum tcd_dma_command_bit {
-	TCD_DMA_COMMAND_BIT_START = 0x01,
-	TCD_DMA_COMMAND_BIT_DIRECTION = 0x02,
-	TCD_DMA_COMMAND_BIT_RAISE = 0x04,
+	TCD_DMA_COMMAND_BIT_START = (1u << 0),
+	TCD_DMA_COMMAND_BIT_DIRECTION = (1u << 1),
+	TCD_DMA_COMMAND_BIT_RAISE = (1u << 2),
 };
 
 enum tcd_irq_value {
@@ -59,6 +59,12 @@ enum tcd_irq_value {
 enum tcd_dma_direction_bit {
 	TCD_DMA_TO_DEVICE = (0u << TCD_DMA_DIRECTION_BIT_IDX),
 	TCD_DMA_FROM_DEVICE = (1u << TCD_DMA_DIRECTION_BIT_IDX),
+};
+
+enum tcd_cap_bit {
+  TCD_CAP_COMPUTE = (1u << 0),
+  TCD_CAP_DMA_READ = (1u << 1),
+  TCD_CAP_DMA_WRITE = (1u << 2)
 };
 
 //
@@ -81,6 +87,7 @@ struct tcd_dev {
 	struct completion dma_done;
 	struct tcd_dma_buf dma_from_device;
 	struct tcd_dma_buf dma_to_device;
+	u32 cap_flags;
 	int id;
 	int irq;
 };

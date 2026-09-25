@@ -12,6 +12,12 @@ struct tcd_file {
 	// other stuff will go here eventually
 };
 
+static_assert(TCD_DEVICE_CAP_COMPUTE == TCD_CAP_COMPUTE);
+static_assert(TCD_DEVICE_CAP_DMA_READ == TCD_CAP_DMA_READ);
+static_assert(TCD_DEVICE_CAP_DMA_WRITE == TCD_CAP_DMA_WRITE);
+// would be nice to be able to pin this like the device caps.
+//static_assert(TCD_DEVICE_NAME_BASE == KBUILD_MODNAME);
+
 int tcd_open(struct inode *inode, struct file *file)
 {
 	struct tcd_dev *pdev =
@@ -56,7 +62,7 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		info.device_id = ioread32(mfile->tcd->regs + TCD_REG_ID);
 		info.dma_buf_size = TCD_DMA_BUF_SIZE;
 		info.dma_alignment = TCD_DMA_ALIGNMENT;
-		info.flags = TCD_DEVICE_CAP_ALL;
+		info.flags = mfile->tcd->cap_flags;
 
 		if (copy_to_user((void __user *)arg, &info, sizeof(info)))
 			return -EFAULT;
@@ -80,6 +86,9 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case TCD_IOC_COMPUTE: {
 		u32 val = 0;
 		int result = 0;
+
+		if (!(mfile->tcd->cap_flags & TCD_CAP_COMPUTE))
+		  return -EFAULT;
 
 		if (get_user(val, (u32 __user *)arg))
 			return -EFAULT;
@@ -116,6 +125,9 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case TCD_IOC_DMA_FROM_DEVICE: {
 		struct tcd_dma_req dma_req = {};
 
+		if (!(mfile->tcd->cap_flags & TCD_CAP_DMA_READ))
+		  return -EFAULT;
+
 		if (copy_from_user(&dma_req, (const void *)arg,
 				   sizeof(dma_req)))
 			return -EFAULT;
@@ -125,6 +137,9 @@ long tcd_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	}
 	case TCD_IOC_DMA_TO_DEVICE: {
 		struct tcd_dma_req dma_req = {};
+
+		if (!(mfile->tcd->cap_flags & TCD_CAP_DMA_WRITE))
+		  return -EFAULT;
 
 		if (copy_from_user(&dma_req, (const void *)arg,
 				   sizeof(dma_req)))

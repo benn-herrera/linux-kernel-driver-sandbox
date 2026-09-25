@@ -99,6 +99,7 @@ int tcd_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	}
 	tcd->miscdev.minor = MISC_DYNAMIC_MINOR;
 	tcd->miscdev.fops = &tcd_fops;
+	tcd->cap_flags = TCD_CAP_COMPUTE | TCD_CAP_DMA_READ | TCD_CAP_DMA_WRITE;
 
 	// misc device file descriptor operations registration
 	// requires matching unregister in remove()
