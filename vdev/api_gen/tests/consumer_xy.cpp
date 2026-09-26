@@ -2,7 +2,8 @@
 // Exit codes: 0 all steps passed; 1 create(99) failure result; 2 create(3) and its cached
 // out parameters; 3 send; 4 recv; 5 configure; 6 stats_of; 7 move construction; 8 move assignment;
 // 9 release; 10 destructors freed the slots; 11 PRODUCT; 12 DataLink::create; 13 bump; 14 seek and tune;
-// 15 annotate (an _optional struct in parameter); 16 the _to_string conversions.
+// 15 annotate (an _optional struct in parameter); 16 the _to_string conversions; 17 probe (an enum out
+// parameter as the C typedef, _optional memory in, scalar in, inout and out parameters).
 #include "xy_api.hpp"
 
 #include <cstring>
@@ -89,6 +90,16 @@ int main() {
     return 15;
   }
 
+  xy_mode mode = XY_FINE;
+  uint32_t probe_limit = 3;
+  uint32_t probe_level = 4;
+  uint32_t peek = 0;
+  if (port.probe(mode, nullptr, 0) != xy::Status::Ok || mode != XY_SLOW ||
+      port.probe(mode, "ab", 2, &probe_limit, &probe_level, &peek) != xy::Status::Ok || probe_level != 5 ||
+      peek != 9 || port.probe(mode, "abc", 3) != xy::Status::ErrBusy) {
+    return 17;
+  }
+
   xy::Port moved = std::move(port);
   if (port || !moved) {
     return 7;
@@ -128,7 +139,9 @@ int main() {
   if (std::strcmp(xy::to_string(xy::Mode::Slow), "SLOW") != 0 ||
       std::strcmp(xy::to_string(xy::Status(12345)), "UNKNOWN_STATUS") != 0 || xy::access_to_string(3) != "ACC_A|ACC_B" ||
       xy::access_to_string(1) != "ACC_A" || xy::access_to_string(0) != "NONE" || xy::access_to_string(9) != "ACC_A|0x8" ||
-      xy::limit_to_string(16) != "MAX_UNITS" || xy::limit_to_string(xy::NEG) != "NEG" || xy::limit_to_string(99) != "UNKNOWN") {
+      xy::access_to_string(-1) != "ACC_A|ACC_B|0xfffffffc" || xy::limit_to_string(16) != "MAX_UNITS" ||
+      xy::limit_to_string(xy::NEG) != "NEG" || xy::limit_to_string(xy::FLOOR) != "FLOOR" ||
+      xy::limit_to_string(99) != "UNKNOWN") {
     return 16;
   }
   return 0;

@@ -3,10 +3,11 @@
 # <exercise> is the name of the directory two levels above this Makefile's
 # directory: exercises/<exercise>/userspace/api_def/Makefile.
 # OUTPUTS selects the outputs, a comma-separated subset of h,hpp,lua,stub_cpp;
-# an exercise sets `OUTPUTS := ...` before its include to narrow it. Changing
-# OUTPUTS needs `userspace-clean-vdev`: $(ADEF_MK) is remade only when the
-# definition changes, and a dropped output's file would stay under $(GEN) and
-# be staged.
+# an exercise sets `OUTPUTS := ...` before its include to narrow it, and `make
+# OUTPUTS=...` overrides both. Otherwise all four are made: an OUTPUTS variable
+# in the environment is ignored. Changing OUTPUTS needs `userspace-clean-vdev`:
+# $(ADEF_MK) is remade only when the definition changes, and a dropped output's
+# file would stay under $(GEN) and be staged.
 ifeq ($(strip $(OUT)),)
 $(error OUT is not set: make OUT=<out_dir> API_GEN=<api_gen_dir>)
 endif
@@ -18,7 +19,10 @@ endif
 BASE := $(notdir $(abspath $(CURDIR)/../..))
 
 GEN := $(OUT)/generated
-OUTPUTS ?= h,hpp,lua,stub_cpp
+# a command-line OUTPUTS outranks this assignment without the test
+ifneq ($(origin OUTPUTS),file)
+OUTPUTS := h,hpp,lua,stub_cpp
+endif
 # one definition per exercise; the generated rules and the stub/wrapper naming assume it
 DEF := $(wildcard *.adef.toml)
 ifneq ($(words $(DEF)),1)

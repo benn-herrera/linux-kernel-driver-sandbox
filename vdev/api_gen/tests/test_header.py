@@ -1,13 +1,13 @@
 import unittest
 
 from api_gen import emit_c, model
-from api_gen.tests.support import C_CONST_MACROS, FIXTURE, KITCHEN_SINK, load, mutate, param_lists
+from api_gen.tests.support import C_CONST_MACROS, FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists
 
 
 class Preprocessor(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_c.header(self.api, source_name="xy_api.adef.toml")
+        self.text = header(self.api)
 
     def test_only_permitted_preprocessor_lines(self) -> None:
         allowed = ("#pragma once", "#include", "#if", "#else", "#endif", "# define", "# include", "#define XY_")
@@ -24,7 +24,7 @@ class Preprocessor(unittest.TestCase):
 class Pins(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_c.header(self.api, source_name="xy_api.adef.toml")
+        self.text = header(self.api)
 
     def test_abi_pins_present_with_driver_data(self) -> None:
         block = self.text[self.text.rindex("XY_API xy_status ") :]
@@ -35,7 +35,7 @@ class Pins(unittest.TestCase):
         self.assertRegex(block, r"static_assert\(XY_FEAT_A == XYD_FEAT_A, \"[^\"]+\"\);")
 
     def test_abi_pins_absent_without_driver_data(self) -> None:
-        text = emit_c.header(load(FIXTURE[: FIXTURE.index("[_driver_data]")]), source_name="xy_api.adef.toml")
+        text = header(load(FIXTURE[: FIXTURE.index("[_driver_data]")]))
         self.assertNotIn("ABI pins", text)
         self.assertNotIn("static_assert", text)
 
@@ -43,7 +43,7 @@ class Pins(unittest.TestCase):
 class Declarations(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_c.header(self.api, source_name="xy_api.adef.toml")
+        self.text = header(self.api)
 
     def test_type_mapping_follows_the_spec_table(self) -> None:
         rows = (
@@ -126,11 +126,11 @@ class Declarations(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, lines)
         decimal = mutate(KITCHEN_SINK, '\nfloor = { _value = -2147483648, _format = "hex" }', "\nfloor = -2147483648")
-        decimal_min = emit_c.header(load(decimal), source_name="x")
+        decimal_min = header(load(decimal))
         self.assertIn("#define XY_FLOOR (-INT32_C(2147483647) - 1)", decimal_min.splitlines())
 
     def test_literal_term_renders_from_its_parsed_value(self) -> None:
-        text = emit_c.header(load(mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "0x1E"]')), source_name="x")
+        text = header(load(mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "0x1E"]')))
         self.assertIn("#define XY_FEAT_AB (XY_FEAT_A | INT32_C(0x1e))", text.splitlines())
 
     def test_every_uncomposed_literal_takes_its_group_base_type_macro(self) -> None:
@@ -218,7 +218,7 @@ class Validate(unittest.TestCase):
         self.assertEqual(emit_c.validate(load(u32)), [])
 
     def test_header_macros_are_the_ones_it_emits(self) -> None:
-        text = emit_c.header(load(KITCHEN_SINK), source_name="x")
+        text = header(load(KITCHEN_SINK))
         for macro in emit_c.header_macros("xy"):
             with self.subTest(macro=macro):
                 self.assertRegex(text, rf"(?m)^#\s*(define|if defined\()\s*{macro}\b")

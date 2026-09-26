@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from api_gen.tests.support import C_BASE_TYPES, EXERCISES, KITCHEN_SINK, expected_constants, load, run_main
+from api_gen.tests.support import C_BASE_TYPES, EXERCISES, KITCHEN_SINK, expected_constants, load, mutate, run_main
 
 TESTS = Path(__file__).resolve().parent
 TOOLS = ("clang", "clang++", "luajit", "make")
@@ -107,9 +107,38 @@ class HeaderC(unittest.TestCase):
         result = self.compile_values("-DXY_IMPL", f"-I{TMP}")
         self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_constant_values_equal_the_model(self) -> None:
-        result = self.compile_values()
-        self.assertEqual(result.returncode, 0, result.stderr)
+
+class BitThirtyOne(unittest.TestCase):
+    """A u32 group's bit 31: the header and the wrapper carry it, the Lua module refuses it."""
+
+    DEFINITION = mutate(
+        KITCHEN_SINK, '_base_type = "u32"\nfeat_one = 0', '_base_type = "u32"\n_to_string = "wide_to_string"\nfeat_one = 31'
+    )
+
+    def test_header_and_wrapper_carry_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            definition = write(root / "xy_api.adef.toml", self.DEFINITION)
+            code, _, stderr = run_main(
+                [str(definition), "--generated", str(root / "generated"), "--exercise", "xy", "--outputs=h,hpp"]
+            )
+            self.assertEqual(code, 0, stderr)
+            tu = write(root / "wide.cpp", (
+                '#include "xy_api.hpp"\n'
+                "static_assert(XY_FEAT_ONE == 0x80000000u);\n"
+                "static_assert(xy::FEAT_ALL == 0x80000008u);\n"
+                'int main() { return xy::wide_to_string(xy::FEAT_ALL) == "FEAT_ONE|0x8" ? 0 : 1; }\n'
+            ))
+            build_or_fail(["clang++", "-std=c++20", "-Wall", "-Wextra", "-Werror",
+                           f"-I{root / 'generated' / 'include' / 'xy'}", "-o", root / "wide", tu])
+            self.assertEqual(run([root / "wide"]).returncode, 0)
+
+    def test_lua_refuses_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = write(Path(tmp) / "xy_api.adef.toml", self.DEFINITION)
+            code, _, stderr = run_main([str(definition), "--generated", str(Path(tmp) / "generated"), "--exercise", "xy"])
+            self.assertEqual(code, 2)
+            self.assertIn(": lua: untyped_bit_const.feat_one: value 0x80000000 exceeds 0x7fffffff;", stderr)
 
 
 class Stub(unittest.TestCase):
@@ -198,6 +227,25 @@ class Gendeps(unittest.TestCase):
         out = self.make_n("--outputs=hpp,lua")
         self.assertIn("python3 -m api_gen xy_api.adef.toml --generated OUTDIR --exercise xy --outputs=hpp,lua\n", out)
         self.assertIn("echo target=OUTDIR/include/xy/xy_api.hpp target=OUTDIR/binding/xy_api.lua\n", out)
+
+    def test_gen_mk_outputs_come_from_the_makefile_or_command_line_never_the_environment(self) -> None:
+        for makefile_line, command_line, expected in (
+            ("", [], "h,hpp,lua,stub_cpp"),
+            ("OUTPUTS := hpp\n", [], "hpp"),
+            ("OUTPUTS := hpp\n", ["OUTPUTS=lua"], "lua"),
+        ):
+            with self.subTest(makefile=makefile_line, command_line=command_line), tempfile.TemporaryDirectory() as tmp:
+                api_def = Path(tmp) / "xy" / "userspace" / "api_def"
+                write(api_def / "xy_api.adef.toml", KITCHEN_SINK)
+                write(api_def / "Makefile", f"{makefile_line}include {EXERCISES / 'gen.mk'}\n")
+                out = Path(tmp) / "out"
+                # make remakes the included adef.mk even under -n
+                result = run(
+                    ["make", "-n", f"OUT={out}", f"API_GEN={EXERCISES.parent / 'vdev'}", *command_line],
+                    cwd=api_def, env={**os.environ, "OUTPUTS": "stub_cpp"},
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn(f" --outputs={expected}\n", (out / "generated" / "adef.mk").read_text(encoding="utf-8"))
 
 
 class RealDefinition(unittest.TestCase):

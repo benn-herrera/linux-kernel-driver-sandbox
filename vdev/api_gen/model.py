@@ -7,7 +7,7 @@ order they appear in the file.
 
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Generic, TypeVar
@@ -16,6 +16,7 @@ from api_gen import naming
 
 BUILTIN_TYPES = frozenset({*naming.BUILTIN_C_TYPES, "memory"})
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+_LOWERCASE_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]*\Z")
 # A composed entry's literal term: decimal or 0x-prefixed hex, an optional leading '-'.
 _LITERAL_TERM = re.compile(r"(-?)(?:0x([0-9a-fA-F]+)|([0-9]+))\Z")
 FORMATS = ("dec", "hex")
@@ -112,7 +113,7 @@ class TypedConst(Node):
 class OpaqueRef(Node):
     ctor: str | None  # function with exactly one out parameter of this type
     dtor: str | None  # function taking only this type by value; set only with ctor
-    class_name: str  # an identifier as the definition writes it; each binding applies its own idiom
+    class_name: str  # `_class`, lowercase, or else the ref's name; each binding applies its own casing
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -143,6 +144,19 @@ class Function(Node):
         docs = [self.docstring] if self.docstring else []
         docs += [f"{p.name}: {p.docstring}" for p in self.params if p.docstring]
         return docs
+
+
+@dataclass(frozen=True)
+class ClassShape:
+    """What an object-semantics binding builds for an opaque ref with a `_ctor`, as the
+    definition states it."""
+
+    opaque: OpaqueRef
+    ctor: Function
+    handle: Param  # the ctor's one `out` parameter of the opaque's type
+    cached: tuple[Param, ...]  # the ctor's other `out` parameters, each kept on the object
+    methods: tuple[Function, ...]  # every other function but the dtor whose first parameter is the opaque by value
+    dtor: Function | None
 
 
 @dataclass(frozen=True)
@@ -180,14 +194,42 @@ class Api:
         """Every string_const entry across the groups, in document order."""
         return tuple(c for g in self.string_const_groups for c in g.entries)
 
-    def constant_names(self) -> list[tuple[str, str]]:
-        """(where, name) for every constant of every kind, typed enum entries included, in
-        document order: everything that becomes a `naming.const_name`."""
+    def constant_names(self, *, enum_entries: bool = True) -> list[tuple[str, str]]:
+        """(where, name) for every constant of every kind in document order, typed enum
+        entries last unless `enum_entries` is false: everything that becomes a
+        `naming.const_name`."""
         names = [(f"untyped_bit_const.{c.name}", c.name) for c in self.bit_consts]
         names += [(f"untyped_const.{c.name}", c.name) for c in self.consts]
         names += [(f"string_const.{c.name}", c.name) for c in self.string_consts]
-        names += [(f"typed_const.{t.name}.{e.name}", e.name) for t in self.typed_consts for e in t.entries]
+        if enum_entries:
+            names += [(f"typed_const.{t.name}.{e.name}", e.name) for t in self.typed_consts for e in t.entries]
         return names
+
+    def classes(self) -> tuple[ClassShape, ...]:
+        """One shape per opaque ref that names a `_ctor`, in document order."""
+        functions = {f.name: f for f in self.functions}
+        shapes = []
+        for o in self.opaque_refs:
+            if o.ctor is None:
+                continue
+            ctor = functions[o.ctor]
+            shapes.append(ClassShape(
+                opaque=o,
+                ctor=ctor,
+                handle=next(p for p in ctor.params if p.type == o.name and p.ref == "out"),
+                cached=tuple(p for p in ctor.params if p.ref == "out" and p.type != o.name),
+                methods=tuple(
+                    f for f in self.functions
+                    if f.name not in (o.ctor, o.dtor) and f.params and f.params[0].type == o.name and f.params[0].ref is None
+                ),
+                dtor=None if o.dtor is None else functions[o.dtor],
+            ))
+        return tuple(shapes)
+
+    def success_entry(self, fn: Function) -> EnumEntry:
+        """The zero-valued entry of `fn`'s return enum, which the loader requires."""
+        returns = next(t for t in self.typed_consts if t.name == fn.returns)
+        return next(e for e in returns.entries if e.value == 0)
 
     def kind(self, type_name: str) -> str:
         """One of "builtin", "enum", "opaque", "struct" for a validated type name."""
@@ -204,13 +246,7 @@ class Api:
     def names(self) -> list[tuple[str, str]]:
         """(where, name) for every name the definition gives, in document order, `where`
         spelled as the loader's messages spell it: `function.open_port.unit`."""
-        names = [("_general._namespace", self.namespace)]
-        for kind, entries in (
-            ("untyped_bit_const", self.bit_consts),
-            ("untyped_const", self.consts),
-            ("string_const", self.string_consts),
-        ):
-            names += [(f"{kind}.{c.name}", c.name) for c in entries]
+        names = [("_general._namespace", self.namespace), *self.constant_names()]
         names += [
             (f"{g.name}._to_string", g.to_string)
             for g in (*self.bit_const_groups, *self.const_groups)
@@ -220,7 +256,6 @@ class Api:
             names.append((f"typed_const.{t.name}", t.name))
             if t.to_string is not None:
                 names.append((f"typed_const.{t.name}._to_string", t.to_string))
-            names += [(f"typed_const.{t.name}.{e.name}", e.name) for e in t.entries]
         for o in self.opaque_refs:
             names += [(f"opaque_ref.{o.name}", o.name), (f"opaque_ref.{o.name}._class", o.class_name)]
         for s in self.structs:
@@ -235,6 +270,15 @@ class Api:
         """The version packed into one 32-bit value, most-significant byte first."""
         shifts = (24, 16, 8, 0)
         return sum(b << s for b, s in zip(self.version, shifts))
+
+
+def duplicates(pairs: Iterable[tuple[str, str]]) -> dict[str, list[str]]:
+    """Each name that `pairs`, (name, what defines it), holds more than once, with every
+    definer in order, in the order the names are first seen."""
+    definers: dict[str, list[str]] = {}
+    for name, definer in pairs:
+        definers.setdefault(name, []).append(definer)
+    return {name: found for name, found in definers.items() if len(found) > 1}
 
 
 def load(path: Path) -> Api:
@@ -253,8 +297,6 @@ def from_dict(data: Mapping) -> Api:
     general = data.get("_general")
     if not isinstance(general, dict):
         raise DefinitionError("missing [_general] table")
-    if "name" in general:
-        raise DefinitionError("_general: unknown key name (the definition's file name is the output stem)")
     _reject_unknown(general, {"_namespace", "_version", "_library"}, "_general")
 
     namespace = general.get("_namespace")
@@ -371,7 +413,7 @@ def _groups(
     fixed width and no conversion)."""
     groups = data.get(key, [])
     if isinstance(groups, dict):
-        raise DefinitionError(f"[{key}] is now an array of tables: write each group as [[{key}]]")
+        raise DefinitionError(f"[{key}] must be an array of tables, [[{key}]]")
     if not isinstance(groups, list) or not all(isinstance(g, dict) for g in groups):
         raise DefinitionError(f"[[{key}]] must be an array of tables")
     result = []
@@ -625,9 +667,12 @@ def _opaque_ref(name: str, body: dict) -> OpaqueRef:
         if not isinstance(props.get(key, ""), str):
             raise DefinitionError(f"{where}.{key} must be a function name")
     class_name = props.get("_class", name)
-    if not isinstance(class_name, str) or not _IDENTIFIER.match(class_name):
-        raise DefinitionError(f"{where}._class must be an identifier")
-    _identifier(class_name, f"{where}._class")
+    if "_class" in props:
+        if not isinstance(class_name, str) or not _IDENTIFIER.match(class_name):
+            raise DefinitionError(f"{where}._class must be an identifier")
+        _identifier(class_name, f"{where}._class")
+        if not _LOWERCASE_IDENTIFIER.match(class_name):
+            raise DefinitionError(f"{where}._class: '{class_name}' must be lowercase; each binding applies its own casing")
     return OpaqueRef(
         name=name, docstring=_docstring(props.get("_docstring"), f"{where}._docstring"),
         ctor=props.get("_ctor"), dtor=props.get("_dtor"), class_name=class_name,
@@ -635,7 +680,6 @@ def _opaque_ref(name: str, body: dict) -> OpaqueRef:
 
 
 def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Function]) -> None:
-    classes: dict[str, str] = {}
     for o in opaque_refs:
         where = f"opaque_ref.{o.name}"
         if o.dtor is not None and o.ctor is None:
@@ -663,10 +707,6 @@ def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Func
                 raise DefinitionError(
                     f"{where}._dtor: '{o.dtor}' must name a function whose only parameter is a {o.name} by value"
                 )
-        class_name = naming.upper_camel(o.class_name)
-        if class_name in classes:
-            raise DefinitionError(f"{where}._class: {class_name} is already the class of opaque_ref.{classes[class_name]}")
-        classes[class_name] = o.name
 
 
 def _variable(
@@ -778,20 +818,15 @@ def _driver_data(body: object, bit_names: set[str]) -> DriverData | None:
 def _check_unique_identifiers(api: Api) -> None:
     """Every generated C identifier, constants and declarations alike, is defined once."""
     ns = api.namespace
-    seen = {naming.version_const(ns): "the API version constant"}
-    for where, name in api.constant_names():
-        c_name = naming.const_name(ns, name)
-        if c_name in seen:
-            raise DefinitionError(f"{where}: constant {c_name} already defined by {seen[c_name]}")
-        seen[c_name] = where
-
-    idents = [(naming.type_name(ns, t.name), f"typed_const.{t.name}") for t in api.typed_consts]
+    idents = [(naming.version_const(ns), "the API version constant")]
+    idents += [(naming.const_name(ns, name), where) for where, name in api.constant_names()]
+    idents += [(naming.type_name(ns, t.name), f"typed_const.{t.name}") for t in api.typed_consts]
     for o in api.opaque_refs:
         where = f"opaque_ref.{o.name}"
         idents += [(naming.type_name(ns, o.name), where), (naming.opaque_struct(ns, o.name), where)]
     idents += [(naming.type_name(ns, s.name), f"struct.{s.name}") for s in api.structs]
     idents += [(naming.function_name(ns, f.name), f"function.{f.name}") for f in api.functions]
-    for ident, where in idents:
-        if ident in seen:
-            raise DefinitionError(f"{where}: C identifier {ident} already defined by {seen[ident]}")
-        seen[ident] = where
+    repeated = duplicates(idents)
+    if repeated:
+        ident, (first, second, *_) = next(iter(repeated.items()))
+        raise DefinitionError(f"{second}: C identifier {ident} already defined by {first}")

@@ -1,11 +1,26 @@
+import inspect
 import re
 import tempfile
 import unittest
 from pathlib import Path
 
 from api_gen import __main__ as api_gen_main
-from api_gen import emit_c, emit_cpp_stub, emit_cpp_wrapper, emit_lua
+from api_gen import emit_binding_cpp, emit_binding_lua, emit_c, emit_stub_cpp
+from api_gen.emitter import Emitter
 from api_gen.tests.support import FIXTURE, load, mutate, run_main
+
+
+class EmitterShape(unittest.TestCase):
+    def test_every_emitter_matches_the_protocol(self) -> None:
+        def unbound(method: object) -> inspect.Signature:
+            signature = inspect.signature(method)
+            return signature.replace(parameters=list(signature.parameters.values())[1:])
+
+        for token, emitter in api_gen_main.EMITTERS.items():
+            with self.subTest(token=token):
+                self.assertIsInstance(emitter.LABEL, str)
+                self.assertEqual(inspect.signature(emitter.validate), unbound(Emitter.validate))
+                self.assertEqual(inspect.signature(emitter.emit), unbound(Emitter.emit))
 
 
 class Generate(unittest.TestCase):
@@ -16,19 +31,34 @@ class Generate(unittest.TestCase):
             generated = Path(tmp) / "generated"
             code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "tiny_compute"])
             self.assertEqual(code, 0)
-            api, source = load(FIXTURE), "xy_api.adef.toml"
-            expected = (
-                emit_c.header(api, source_name=source),
-                emit_cpp_wrapper.wrapper(api, source_name=source, stem="xy_api"),
-                emit_lua.module(api, source_name=source, library="libxy.so"),
-                emit_cpp_stub.stub(api, source_name=source, stem="xy_api"),
-            )
-            relpaths = api_gen_main.output_paths(stem="xy_api", exercise="tiny_compute").values()
-            for relpath, text in zip(relpaths, expected, strict=True):
+            api = load(FIXTURE)
+            modules = {"h": emit_c, "hpp": emit_binding_cpp, "lua": emit_binding_lua, "stub_cpp": emit_stub_cpp}
+            for token, relpath in api_gen_main.output_paths(stem="xy_api", exercise="tiny_compute").items():
                 with self.subTest(output=str(relpath)):
-                    self.assertEqual((generated / relpath).read_text(encoding="utf-8"), text)
+                    expected = modules[token].emit(api, source_name="xy_api.adef.toml", stem="xy_api", library="libxy.so")
+                    self.assertEqual((generated / relpath).read_text(encoding="utf-8"), expected)
                     self.assertIn(str(relpath), stderr)
             self.assertEqual(stderr.count("\n"), 1)
+
+    def test_definition_name_must_end_in_the_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.toml"
+            definition.write_text(FIXTURE, encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "xy"])
+            self.assertEqual(code, 2)
+            self.assertEqual(stderr, f"api_gen: {definition}: file name must end in .adef.toml\n")
+            self.assertFalse(generated.exists())
+
+    def test_not_implemented_exits_2_saying_so(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.adef.toml"
+            definition.write_text(mutate(FIXTURE, "max_units = 16", "max_units = 1.5"), encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "xy"])
+            self.assertEqual(code, 2)
+            self.assertEqual(stderr, f"api_gen: {definition}: untyped_const.max_units: f64 constants are not implemented\n")
+            self.assertFalse(generated.exists())
 
     def test_definition_error_exit_2_writes_nothing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -87,6 +117,18 @@ class Generate(unittest.TestCase):
                         f"api_gen: {definition}: --library must not contain '\"', '\\' or a control character\n",
                     )
                     self.assertFalse(generated.exists())
+
+    def test_empty_library_flag_is_a_usage_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            definition = Path(tmp) / "xy_api.adef.toml"
+            definition.write_text(FIXTURE, encoding="utf-8")
+            generated = Path(tmp) / "generated"
+            code, _, stderr = run_main([
+                str(definition), "--generated", str(generated), "--exercise", "tiny_compute", "--library", "",
+            ])
+            self.assertEqual(code, 2)
+            self.assertIn("argument --library: must name a file", stderr)
+            self.assertFalse(generated.exists())
 
     def test_missing_library_exits_2_with_nothing_written(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

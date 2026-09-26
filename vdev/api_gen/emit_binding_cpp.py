@@ -3,15 +3,16 @@ and a move-only class per opaque ref that names a constructor, forwarding inline
 the C functions."""
 
 from api_gen import emit_c, naming
-from api_gen.model import Api, BitConst, EnumEntry, Function, Group, OpaqueRef, Param, TypedConst, single_bit_entries
+from api_gen.model import Api, BitConst, ClassShape, EnumEntry, Function, Group, Param, TypedConst, duplicates, single_bit_entries
 
 HANDLE_MEMBER = "handle_"
 GENERATED_NAMES = ("result", "status", "handle", HANDLE_MEMBER)
-"""Every free name the generated text binds or references where a definition parameter's
-name is in scope: `create()`'s `result` parameter and `status` local beside the ctor's
-parameters, the private constructor's `handle` parameter beside the cached `out`s, and
-the `handle_` member every method reads beside its own parameters. A parameter named like
-one of these would collide with it or shadow it."""
+"""The fixed names the class's generated text binds where a definition parameter's name is
+in scope: `create()`'s `result` parameter and `status` local beside the ctor's parameters,
+the private constructor's `handle` parameter beside the cached `out`s, and the `handle_`
+member every method reads beside its own parameters. A parameter named like one of these
+would collide with it or shadow it; `_rendered_names()` holds the ones the definition
+names."""
 # Every C++20 keyword and alternative token, the C keywords C++ shares included: the
 # wrapper and the stub are C++ translation units that include the C header.
 CPP_KEYWORDS = frozenset(
@@ -38,30 +39,45 @@ def cpp_keyword_objections(api: Api) -> list[str]:
     ]
 
 
+def _rendered_names(api: Api) -> set[str]:
+    """Every name the class's generated text spells where a definition parameter or member
+    name is in scope: the C functions it calls, the C typedefs and fixed-width types its
+    signatures name, and the namespace's enum classes, struct aliases and classes."""
+    ns = api.namespace
+    names = {naming.function_name(ns, f.name) for f in api.functions}
+    names |= {naming.type_name(ns, t.name) for t in (*api.typed_consts, *api.opaque_refs, *api.structs)}
+    names |= {naming.upper_camel(t.name) for t in (*api.typed_consts, *api.structs)}
+    names |= {naming.upper_camel(c.opaque.class_name) for c in api.classes()}
+    return names | set(naming.BUILTIN_C_TYPES.values())
+
+
 def validate(api: Api) -> list[str]:
     """Every objection the wrapper has to `api`: a name that is a C++ keyword, a parameter
-    named like one of `GENERATED_NAMES`, and a name the wrapper would define twice in the
-    namespace, an enum class or a class. Enums' conversions may share a name, since each
-    overloads on its own enum class."""
+    named like one of `GENERATED_NAMES` or `_rendered_names()`, a method named like one of
+    the latter, and a name the wrapper would define twice in the namespace, an enum class
+    or a class. Enums' conversions may share a name, since each overloads on its own enum
+    class."""
     problems = cpp_keyword_objections(api)
+    rendered = _rendered_names(api)
     problems += [
         f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code uses"
         for fn in api.functions
         for p in fn.params
-        if p.name in GENERATED_NAMES
+        if p.name in GENERATED_NAMES or p.name in rendered
     ]
-    classes = [o for o in api.opaque_refs if o.ctor is not None]
+    classes = api.classes()
+    problems += [
+        f"function.{fn.name}: '{fn.name}' is a name the generated code uses"
+        for c in classes
+        for fn in c.methods
+        if fn.name in rendered
+    ]
     const = naming.unprefixed_const_name
     namespace = [(const(naming.VERSION_KEY), "the API version constant")]
-    for kind, entries in (
-        ("untyped_bit_const", api.bit_consts),
-        ("untyped_const", api.consts),
-        ("string_const", api.string_consts),
-    ):
-        namespace += [(const(c.name), f"{kind}.{c.name}") for c in entries]
+    namespace += [(const(name), where) for where, name in api.constant_names(enum_entries=False)]
     namespace += [(naming.upper_camel(t.name), f"typed_const.{t.name}") for t in api.typed_consts]
     namespace += [(naming.upper_camel(s.name), f"struct.{s.name}") for s in api.structs]
-    namespace += [(naming.upper_camel(o.class_name), f"opaque_ref.{o.name}._class") for o in classes]
+    namespace += [(naming.upper_camel(c.opaque.class_name), f"opaque_ref.{c.opaque.name}._class") for c in classes]
     namespace += [
         (g.to_string, f"{g.name}._to_string")
         for g in (*api.bit_const_groups, *api.const_groups)
@@ -78,17 +94,18 @@ def validate(api: Api) -> list[str]:
             [(naming.upper_camel(e.name), f"typed_const.{t.name}.{e.name}") for e in t.entries],
             f"enum class {naming.upper_camel(t.name)}",
         )
-    for o in classes:
-        cls = naming.upper_camel(o.class_name)
-        ctor = _ctor(api, o)
-        members = [(m, "the wrapper's own member") for m in (cls, "create", "handle", "release", HANDLE_MEMBER)]
-        members += [(f.name, f"function.{f.name}") for f in _methods(api, o)]
-        members += [(p.name, f"function.{ctor.name}.{p.name}") for p in _cached(ctor, o)]
+    for c in classes:
+        cls = naming.upper_camel(c.opaque.class_name)
+        own = [cls, "create", "handle", HANDLE_MEMBER, *(["release"] if c.dtor is not None else [])]
+        members = [(m, "the wrapper's own member") for m in own]
+        members += [(f.name, f"function.{f.name}") for f in c.methods]
+        members += [(p.name, f"function.{c.ctor.name}.{p.name}") for p in c.cached]
         problems += _duplicates(members, f"class {cls}")
     return [f"{LABEL}: {p}" for p in problems]
 
 
-def wrapper(api: Api, *, source_name: str, stem: str) -> str:
+def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
+    """The header-only C++ wrapper."""
     ns = api.namespace
     std_headers = {"utility"}
     if any(g.to_string is not None for g in api.bit_const_groups):
@@ -126,41 +143,15 @@ def wrapper(api: Api, *, source_name: str, stem: str) -> str:
     out += [_enum(api, t) for t in api.typed_consts]
     if api.structs:
         out.append("\n" + "".join(f"using {naming.upper_camel(s.name)} = {naming.type_name(ns, s.name)};\n" for s in api.structs))
-    out += [_class(api, o) for o in api.opaque_refs if o.ctor is not None]
+    out += [_class(api, c) for c in api.classes()]
     out.append(f"\n}}  // namespace {ns}\n")
     return "".join(out)
 
 
 def _duplicates(names: list[tuple[str, str]], where: str) -> list[str]:
     """One objection per name that `names`, (name, what defines it) pairs, holds more than
-    once, in first-seen order, naming everything that defines it."""
-    sources: dict[str, list[str]] = {}
-    for name, source in names:
-        sources.setdefault(name, []).append(source)
-    return [
-        f"{where}: {n} would be defined more than once, by {' and '.join(s)}" for n, s in sources.items() if len(s) > 1
-    ]
-
-
-def _ctor(api: Api, opaque: OpaqueRef) -> Function:
-    return next(f for f in api.functions if f.name == opaque.ctor)
-
-
-def _methods(api: Api, opaque: OpaqueRef) -> list[Function]:
-    """Functions other than the ctor and dtor whose first parameter is the opaque by value."""
-    return [
-        f
-        for f in api.functions
-        if f.name not in (opaque.ctor, opaque.dtor)
-        and f.params
-        and f.params[0].type == opaque.name
-        and f.params[0].ref is None
-    ]
-
-
-def _cached(ctor: Function, opaque: OpaqueRef) -> list[Param]:
-    """The ctor's `out` parameters other than the handle, each a member of the object."""
-    return [p for p in ctor.params if p.ref == "out" and p.type != opaque.name]
+    once, naming everything that defines it."""
+    return [f"{where}: {n} would be defined more than once, by {' and '.join(s)}" for n, s in duplicates(names).items()]
 
 
 def _enum(api: Api, typed: TypedConst) -> str:
@@ -290,17 +281,13 @@ def _c_call(api: Api, fn: Function, args: list[str]) -> str:
     return f"{ret}({naming.function_name(api.namespace, fn.name)}({', '.join(args)}))"
 
 
-def _class(api: Api, opaque: OpaqueRef) -> str:
+def _class(api: Api, shape: ClassShape) -> str:
+    opaque, ctor, dtor, cached = shape.opaque, shape.ctor, shape.dtor, shape.cached
     cls = naming.upper_camel(opaque.class_name)
     handle_type = naming.type_name(api.namespace, opaque.name)
-    ctor = _ctor(api, opaque)
-    dtor = next((f for f in api.functions if f.name == opaque.dtor), None)
-    methods = _methods(api, opaque)
-    handle = next(p for p in ctor.params if p.type == opaque.name and p.ref == "out")
-    cached = _cached(ctor, opaque)
 
     ret = naming.upper_camel(ctor.returns)
-    zero = next(e for e in next(t for t in api.typed_consts if t.name == ctor.returns).entries if e.value == 0)
+    zero = api.success_entry(ctor)
     sig, call = _marshal(api, ctor.params, outrefs_are_locals=True)
     locals_ = "".join(f"    {_ref_type(api, p.type)} {p.name}{{}};\n" for p in ctor.params if p.ref == "out")
     failure = f"{cls}({', '.join(['nullptr', *('{}' for _ in cached)])})"
@@ -311,7 +298,7 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
         f"    const {ret} status = {_c_call(api, ctor, call)};\n"
         f"    if (result) {{\n      *result = status;\n    }}\n"
         f"    if (status != {ret}::{naming.upper_camel(zero.name)}) {{\n      return {failure};\n    }}\n"
-        f"    return {cls}({', '.join([handle.name, *(p.name for p in cached)])});\n"
+        f"    return {cls}({', '.join([shape.handle.name, *(p.name for p in cached)])});\n"
         "  }\n"
     )
 
@@ -339,7 +326,7 @@ def _class(api: Api, opaque: OpaqueRef) -> str:
     )
 
     body = []
-    for fn in methods:
+    for fn in shape.methods:
         msig, mcall = _marshal(api, fn.params[1:], outrefs_are_locals=False)
         body.append(
             f"\n{_doc(fn)}  {naming.upper_camel(fn.returns)} {fn.name}({', '.join(msig)}) {{\n"

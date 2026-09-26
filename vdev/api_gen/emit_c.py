@@ -99,7 +99,8 @@ def header_macros(namespace: str) -> frozenset[str]:
     })
 
 
-def header(api: Api, *, source_name: str) -> str:
+def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
+    """The C header."""
     ns = api.namespace
     c_api, api_macro, impl = naming.c_api_macro(ns), naming.api_macro(ns), naming.impl_macro(ns)
     prelude = f"""\

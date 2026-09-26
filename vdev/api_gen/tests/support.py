@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 
 from api_gen import __main__ as api_gen_main
-from api_gen import model
+from api_gen import emit_c, model
 
 FIXTURE = """
 [_general]
@@ -235,6 +235,16 @@ scale = "f64"
 pnext = { _type = "i64", _ref = "out" }
 pdelta = { _type = "i32", _ref = "out" }
 
+[function.probe]
+_docstring = "pmode = slow, level + 1 and ppeek = 9 where given; ok iff payload is absent or 2 bytes and limit is absent or 3"
+_return = "status"
+hport = "port"
+pmode = { _type = "mode", _ref = "out" }
+payload = { _type = "memory", _ref = "in", _count = "u32", _optional = true }
+limit = { _type = "u32", _ref = "in", _optional = true }
+level = { _type = "u32", _ref = "inout", _optional = true }
+ppeek = { _type = "u32", _ref = "out", _optional = true }
+
 [_driver_data]
 _header = "xy/driver/xy_ioctl.h"
 [_driver_data.const_pins]
@@ -254,9 +264,17 @@ def load(text: str = FIXTURE) -> model.Api:
     return model.from_dict(tomllib.loads(text))
 
 
-def mutate(text: str, needle: str, replacement: str) -> str:
-    """`text` with `needle` replaced; a needle that no longer matches fails loudly."""
-    assert needle in text, f"fixture no longer contains {needle!r}"
+def header(api: model.Api) -> str:
+    """`api`'s C header, as generation writes it from xy_api.adef.toml."""
+    return emit_c.emit(api, source_name="xy_api.adef.toml", stem="xy_api", library=None)
+
+
+def mutate(text: str, needle: str, replacement: str, *, every: bool = False) -> str:
+    """`text` with `needle` replaced: its one occurrence, or with `every` each of them. A
+    needle that no longer matches, or that matches more than once without `every`, fails
+    loudly."""
+    count = text.count(needle)
+    assert count >= 1 if every else count == 1, f"fixture holds {count} of {needle!r}"
     return text.replace(needle, replacement)
 
 

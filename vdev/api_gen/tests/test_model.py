@@ -125,7 +125,41 @@ class ModelErrors(unittest.TestCase):
                 self.assert_error(mutate(FIXTURE, "[1, 2, 3, 4]", version), "4 integers in 0..255")
 
     def test_docstring_terminators_rejected(self) -> None:
-        self.assert_error(mutate(FIXTURE, '_docstring = "wire magic"', '_docstring = "wire */ magic"'), "must not contain")
+        for terminator in ("*/", "]]"):
+            with self.subTest(terminator=terminator):
+                self.assert_error(
+                    mutate(FIXTURE, '_docstring = "wire magic"', f'_docstring = "wire {terminator} magic"'),
+                    "untyped_const.magic._docstring must not contain '*/' or ']]'",
+                )
+
+    def test_general_has_no_name_field(self) -> None:
+        self.assert_error(mutate(FIXTURE, "[_general]\n", '[_general]\nname = "xy_api"\n'), "_general: unknown key(s) name")
+
+    def test_namespace_is_an_identifier(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_namespace = "xy"', '_namespace = "x-y"'),
+                          "_general._namespace must be an identifier string")
+
+    def test_struct_rules(self) -> None:
+        for text, message in (
+            (FIXTURE + '\n[struct.early]\nx = "late"\n\n[struct.late]\ny = "u32"\n',
+             "struct.early.x: struct 'late' must be defined before it is used"),
+            (mutate(FIXTURE, 'bytes = "u64"', 'bytes = "memory"'), "struct.stats.bytes: 'memory' is not a field type"),
+            (FIXTURE + '\n[struct.empty]\n_docstring = "nothing"\n', "struct.empty: has no fields"),
+        ):
+            with self.subTest(message=message):
+                self.assert_error(text, message)
+
+    def test_typed_const_has_entries(self) -> None:
+        self.assert_error(FIXTURE + '\n[typed_const.none]\n_docstring = "nothing"\n', "typed_const.none: has no entries")
+
+    def test_driver_data_rules(self) -> None:
+        for needle, replacement, message in (
+            ('_header = "xy/driver/xy_ioctl.h"\n', "", "_driver_data._header must be a string"),
+            ('feat_a = "XYD_FEAT_A"', 'feat_a = "XYD-FEAT-A"', "_driver_data.const_pins.feat_a: must be a driver macro name"),
+            ('[_driver_data.const_pins]\nfeat_a = "XYD_FEAT_A"', "const_pins = 5", "_driver_data.const_pins must be a table"),
+        ):
+            with self.subTest(message=message):
+                self.assert_error(mutate(FIXTURE, needle, replacement), message)
 
     def test_typed_const_fits_its_base_type(self) -> None:
         self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 0x80000000"), "typed_const.status.ok: 2147483648 does not fit i32")
@@ -235,7 +269,7 @@ class ModelErrors(unittest.TestCase):
     def test_single_table_constants_are_rejected(self) -> None:
         for key in ("untyped_const", "untyped_bit_const", "string_const"):
             with self.subTest(key=key):
-                self.assert_error(mutate(FIXTURE, f"[[{key}]]", f"[{key}]"), f"[{key}] is now an array of tables")
+                self.assert_error(mutate(FIXTURE, f"[[{key}]]", f"[{key}]"), f"[{key}] must be an array of tables, [[{key}]]")
 
     def test_string_group_has_no_base_type(self) -> None:
         self.assert_error(
@@ -361,8 +395,16 @@ class ModelErrors(unittest.TestCase):
     def test_ctor_needs_one_out_of_the_opaque(self) -> None:
         self.assert_error(mutate(FIXTURE, '_ctor = "open_port"', '_ctor = "send"'), "exactly one port parameter of _ref \"out\"")
 
+    def test_ctor_and_dtor_are_function_names(self) -> None:
+        for key in ("_ctor", "_dtor"):
+            with self.subTest(key=key):
+                self.assert_error(mutate(FIXTURE, f'{key} = "', f'{key} = 5 # "'), f"opaque_ref.port.{key} must be a function name")
+
     def test_dtor_takes_only_the_opaque(self) -> None:
-        self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "send"'), "only parameter is a port")
+        for dtor in ("send", "nope"):
+            with self.subTest(dtor=dtor):
+                self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', f'_dtor = "{dtor}"'),
+                                  f"opaque_ref.port._dtor: '{dtor}' must name a function whose only parameter is a port by value")
 
     def test_dtor_requires_ctor(self) -> None:
         self.assert_error(mutate(FIXTURE, '_ctor = "open_port"\n', ""), "_dtor: requires _ctor")
@@ -394,6 +436,15 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "a-b"'),
                           "_class must be an identifier")
 
+    def test_class_is_lowercase(self) -> None:
+        self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "DataLink"'),
+                          "opaque_ref.port._class: 'DataLink' must be lowercase; each binding applies its own casing")
+        self.assertEqual(load(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "link_2"'))
+                         .opaque_refs[0].class_name, "link_2")
+
+    def test_classes_whose_casing_collides_are_the_bindings_concern(self) -> None:
+        load(mutate(KITCHEN_SINK, '_class = "data_link"', '_class = "port"'))
+
 
 class Naming(unittest.TestCase):
     def test_every_spec_naming_row(self) -> None:
@@ -406,6 +457,13 @@ class Naming(unittest.TestCase):
         self.assertEqual(naming.api_macro("tcdl"), "TCDL_API")
         self.assertEqual(naming.unprefixed_const_name("err_no_device"), "ERR_NO_DEVICE")
         self.assertEqual(naming.upper_camel("my_ns"), "MyNs")
+        self.assertEqual(naming.c_api_macro("tcdl"), "TCDL_C_API")
+        self.assertEqual(naming.impl_macro("tcdl"), "TCDL_IMPL")
+        self.assertEqual(naming.count_param("psrc"), "psrc_count")
+        self.assertEqual(naming.lua_to_string("to_string", typename="result"), "result_to_string")
+        self.assertEqual(naming.lua_to_string("cap_to_string", typename=None), "cap_to_string")
+        self.assertEqual(naming.unknown_value_name("result"), "UNKNOWN_RESULT")
+        self.assertEqual(naming.unknown_value_name(None), "UNKNOWN")
 
 
 class Shape(unittest.TestCase):
@@ -491,6 +549,36 @@ class Shape(unittest.TestCase):
 
     def test_version_value(self) -> None:
         self.assertEqual(load().version_value(), 0x01020304)
+
+    def test_classes_are_the_opaque_refs_with_a_ctor_as_the_definition_states_them(self) -> None:
+        api = load(KITCHEN_SINK)
+        self.assertEqual(
+            [
+                (c.opaque.name, c.ctor.name, c.handle.name, [p.name for p in c.cached], [f.name for f in c.methods],
+                 c.dtor and c.dtor.name)
+                for c in api.classes()
+            ],
+            [
+                ("port", "open_port", "pport", ["pstats", "generation", "pwrap"],
+                 ["send", "recv", "configure", "stats_of", "bump", "annotate", "seek", "tune", "probe"], "destroy_port"),
+                ("link", "open_link", "plink", [], [], None),
+            ],
+        )
+
+    def test_success_entry_is_the_zero_valued_one(self) -> None:
+        text = mutate(FIXTURE, "ok = 0\nerr_busy = { _value = 9", "err_busy = { _value = 9")
+        api = load(mutate(text, 'err_other = { _value = 0x7fffffff, _format = "hex" }',
+                          'err_other = { _value = 0x7fffffff, _format = "hex" }\nfine = 0'))
+        self.assertEqual(api.success_entry(api.functions[0]).name, "fine")
+
+    def test_names_list_every_constant_once(self) -> None:
+        api = load(KITCHEN_SINK)
+        constants = api.constant_names()
+        self.assertEqual(len(constants), len({name for _, name in constants}))
+        self.assertTrue(set(constants) <= set(api.names()))
+        self.assertEqual(
+            api.constant_names(enum_entries=False), [pair for pair in constants if not pair[0].startswith("typed_const.")]
+        )
 
 
 if __name__ == "__main__":

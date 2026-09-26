@@ -1,12 +1,12 @@
 import re
 import unittest
 
-from api_gen import emit_cpp_wrapper, naming
+from api_gen import emit_binding_cpp, naming
 from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, load, mutate
 
 
 def wrapper(text: str = FIXTURE) -> str:
-    return emit_cpp_wrapper.wrapper(load(text), source_name="xy_api.adef.toml", stem="xy_api")
+    return emit_binding_cpp.emit(load(text), source_name="xy_api.adef.toml", stem="xy_api", library=None)
 
 
 class Wrapper(unittest.TestCase):
@@ -52,8 +52,16 @@ class OptionalParam(unittest.TestCase):
         self.assertIn("  Status annotate(const Stats* note = nullptr) {\n", self.text)
         self.assertIn("    return Status(xy_annotate(handle_, note));\n", self.text)
 
-    def test_ctor_cached_outref_unaffected(self) -> None:
+    def test_ctor_cached_outref_ignores_optional(self) -> None:
         self.assertIn("static Port create(uint32_t unit, Status* result = nullptr) {\n", self.text)
+
+    def test_every_optional_kind_is_a_pointer_and_an_enum_by_ref_is_the_c_typedef(self) -> None:
+        self.assertIn(
+            "  Status probe(xy_mode& pmode, const void* payload, uint32_t payload_count, const uint32_t* limit = nullptr, "
+            "uint32_t* level = nullptr, uint32_t* ppeek = nullptr) {\n",
+            self.text,
+        )
+        self.assertIn("    return Status(xy_probe(handle_, &pmode, payload, payload_count, limit, level, ppeek));\n", self.text)
 
     def test_default_omitted_when_a_non_optional_parameter_follows(self) -> None:
         text = wrapper(mutate(
@@ -92,7 +100,7 @@ class BaseTypes(unittest.TestCase):
 
 class Validate(unittest.TestCase):
     def validate(self, text: str) -> list[str]:
-        return emit_cpp_wrapper.validate(load(text))
+        return emit_binding_cpp.validate(load(text))
 
     def test_kitchen_sink_has_no_objection(self) -> None:
         self.assertEqual(self.validate(KITCHEN_SINK), [])
@@ -133,14 +141,50 @@ class Validate(unittest.TestCase):
 
     def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
         text = wrapper(KITCHEN_SINK)
-        for name in emit_cpp_wrapper.GENERATED_NAMES:
+        for name in emit_binding_cpp.GENERATED_NAMES:
             with self.subTest(name=name):
                 self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
+
+    def test_rendered_names_are_refused_as_parameters(self) -> None:
+        for name in ("xy_send", "xy_port", "xy_status", "Port", "Stats", "Status", "uint32_t"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.validate(mutate(FIXTURE, 'unit = "u32"', f'{name} = "u32"')),
+                    [f"wrapper: function.open_port.{name}: '{name}' is a name the generated code uses"],
+                )
+
+    def test_rendered_names_are_refused_as_methods(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, "[function.send]", "[function.Stats]")),
+            ["wrapper: function.Stats: 'Stats' is a name the generated code uses"],
+        )
 
     def test_member_collision(self) -> None:
         self.assertEqual(
             self.validate(mutate(FIXTURE, "[function.send]", "[function.release]")),
             ["wrapper: class Port: release would be defined more than once, by the wrapper's own member and function.release"],
+        )
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, 'generation = { _type = "u32", _ref = "out" }', 'send = { _type = "u32", _ref = "out" }')),
+            ["wrapper: class Port: send would be defined more than once, by function.send and function.open_port.send"],
+        )
+
+    def test_release_is_a_method_name_when_no_release_is_generated(self) -> None:
+        text = mutate(mutate(FIXTURE, '_dtor = "destroy_port"\n', ""), "[function.send]", "[function.release]")
+        self.assertEqual(self.validate(text), [])
+
+    def test_enum_class_entry_collision(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, "ok = 0\n", "ok = 0\nerr__busy = 3\n")),
+            ["wrapper: enum class Status: ErrBusy would be defined more than once, by typed_const.status.err__busy and "
+             "typed_const.status.err_busy"],
+        )
+
+    def test_class_collision(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(KITCHEN_SINK, '_class = "data_link"', '_class = "port"')),
+            ["wrapper: namespace xy: Port would be defined more than once, by opaque_ref.port._class and "
+             "opaque_ref.link._class"],
         )
 
     def test_namespace_collision(self) -> None:
@@ -152,7 +196,7 @@ class Validate(unittest.TestCase):
     def test_enums_may_share_a_conversion_name(self) -> None:
         api = load(KITCHEN_SINK)
         self.assertEqual({t.to_string for t in api.typed_consts}, {"to_string"})
-        self.assertEqual(emit_cpp_wrapper.validate(api), [])
+        self.assertEqual(emit_binding_cpp.validate(api), [])
 
     def test_conversion_collisions(self) -> None:
         for needle, name, message in (

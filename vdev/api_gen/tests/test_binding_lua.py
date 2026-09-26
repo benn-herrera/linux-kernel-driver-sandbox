@@ -1,14 +1,16 @@
 import re
 import unittest
 
-from api_gen import emit_c, emit_lua, model, naming
-from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, MINIMAL, expected_constants, load, mutate, param_lists
+from api_gen import emit_binding_lua, emit_c, model, naming
+from api_gen.tests.support import (
+    C_BASE_TYPES, FIXTURE, KITCHEN_SINK, MINIMAL, expected_constants, header, load, mutate, param_lists,
+)
 
 
 class Cdef(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_lua.module(self.api, source_name="xy_api.adef.toml", library="libxy.so")
+        self.text = emit_binding_lua.emit(self.api, source_name="xy_api.adef.toml", stem="xy_api", library="libxy.so")
 
     def test_cdef_has_no_preprocessor_or_api_macro(self) -> None:
         start = self.text.index("ffi.cdef[[") + len("ffi.cdef[[")
@@ -27,7 +29,7 @@ class Cdef(unittest.TestCase):
         cdef = emit_c.cdef(self.api)
         self.assertEqual(
             param_lists(cdef, r"(?m)^xy_status "),
-            param_lists(emit_c.header(self.api, source_name="x"), r"XY_API xy_status "),
+            param_lists(header(self.api), r"XY_API xy_status "),
         )
         for t in self.api.typed_consts:
             self.assertIn(f"typedef {C_BASE_TYPES[t.base_type]} xy_{t.name};", cdef)
@@ -44,14 +46,13 @@ class Cdef(unittest.TestCase):
 
     def test_no_functions_yields_an_empty_raw_table(self) -> None:
         api = load(MINIMAL)
-        self.assertIn("M.raw = {\n}", emit_lua.module(api, source_name="x", library="libxy.so"))
-        emit_c.header(api, source_name="x")
+        self.assertIn("M.raw = {\n}", emit_binding_lua.emit(api, source_name="x", stem="xy_api", library="libxy.so"))
 
 
 class Constants(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_lua.module(self.api, source_name="xy_api.adef.toml", library="libxy.so")
+        self.text = emit_binding_lua.emit(self.api, source_name="xy_api.adef.toml", stem="xy_api", library="libxy.so")
 
     def test_constants_equal_the_model_values(self) -> None:
         literals = re.findall(r'^M\.(\w+) = (-?0x[0-9a-f]+|-?[0-9]+|"[^"]*")$', self.text, re.M)
@@ -79,7 +80,7 @@ class Constants(unittest.TestCase):
 class Classes(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_lua.module(self.api, source_name="xy_api.adef.toml", library="libxy.so")
+        self.text = emit_binding_lua.emit(self.api, source_name="xy_api.adef.toml", stem="xy_api", library="libxy.so")
 
     def classes(self) -> list[tuple[str, model.OpaqueRef]]:
         """(Lua class name, opaque) for every opaque that names a ctor."""
@@ -143,7 +144,10 @@ class Classes(unittest.TestCase):
             if fn.name not in calls:
                 continue
             def memory_call(p: model.Param) -> list[str]:
-                count = f"#{p.name}" if p.ref == "in" else f"{p.name}_count"
+                if p.ref != "in":
+                    count = f"{p.name}_count"
+                else:
+                    count = f"({p.name} and #{p.name} or 0)" if p.optional else f"#{p.name}"
                 return [p.name, count]
 
             expected = [n for p in fn.params for n in (memory_call(p) if p.type == "memory" else [p.name])]
@@ -187,7 +191,7 @@ class Classes(unittest.TestCase):
 
     def test_without_dtor_no_finalizer_and_dtor_is_an_ordinary_method(self) -> None:
         text = mutate(FIXTURE, '_dtor = "destroy_port"', '_class = "data_link"')
-        text = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        text = emit_binding_lua.emit(load(text), source_name="x", stem="xy_api", library="libxy.so")
         self.assertNotIn("ffi.gc", text)
         self.assertIn("function M.DataLink.new(unit)", text)
         lines = text.splitlines()
@@ -201,7 +205,7 @@ class Classes(unittest.TestCase):
 
     def test_u64_argument_accepts_a_number_or_64bit_cdata(self) -> None:
         text = mutate(KITCHEN_SINK, 'limit = { _type = "u32", _ref = "in" }', 'limit = { _type = "u64", _ref = "in" }')
-        lua = emit_lua.module(load(text), source_name="x", library="libxy.so")
+        lua = emit_binding_lua.emit(load(text), source_name="x", stem="xy_api", library="libxy.so")
         condition = 'type(limit) == "number" or ffi.istype("uint64_t", limit) or ffi.istype("int64_t", limit)'
         self.assertIn(f'assert({condition}, "Port.configure: limit must be a number or 64-bit cdata")', lua)
 
@@ -209,7 +213,7 @@ class Classes(unittest.TestCase):
 class Optional(unittest.TestCase):
     def setUp(self) -> None:
         self.api = load(KITCHEN_SINK)
-        self.text = emit_lua.module(self.api, source_name="xy_api.adef.toml", library="libxy.so")
+        self.text = emit_binding_lua.emit(self.api, source_name="xy_api.adef.toml", stem="xy_api", library="libxy.so")
 
     def test_argument_assert_admits_nil(self) -> None:
         self.assertIn(
@@ -222,16 +226,28 @@ class Optional(unittest.TestCase):
         self.assertIn('local note = note ~= nil and ffi.new("xy_stats", note) or nil', self.text)
         self.assertIn("lib.xy_annotate(self._handle, note)", self.text)
 
-    def test_ctor_cached_outref_ignores_the_hint(self) -> None:
+    def test_ctor_cached_outref_ignores_optional(self) -> None:
         self.assertNotIn("pstats ~= nil", self.text)
         self.assertIn('local pstats = ffi.new("xy_stats")\n', self.text)
+
+    def test_memory_in_passes_nil_through_with_a_count_of_0(self) -> None:
+        self.assertIn('assert(payload == nil or type(payload) == "string", "Port.probe: payload must be a string or nil")',
+                      self.text)
+        self.assertIn("lib.xy_probe(self._handle, pmode, payload, (payload and #payload or 0), limit, level, ppeek)",
+                      self.text)
+
+    def test_scalar_in_and_inout_are_boxed_only_when_non_nil_and_inout_reads_back_nil(self) -> None:
+        self.assertIn('local limit = limit ~= nil and ffi.new("uint32_t[1]", limit) or nil', self.text)
+        self.assertIn('local level = level ~= nil and ffi.new("uint32_t[1]", level) or nil', self.text)
+        self.assertIn("return tonumber(pmode[0]), (level ~= nil and tonumber(level[0]) or nil), tonumber(ppeek[0]), nil",
+                      self.text)
 
 
 CONVERSION = re.compile(r"^function M\.(\w+)\(value\)$", re.M)
 
 
 def module(text: str) -> str:
-    return emit_lua.module(load(text), source_name="x", library="libxy.so")
+    return emit_binding_lua.emit(load(text), source_name="x", stem="xy_api", library="libxy.so")
 
 
 class ToString(unittest.TestCase):
@@ -281,7 +297,7 @@ class ToString(unittest.TestCase):
 
 class Validate(unittest.TestCase):
     def validate(self, text: str) -> list[str]:
-        return emit_lua.validate(load(text))
+        return emit_binding_lua.validate(load(text))
 
     def test_kitchen_sink_has_no_objection(self) -> None:
         self.assertEqual(self.validate(KITCHEN_SINK), [])
@@ -306,11 +322,11 @@ class Validate(unittest.TestCase):
                     self.validate(mutate(FIXTURE, 'unit = "u32"', f'{name} = "u32"')),
                     [f"lua: function.open_port.{name}: '{name}' is a name the generated code uses"],
                 )
-        self.assertEqual(self.validate(mutate(FIXTURE, "status", "result")), [])
+        self.assertEqual(self.validate(mutate(FIXTURE, "status", "result", every=True)), [])
 
     def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
         text = module(KITCHEN_SINK)
-        for name in emit_lua.GENERATED_NAMES:
+        for name in emit_binding_lua.GENERATED_NAMES:
             with self.subTest(name=name):
                 self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
 
@@ -321,7 +337,13 @@ class Validate(unittest.TestCase):
 
     def test_member_collision(self) -> None:
         text = mutate(FIXTURE, 'generation = { _type = "u32", _ref = "out" }', 'send = { _type = "u32", _ref = "out" }')
-        self.assertEqual(self.validate(text), ["lua: M.Port.send would be defined more than once"])
+        self.assertEqual(self.validate(text), ["lua: M.Port.send would be both function.send and function.open_port.send"])
+
+    def test_class_collision(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(KITCHEN_SINK, '_class = "data_link"', '_class = "port"')),
+            ["lua: M.Port would be both a class and a class"],
+        )
 
     def test_bit_flag_beyond_signed_32_bits(self) -> None:
         reason = "LuaJIT bit operations are signed 32-bit, so the flag would not equal its own masked result"

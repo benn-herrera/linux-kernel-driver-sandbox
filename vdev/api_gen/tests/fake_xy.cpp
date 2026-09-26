@@ -123,3 +123,17 @@ XY_API xy_status xy_tune(xy_port hport, int32_t delta, int64_t big, uint8_t smal
   *pdelta = delta - 1;
   return delta == -3 && big == -(1LL << 40) && small == 200 && scale == 0.5 ? XY_OK : XY_ERR_BUSY;
 }
+
+XY_API xy_status xy_probe(xy_port hport, xy_mode* pmode, const void* payload, uint32_t payload_count,
+                          const uint32_t* limit, uint32_t* level, uint32_t* ppeek) {
+  (void)hport;
+  *pmode = XY_SLOW;
+  if (level) {
+    *level += 1;
+  }
+  if (ppeek) {
+    *ppeek = 9;
+  }
+  const bool payload_ok = payload == nullptr ? payload_count == 0 : payload_count == 2;
+  return payload_ok && (limit == nullptr || *limit == 3) ? XY_OK : XY_ERR_BUSY;
+}
