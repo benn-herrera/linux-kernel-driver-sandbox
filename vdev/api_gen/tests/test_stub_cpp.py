@@ -1,7 +1,7 @@
 import re
 import unittest
 
-from api_gen import emit_stub_cpp
+from api_gen.emitters import emit_stub_cpp
 from api_gen.tests.support import FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists
 
 

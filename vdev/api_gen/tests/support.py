@@ -7,7 +7,8 @@ import tomllib
 from pathlib import Path
 
 from api_gen import __main__ as api_gen_main
-from api_gen import emit_c, model
+from api_gen import model
+from api_gen.emitters import emit_c
 
 FIXTURE = """
 [_general]

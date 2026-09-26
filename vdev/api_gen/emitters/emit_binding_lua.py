@@ -1,14 +1,17 @@
 """The LuaJIT base module: ffi.cdef of the header, constants, raw functions and a class
 per opaque ref that names a constructor."""
 
-from api_gen import emit_c, naming
+from pathlib import Path
+
+from api_gen import naming
+from api_gen.emitters import c
 from api_gen.model import Api, BitConst, ClassShape, EnumEntry, Function, Group, OpaqueRef, Param, duplicates, single_bit_entries
 
-LUA_KEYWORDS = frozenset(
+_LUA_KEYWORDS = frozenset(
     "and break do else elseif end false for function goto if in local nil not or repeat return "
     "then true until while".split()
 )
-GENERATED_NAMES = (
+_GENERATED_NAMES = (
     "M", "ffi", "bit", "lib",
     "assert", "type", "tonumber", "setmetatable", "require", "string", "table",
     "self", "result", "handle", "h",
@@ -20,44 +23,48 @@ a parameter named like one of these would shadow it; the locals of a conversion 
 (`value`, `names`) share no scope with a parameter."""
 # LuaJIT hands a 64-bit integer back as cdata, since a Lua number is a double; every
 # other builtin scalar, the floating-point ones included, converts to a number exactly.
-CDATA_INTEGERS = frozenset({"i64", "u64"})
+_CDATA_INTEGERS = frozenset({"i64", "u64"})
 LABEL = "lua"
 # Every conversion answers nil as `tostring(nil)` does.
-NIL_CLAUSE = '    if value == nil then return "nil" end\n'
+_NIL_CLAUSE = '    if value == nil then return "nil" end\n'
 
 
 def validate(api: Api) -> list[str]:
     """Every objection the Lua module has to `api`: a name that is a Lua keyword, a
-    parameter named like one of `GENERATED_NAMES`, a bit flag beyond the signed 32-bit
+    parameter named like one of `_GENERATED_NAMES`, a bit flag beyond the signed 32-bit
     range, a module field (constant, conversion, `raw` or class) defined twice, and a class
     member defined twice."""
-    problems = [f"{where}: '{name}' is a Lua keyword" for where, name in api.names() if name in LUA_KEYWORDS]
+    problems = [f"{where}: '{name}' is a Lua keyword" for where, name in api.names() if name in _LUA_KEYWORDS]
     signed_max = naming.BASE_C_TYPES["i32"].max_value
     problems += [
-        f"untyped_bit_const.{c.name}: value 0x{c.value:x} exceeds 0x{signed_max:x}; LuaJIT bit operations are "
+        f"untyped_bit_const.{entry.name}: value 0x{entry.value:x} exceeds 0x{signed_max:x}; LuaJIT bit operations are "
         "signed 32-bit, so the flag would not equal its own masked result"
-        for c in api.bit_consts
-        if c.value > signed_max
+        for entry in api.bit_consts
+        if entry.value > signed_max
     ]
     problems += [
         f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code uses"
         for fn in api.functions
         for p in fn.params
-        if p.name in GENERATED_NAMES
+        if p.name in _GENERATED_NAMES
     ]
     classes = api.classes()
     fields = [(name, "a constant") for _, literals in _constant_sections(api) for name, _ in literals]
     fields += _conversion_names(api)
     fields.append(("raw", "the raw function table"))
-    fields += [(naming.upper_camel(c.opaque.class_name), "a class") for c in classes]
+    fields += [(naming.upper_camel(shape.opaque.class_name), "a class") for shape in classes]
     problems += [f"M.{name} would be both {' and '.join(whats)}" for name, whats in duplicates(fields).items()]
-    for c in classes:
+    for shape in classes:
         members = [("new", "the constructor"), ("_handle", "the handle")]
-        members += [(f.name, f"function.{f.name}") for f in _class_methods(c)]
-        members += [(p.name, f"function.{c.ctor.name}.{p.name}") for p in c.cached]
-        cls = naming.upper_camel(c.opaque.class_name)
+        members += [(f.name, f"function.{f.name}") for f in _class_methods(shape)]
+        members += [(p.name, f"function.{shape.ctor.name}.{p.name}") for p in shape.cached]
+        cls = naming.upper_camel(shape.opaque.class_name)
         problems += [f"M.{cls}.{m} would be both {' and '.join(whats)}" for m, whats in duplicates(members).items()]
     return [f"{LABEL}: {p}" for p in problems]
+
+
+def output_path(*, stem: str, exercise: str) -> Path:
+    return Path("binding") / f"{stem}.lua"
 
 
 def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
@@ -68,7 +75,7 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
         'local ffi = require("ffi")\n',
         'local bit = require("bit")\n' if any(g.to_string is not None for g in api.bit_const_groups) else "",
         "\n",
-        _cdef(emit_c.cdef(api)),
+        _cdef(c.cdef(api)),
         f'\nlocal lib = ffi.load("{library}")\n\nlocal M = {{}}\n\n',
     ]
 
@@ -91,7 +98,7 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
     raw = "".join(f"    {f.name} = lib.{naming.function_name(ns, f.name)},\n" for f in api.functions)
     out.append(f"\nM.raw = {{\n{raw}}}\n")
 
-    out += [_class(api, c) for c in api.classes()]
+    out += [_class(api, shape) for shape in api.classes()]
 
     out.append("\nreturn M\n")
     return "".join(out)
@@ -109,17 +116,17 @@ def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]
     name = naming.unprefixed_const_name
     sections = [(None, [(name(naming.VERSION_KEY), _version_literal(api))])]
     sections += [
-        (g.docstring, [(name(c.name), emit_c.int_literal(c.value, c.format)) for c in g.entries])
+        (g.docstring, [(name(entry.name), c.int_literal(entry.value, entry.format)) for entry in g.entries])
         for g in api.bit_const_groups
     ]
     sections += [
-        (g.docstring, [(name(c.name), emit_c.int_literal(c.value, c.format)) for c in g.entries])
+        (g.docstring, [(name(entry.name), c.int_literal(entry.value, entry.format)) for entry in g.entries])
         for g in api.const_groups
     ]
-    rest = [(name(e.name), emit_c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
+    rest = [(name(e.name), c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
     sections.append((None, rest))
     sections += [
-        (g.docstring, [(name(c.name), f'"{c.value}"') for c in g.entries])
+        (g.docstring, [(name(entry.name), f'"{entry.value}"') for entry in g.entries])
         for g in api.string_const_groups
     ]
     return sections
@@ -144,10 +151,11 @@ def _lookup(name: str, entries: tuple[EnumEntry, ...], *, unknown: str) -> str:
     """A value-to-name conversion through a table, one key per value named by its last
     entry: the order a table constructor assigns repeated keys in is undefined."""
     by_value = {e.value: naming.unprefixed_const_name(e.name) for e in entries}
-    keys = "".join(f'    [M.{c}] = "{c}",\n' for c in by_value.values())
+    keys = "".join(f'    [M.{key}] = "{key}",\n' for key in by_value.values())
+    table = naming.lua_lookup_table(name)
     return (
-        f"\nlocal {name}_names = {{\n{keys}}}\n"
-        f'function M.{name}(value)\n{NIL_CLAUSE}    return {name}_names[value] or "{unknown}"\nend\n'
+        f"\nlocal {table} = {{\n{keys}}}\n"
+        f'function M.{name}(value)\n{_NIL_CLAUSE}    return {table}[value] or "{unknown}"\nend\n'
     )
 
 
@@ -159,11 +167,11 @@ def _bit_to_string(group: Group[BitConst]) -> str:
         f'        names[#names + 1] = "{k}"\n'
         f"        value = bit.band(value, bit.bnot(M.{k}))\n"
         "    end\n"
-        for k in (naming.unprefixed_const_name(c.name) for c in single_bit_entries(group))
+        for k in (naming.unprefixed_const_name(entry.name) for entry in single_bit_entries(group))
     )
     return (
         f"\nfunction M.{naming.lua_to_string(group.to_string, typename=None)}(value)\n"
-        f"{NIL_CLAUSE}"
+        f"{_NIL_CLAUSE}"
         f'    if value == 0 then return "{naming.NO_FLAGS}" end\n'
         "    local names = {}\n"
         f"{flags}"
@@ -196,14 +204,14 @@ def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> 
             f"{inner}{f.name} = {_lua_value(api, f.type, f'{expr}.{f.name}', indent=inner)},\n" for f in fields
         )
         return f"{{\n{body}{indent}}}"
-    as_number = kind == "enum" or (kind == "builtin" and type_name not in CDATA_INTEGERS)
+    as_number = kind == "enum" or (kind == "builtin" and type_name not in _CDATA_INTEGERS)
     return f"tonumber({expr})" if as_number else expr
 
 
 def _box(api: Api, type_name: str) -> str:
     """The ffi.new type for a value the C side reaches through a pointer: a struct
     itself, anything else a one-element array."""
-    c_type = emit_c.c_type(api, type_name)
+    c_type = c.c_type(api, type_name)
     return c_type if api.kind(type_name) == "struct" else f"{c_type}[1]"
 
 
@@ -259,12 +267,12 @@ def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
         return condition, expected
     kind = api.kind(param.type)
     if kind == "struct":
-        c_type = emit_c.c_type(api, param.type)
+        c_type = c.c_type(api, param.type)
         condition, expected = f'type({name}) == "table" or ffi.istype("{c_type}", {name})', f"a table or {c_type}"
     elif kind == "opaque":
-        c_type = emit_c.c_type(api, param.type)
+        c_type = c.c_type(api, param.type)
         condition, expected = f'ffi.istype("{c_type}", {name})', f"a {c_type}"
-    elif param.type in CDATA_INTEGERS:
+    elif param.type in _CDATA_INTEGERS:
         condition = f'type({name}) == "number" or ffi.istype("uint64_t", {name}) or ffi.istype("int64_t", {name})'
         expected = "a number or 64-bit cdata"
     else:
@@ -422,7 +430,7 @@ def _release(api: Api, dtor: Function, *, cls: str) -> str:
     releases whatever _handle holds, or else a NULL handle of its own cdata type (the
     FFI call takes real cdata, never a bare Lua nil; the library answers a NULL handle
     the same as any other), and drops the handle whatever the result."""
-    opaque_type = emit_c.c_type(api, dtor.params[0].type)
+    opaque_type = c.c_type(api, dtor.params[0].type)
     return (
         f"\n{_doc_lines(dtor)}function {cls}.{dtor.name}(self)\n"
         f'    local handle = self._handle or ffi.new("{opaque_type}")\n'

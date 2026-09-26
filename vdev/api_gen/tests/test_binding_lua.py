@@ -1,7 +1,8 @@
 import re
 import unittest
 
-from api_gen import emit_binding_lua, emit_c, model, naming
+from api_gen import model, naming
+from api_gen.emitters import c, emit_binding_lua
 from api_gen.tests.support import (
     C_BASE_TYPES, FIXTURE, KITCHEN_SINK, MINIMAL, expected_constants, header, load, mutate, param_lists,
 )
@@ -26,7 +27,7 @@ class Cdef(unittest.TestCase):
         self.assertFalse([line for line in cdef.splitlines() if line.startswith("#")])
 
     def test_cdef_declares_exactly_the_header_functions_and_types(self) -> None:
-        cdef = emit_c.cdef(self.api)
+        cdef = c.cdef(self.api)
         self.assertEqual(
             param_lists(cdef, r"(?m)^xy_status "),
             param_lists(header(self.api), r"XY_API xy_status "),
@@ -326,7 +327,7 @@ class Validate(unittest.TestCase):
 
     def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
         text = module(KITCHEN_SINK)
-        for name in emit_binding_lua.GENERATED_NAMES:
+        for name in emit_binding_lua._GENERATED_NAMES:
             with self.subTest(name=name):
                 self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
 

@@ -1,7 +1,9 @@
 """A C++ implementation stub: every function defined, every body `return {};` to be replaced."""
 
-from api_gen import emit_c, naming
-from api_gen.emit_binding_cpp import cpp_keyword_objections
+from pathlib import Path
+
+from api_gen import naming
+from api_gen.emitters import c, cpp
 from api_gen.model import Api, Function
 
 LABEL = "stub"
@@ -9,7 +11,11 @@ LABEL = "stub"
 
 def validate(api: Api) -> list[str]:
     """Every objection the stub has to `api`: a name that is a C++ keyword."""
-    return [f"{LABEL}: {p}" for p in cpp_keyword_objections(api)]
+    return [f"{LABEL}: {p}" for p in cpp.cpp_keyword_objections(api)]
+
+
+def output_path(*, stem: str, exercise: str) -> Path:
+    return Path("stub") / f"{stem}.cpp"
 
 
 def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
@@ -30,10 +36,10 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
 
 def _definition(api: Api, fn: Function) -> str:
     ns = api.namespace
-    voids = "".join(f"  (void){n};\n" for p in fn.params for _, n in emit_c.c_params(api, p))
+    voids = "".join(f"  (void){n};\n" for p in fn.params for _, n in c.c_params(api, p))
     return (
-        f"{naming.api_macro(ns)} {emit_c.c_type(api, fn.returns)} {naming.function_name(ns, fn.name)}"
-        f"({emit_c.param_list(api, fn)}) {{\n"
+        f"{naming.api_macro(ns)} {c.c_type(api, fn.returns)} {naming.function_name(ns, fn.name)}"
+        f"({c.param_list(api, fn)}) {{\n"
         f"{voids}"
         "  // replace: not implemented\n"
         "  return {};\n"

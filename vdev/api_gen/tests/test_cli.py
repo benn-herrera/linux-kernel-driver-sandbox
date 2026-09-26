@@ -5,9 +5,15 @@ import unittest
 from pathlib import Path
 
 from api_gen import __main__ as api_gen_main
-from api_gen import emit_binding_cpp, emit_binding_lua, emit_c, emit_stub_cpp
-from api_gen.emitter import Emitter
+from api_gen.emitters import EMITTERS, emit_binding_cpp, emit_binding_lua, emit_c, emit_stub_cpp
+from api_gen.emitters.emitter import Emitter
 from api_gen.tests.support import FIXTURE, load, mutate, run_main
+
+
+def output_paths(*, stem: str, exercise: str) -> dict[str, Path]:
+    """Every output token and its path relative to the generated directory, as its
+    emitter states it."""
+    return {token: emitter.output_path(stem=stem, exercise=exercise) for token, emitter in EMITTERS.items()}
 
 
 class EmitterShape(unittest.TestCase):
@@ -16,11 +22,23 @@ class EmitterShape(unittest.TestCase):
             signature = inspect.signature(method)
             return signature.replace(parameters=list(signature.parameters.values())[1:])
 
-        for token, emitter in api_gen_main.EMITTERS.items():
+        for token, emitter in EMITTERS.items():
             with self.subTest(token=token):
                 self.assertIsInstance(emitter.LABEL, str)
-                self.assertEqual(inspect.signature(emitter.validate), unbound(Emitter.validate))
-                self.assertEqual(inspect.signature(emitter.emit), unbound(Emitter.emit))
+                for name in ("validate", "output_path", "emit"):
+                    self.assertEqual(inspect.signature(getattr(emitter, name)), unbound(getattr(Emitter, name)), name)
+
+    def test_every_emitter_module_defines_only_the_protocol(self) -> None:
+        for token, emitter in EMITTERS.items():
+            with self.subTest(token=token):
+                defined_here = {
+                    name
+                    for name, value in vars(emitter).items()
+                    if not name.startswith("_")
+                    and not inspect.ismodule(value)
+                    and getattr(value, "__module__", emitter.__name__) == emitter.__name__
+                }
+                self.assertEqual(defined_here, {"LABEL", "validate", "output_path", "emit"})
 
 
 class Generate(unittest.TestCase):
@@ -33,7 +51,7 @@ class Generate(unittest.TestCase):
             self.assertEqual(code, 0)
             api = load(FIXTURE)
             modules = {"h": emit_c, "hpp": emit_binding_cpp, "lua": emit_binding_lua, "stub_cpp": emit_stub_cpp}
-            for token, relpath in api_gen_main.output_paths(stem="xy_api", exercise="tiny_compute").items():
+            for token, relpath in output_paths(stem="xy_api", exercise="tiny_compute").items():
                 with self.subTest(output=str(relpath)):
                     expected = modules[token].emit(api, source_name="xy_api.adef.toml", stem="xy_api", library="libxy.so")
                     self.assertEqual((generated / relpath).read_text(encoding="utf-8"), expected)
@@ -147,7 +165,7 @@ class Generate(unittest.TestCase):
             generated = Path(tmp) / "generated"
             code, _, _ = run_main([str(definition), "--generated", str(generated), "--exercise", "tiny_compute"])
             self.assertEqual(code, 0)
-            for relpath in api_gen_main.output_paths(stem="xy_api", exercise="tiny_compute").values():
+            for relpath in output_paths(stem="xy_api", exercise="tiny_compute").values():
                 first_line = (generated / relpath).read_text(encoding="utf-8").splitlines()[0]
                 with self.subTest(output=str(relpath)):
                     self.assertIn("GENERATED", first_line)
@@ -166,12 +184,21 @@ class Outputs(unittest.TestCase):
         code, _, stderr = run_main([str(definition), "--generated", str(generated), "--exercise", "xy", *flags])
         return code, stderr, generated
 
-    def test_tokens_are_the_output_paths_keys(self) -> None:
+    def test_tokens_are_the_registry_keys_and_each_names_its_path(self) -> None:
         self.assertEqual(api_gen_main.TOKENS, ("h", "hpp", "lua", "stub_cpp"))
-        self.assertEqual(tuple(api_gen_main.EMITTERS), api_gen_main.TOKENS)
+        self.assertEqual(tuple(EMITTERS), api_gen_main.TOKENS)
+        self.assertEqual(
+            output_paths(stem="xy_api", exercise="xy"),
+            {
+                "h": Path("include/xy/xy_api.h"),
+                "hpp": Path("include/xy/xy_api.hpp"),
+                "lua": Path("binding/xy_api.lua"),
+                "stub_cpp": Path("stub/xy_api.cpp"),
+            },
+        )
 
     def test_writes_only_the_selected_outputs(self) -> None:
-        paths = api_gen_main.output_paths(stem="xy_api", exercise="xy")
+        paths = output_paths(stem="xy_api", exercise="xy")
         for flag, selected in (
             ("--outputs=hpp,stub_cpp", {"hpp", "stub_cpp"}),
             ("--outputs=lua", {"lua"}),
@@ -230,7 +257,7 @@ class Gendeps(unittest.TestCase):
         targets = re.search(r"GENERATED := \\\n((?:  .*\\\n)*  .*)\n", out).group(1)
         self.assertEqual(
             [t.strip().rstrip(" \\") for t in targets.splitlines()],
-            [f"$(GEN)/{p}" for p in api_gen_main.output_paths(stem="a", exercise="$(BASE)").values()],
+            [f"$(GEN)/{p}" for p in output_paths(stem="a", exercise="$(BASE)").values()],
         )
         self.assertIn("$(GENERATED) &: a.adef.toml\n\t", out)
         self.assertIn("--outputs=h,hpp,lua,stub_cpp\n", out)
@@ -238,7 +265,7 @@ class Gendeps(unittest.TestCase):
     def test_outputs_selects_the_targets_and_the_recipe_passes_it_on(self) -> None:
         code, out = self.run_gendeps(["--outputs=lua,h", "a.adef.toml"])
         self.assertEqual(code, 0)
-        paths = api_gen_main.output_paths(stem="a", exercise="$(BASE)")
+        paths = output_paths(stem="a", exercise="$(BASE)")
         self.assertIn(f"GENERATED := \\\n  $(GEN)/{paths['h']} \\\n  $(GEN)/{paths['lua']}\n\n", out)
         self.assertIn(" --outputs=h,lua\n", out)
 

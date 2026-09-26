@@ -1,7 +1,8 @@
 import re
 import unittest
 
-from api_gen import emit_binding_cpp, naming
+from api_gen import naming
+from api_gen.emitters import emit_binding_cpp
 from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, load, mutate
 
 
@@ -141,7 +142,7 @@ class Validate(unittest.TestCase):
 
     def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
         text = wrapper(KITCHEN_SINK)
-        for name in emit_binding_cpp.GENERATED_NAMES:
+        for name in emit_binding_cpp._GENERATED_NAMES:
             with self.subTest(name=name):
                 self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
 

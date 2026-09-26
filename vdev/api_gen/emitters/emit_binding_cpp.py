@@ -2,41 +2,21 @@
 and a move-only class per opaque ref that names a constructor, forwarding inline to
 the C functions."""
 
-from api_gen import emit_c, naming
+from pathlib import Path
+
+from api_gen import naming
+from api_gen.emitters import c, cpp
 from api_gen.model import Api, BitConst, ClassShape, EnumEntry, Function, Group, Param, TypedConst, duplicates, single_bit_entries
 
-HANDLE_MEMBER = "handle_"
-GENERATED_NAMES = ("result", "status", "handle", HANDLE_MEMBER)
+_HANDLE_MEMBER = "handle_"
+_GENERATED_NAMES = ("result", "status", "handle", _HANDLE_MEMBER)
 """The fixed names the class's generated text binds where a definition parameter's name is
 in scope: `create()`'s `result` parameter and `status` local beside the ctor's parameters,
 the private constructor's `handle` parameter beside the cached `out`s, and the `handle_`
 member every method reads beside its own parameters. A parameter named like one of these
 would collide with it or shadow it; `_rendered_names()` holds the ones the definition
 names."""
-# Every C++20 keyword and alternative token, the C keywords C++ shares included: the
-# wrapper and the stub are C++ translation units that include the C header.
-CPP_KEYWORDS = frozenset(
-    "alignas alignof and and_eq asm auto bitand bitor bool break case catch char char8_t char16_t "
-    "char32_t class compl concept const consteval constexpr constinit const_cast continue co_await "
-    "co_return co_yield decltype default delete do double dynamic_cast else enum explicit export "
-    "extern false float for friend goto if inline int long mutable namespace new noexcept not "
-    "not_eq nullptr operator or or_eq private protected public register reinterpret_cast requires "
-    "return short signed sizeof static static_assert static_cast struct switch template this "
-    "thread_local throw true try typedef typeid typename union unsigned using virtual void "
-    "volatile wchar_t while xor xor_eq".split()
-)
 LABEL = "wrapper"
-
-
-def cpp_keyword_objections(api: Api) -> list[str]:
-    """Every name that is a C++ keyword, unprefixed by an output: 'C keyword' for one C
-    already reserves (the header refuses it too), 'C++ keyword' for one unique to C++.
-    Shared by the wrapper and the stub, the two C++ translation units."""
-    return [
-        f"{where}: '{name}' is a {'C' if name in emit_c.C_KEYWORDS else 'C++'} keyword"
-        for where, name in api.names()
-        if name in CPP_KEYWORDS
-    ]
 
 
 def _rendered_names(api: Api) -> set[str]:
@@ -47,29 +27,29 @@ def _rendered_names(api: Api) -> set[str]:
     names = {naming.function_name(ns, f.name) for f in api.functions}
     names |= {naming.type_name(ns, t.name) for t in (*api.typed_consts, *api.opaque_refs, *api.structs)}
     names |= {naming.upper_camel(t.name) for t in (*api.typed_consts, *api.structs)}
-    names |= {naming.upper_camel(c.opaque.class_name) for c in api.classes()}
+    names |= {naming.upper_camel(shape.opaque.class_name) for shape in api.classes()}
     return names | set(naming.BUILTIN_C_TYPES.values())
 
 
 def validate(api: Api) -> list[str]:
     """Every objection the wrapper has to `api`: a name that is a C++ keyword, a parameter
-    named like one of `GENERATED_NAMES` or `_rendered_names()`, a method named like one of
+    named like one of `_GENERATED_NAMES` or `_rendered_names()`, a method named like one of
     the latter, and a name the wrapper would define twice in the namespace, an enum class
     or a class. Enums' conversions may share a name, since each overloads on its own enum
     class."""
-    problems = cpp_keyword_objections(api)
+    problems = cpp.cpp_keyword_objections(api)
     rendered = _rendered_names(api)
     problems += [
         f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code uses"
         for fn in api.functions
         for p in fn.params
-        if p.name in GENERATED_NAMES or p.name in rendered
+        if p.name in _GENERATED_NAMES or p.name in rendered
     ]
     classes = api.classes()
     problems += [
         f"function.{fn.name}: '{fn.name}' is a name the generated code uses"
-        for c in classes
-        for fn in c.methods
+        for shape in classes
+        for fn in shape.methods
         if fn.name in rendered
     ]
     const = naming.unprefixed_const_name
@@ -77,7 +57,7 @@ def validate(api: Api) -> list[str]:
     namespace += [(const(name), where) for where, name in api.constant_names(enum_entries=False)]
     namespace += [(naming.upper_camel(t.name), f"typed_const.{t.name}") for t in api.typed_consts]
     namespace += [(naming.upper_camel(s.name), f"struct.{s.name}") for s in api.structs]
-    namespace += [(naming.upper_camel(c.opaque.class_name), f"opaque_ref.{c.opaque.name}._class") for c in classes]
+    namespace += [(naming.upper_camel(shape.opaque.class_name), f"opaque_ref.{shape.opaque.name}._class") for shape in classes]
     namespace += [
         (g.to_string, f"{g.name}._to_string")
         for g in (*api.bit_const_groups, *api.const_groups)
@@ -94,14 +74,18 @@ def validate(api: Api) -> list[str]:
             [(naming.upper_camel(e.name), f"typed_const.{t.name}.{e.name}") for e in t.entries],
             f"enum class {naming.upper_camel(t.name)}",
         )
-    for c in classes:
-        cls = naming.upper_camel(c.opaque.class_name)
-        own = [cls, "create", "handle", HANDLE_MEMBER, *(["release"] if c.dtor is not None else [])]
+    for shape in classes:
+        cls = naming.upper_camel(shape.opaque.class_name)
+        own = [cls, "create", "handle", _HANDLE_MEMBER, *(["release"] if shape.dtor is not None else [])]
         members = [(m, "the wrapper's own member") for m in own]
-        members += [(f.name, f"function.{f.name}") for f in c.methods]
-        members += [(p.name, f"function.{c.ctor.name}.{p.name}") for p in c.cached]
+        members += [(f.name, f"function.{f.name}") for f in shape.methods]
+        members += [(p.name, f"function.{shape.ctor.name}.{p.name}") for p in shape.cached]
         problems += _duplicates(members, f"class {cls}")
     return [f"{LABEL}: {p}" for p in problems]
+
+
+def output_path(*, stem: str, exercise: str) -> Path:
+    return Path("include") / exercise / f"{stem}.hpp"
 
 
 def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
@@ -126,24 +110,24 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
     # the header's macros carry each untyped constant's type, so restating it here could only disagree
     runs = [constant("auto", naming.VERSION_KEY)]
     runs += [
-        _comment(g.docstring) + "".join(constant("auto", c.name) for c in g.entries) + _bit_to_string(g)
+        _comment(g.docstring) + "".join(constant("auto", entry.name) for entry in g.entries) + _bit_to_string(g)
         for g in api.bit_const_groups
     ]
     runs += [
         _comment(g.docstring)
-        + "".join(constant("auto", c.name) for c in g.entries)
+        + "".join(constant("auto", entry.name) for entry in g.entries)
         + _plain_to_string(g)
         for g in api.const_groups
     ]
     runs += [
-        _comment(g.docstring) + "".join(constant("const char*", c.name) for c in g.entries)
+        _comment(g.docstring) + "".join(constant("const char*", entry.name) for entry in g.entries)
         for g in api.string_const_groups
     ]
     out += ["\n" + run for run in runs]
     out += [_enum(api, t) for t in api.typed_consts]
     if api.structs:
         out.append("\n" + "".join(f"using {naming.upper_camel(s.name)} = {naming.type_name(ns, s.name)};\n" for s in api.structs))
-    out += [_class(api, c) for c in api.classes()]
+    out += [_class(api, shape) for shape in api.classes()]
     out.append(f"\n}}  // namespace {ns}\n")
     return "".join(out)
 
@@ -199,7 +183,7 @@ def _bit_to_string(group: Group[BitConst]) -> str:
         return ""
     flags = "".join(
         f'  if (value & {k}) {{\n    text += "|{k}";\n    value &= ~{k};\n  }}\n'
-        for k in (naming.unprefixed_const_name(c.name) for c in single_bit_entries(group))
+        for k in (naming.unprefixed_const_name(entry.name) for entry in single_bit_entries(group))
     )
     return (
         f"\ninline std::string {group.to_string}({naming.BASE_C_TYPES[group.base_type].c_type} value) {{\n"
@@ -222,7 +206,7 @@ def _ref_type(api: Api, type_name: str) -> str:
     the struct alias, else the C type."""
     if api.kind(type_name) == "struct":
         return naming.upper_camel(type_name)
-    return emit_c.c_type(api, type_name)
+    return c.c_type(api, type_name)
 
 
 def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -> tuple[list[str], list[str]]:
@@ -238,7 +222,7 @@ def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -
     entries: list[tuple[bool, str | None, str]] = []
     for p in params:
         if p.type == "memory":
-            for c_type, name in emit_c.c_params(api, p):
+            for c_type, name in c.c_params(api, p):
                 entries.append((False, f"{c_type} {name}", name))
         elif p.ref == "in":
             if p.optional:
@@ -254,7 +238,7 @@ def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -
             else:
                 entries.append((False, f"{_ref_type(api, p.type)}& {p.name}", f"&{p.name}"))
         elif api.kind(p.type) == "enum":
-            entries.append((False, f"{naming.upper_camel(p.type)} {p.name}", f"{emit_c.c_type(api, p.type)}({p.name})"))
+            entries.append((False, f"{naming.upper_camel(p.type)} {p.name}", f"{c.c_type(api, p.type)}({p.name})"))
         else:
             entries.append((False, f"{_ref_type(api, p.type)} {p.name}", p.name))
 
@@ -302,27 +286,28 @@ def _class(api: Api, shape: ClassShape) -> str:
         "  }\n"
     )
 
-    release_guard = f"      if ({HANDLE_MEMBER}) {{\n        (void)release();\n      }}\n" if dtor is not None else ""
-    reassign = "".join(f"      {p.name}_ = other.{p.name}_;\n" for p in cached)
+    release_guard = f"      if ({_HANDLE_MEMBER}) {{\n        (void)release();\n      }}\n" if dtor is not None else ""
+    member = naming.cpp_member
+    reassign = "".join(f"      {member(p.name)} = other.{member(p.name)};\n" for p in cached)
     lifetime = (
         f"\n  {cls}(const {cls}&) = delete;\n"
         f"  {cls}& operator=(const {cls}&) = delete;\n"
         f"  {cls}({cls}&& other) noexcept\n"
-        f"      : {', '.join([*(f'{p.name}_(other.{p.name}_)' for p in cached), f'{HANDLE_MEMBER}(std::exchange(other.{HANDLE_MEMBER}, nullptr))'])} {{}}\n"
+        f"      : {', '.join([*(f'{member(p.name)}(other.{member(p.name)})' for p in cached), f'{_HANDLE_MEMBER}(std::exchange(other.{_HANDLE_MEMBER}, nullptr))'])} {{}}\n"
         f"  {cls}& operator=({cls}&& other) noexcept {{\n"
         f"    if (this != &other) {{\n"
         f"{release_guard}"
-        f"      {HANDLE_MEMBER} = std::exchange(other.{HANDLE_MEMBER}, nullptr);\n"
+        f"      {_HANDLE_MEMBER} = std::exchange(other.{_HANDLE_MEMBER}, nullptr);\n"
         f"{reassign}"
         f"    }}\n    return *this;\n  }}\n"
     )
     if dtor is not None:
         lifetime += (
-            f"  ~{cls}() {{\n    if ({HANDLE_MEMBER}) {{\n      (void)release();\n    }}\n  }}\n"
+            f"  ~{cls}() {{\n    if ({_HANDLE_MEMBER}) {{\n      (void)release();\n    }}\n  }}\n"
         )
     lifetime += (
-        f"\n  explicit operator bool() const {{ return {HANDLE_MEMBER} != nullptr; }}\n"
-        f"  {handle_type} handle() const {{ return {HANDLE_MEMBER}; }}\n"
+        f"\n  explicit operator bool() const {{ return {_HANDLE_MEMBER} != nullptr; }}\n"
+        f"  {handle_type} handle() const {{ return {_HANDLE_MEMBER}; }}\n"
     )
 
     body = []
@@ -330,27 +315,27 @@ def _class(api: Api, shape: ClassShape) -> str:
         msig, mcall = _marshal(api, fn.params[1:], outrefs_are_locals=False)
         body.append(
             f"\n{_doc(fn)}  {naming.upper_camel(fn.returns)} {fn.name}({', '.join(msig)}) {{\n"
-            f"    return {_c_call(api, fn, [HANDLE_MEMBER, *mcall])};\n  }}\n"
+            f"    return {_c_call(api, fn, [_HANDLE_MEMBER, *mcall])};\n  }}\n"
         )
     if dtor is not None:
         body.append(
             f"\n{_doc(dtor)}  {naming.upper_camel(dtor.returns)} release() {{\n"
-            f"    return {_c_call(api, dtor, [f'std::exchange({HANDLE_MEMBER}, nullptr)'])};\n  }}\n"
+            f"    return {_c_call(api, dtor, [f'std::exchange({_HANDLE_MEMBER}, nullptr)'])};\n  }}\n"
         )
 
     accessors = "".join(
-        f"  const {_ref_type(api, p.type)}& {p.name}() const {{ return {p.name}_; }}\n"
+        f"  const {_ref_type(api, p.type)}& {p.name}() const {{ return {member(p.name)}; }}\n"
         if api.kind(p.type) == "struct"
-        else f"  {_ref_type(api, p.type)} {p.name}() const {{ return {p.name}_; }}\n"
+        else f"  {_ref_type(api, p.type)} {p.name}() const {{ return {member(p.name)}; }}\n"
         for p in cached
     )
-    private_members = "".join(f"  {_ref_type(api, p.type)} {p.name}_;\n" for p in cached)
+    private_members = "".join(f"  {_ref_type(api, p.type)} {member(p.name)};\n" for p in cached)
     ctor_params = ", ".join([f"{handle_type} handle", *(f"const {_ref_type(api, p.type)}& {p.name}" for p in cached)])
-    inits = ", ".join([*(f"{p.name}_({p.name})" for p in cached), f"{HANDLE_MEMBER}(handle)"])
+    inits = ", ".join([*(f"{member(p.name)}({p.name})" for p in cached), f"{_HANDLE_MEMBER}(handle)"])
     return (
         f"\n{_comment(opaque.docstring)}class {cls} {{\n public:\n{create}{lifetime}{''.join(body)}"
         + (f"\n{accessors}" if accessors else "")
-        + f"\n private:\n  {cls}({ctor_params}) : {inits} {{}}\n\n{private_members}  {handle_type} {HANDLE_MEMBER};\n}};\n"
+        + f"\n private:\n  {cls}({ctor_params}) : {inits} {{}}\n\n{private_members}  {handle_type} {_HANDLE_MEMBER};\n}};\n"
     )
 
 

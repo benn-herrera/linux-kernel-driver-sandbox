@@ -1,6 +1,7 @@
 import unittest
 
-from api_gen import emit_c, model
+from api_gen import model
+from api_gen.emitters import c, emit_c
 from api_gen.tests.support import C_CONST_MACROS, FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists
 
 
@@ -76,7 +77,7 @@ class Declarations(unittest.TestCase):
             count_type = "u32" if type_name == "memory" else None
             param = model.Param(name="p", type=type_name, ref=ref, count_type=count_type, optional=False, docstring=None)
             with self.subTest(type=type_name, ref=ref):
-                self.assertEqual(emit_c.param_type(self.api, param), expected)
+                self.assertEqual(c.param_type(self.api, param), expected)
 
     def test_functions_declared_in_document_order_with_parameters_in_order(self) -> None:
         decls = param_lists(self.text, r"XY_API xy_status ")
@@ -136,10 +137,10 @@ class Declarations(unittest.TestCase):
     def test_every_uncomposed_literal_takes_its_group_base_type_macro(self) -> None:
         for group in (*self.api.bit_const_groups, *self.api.const_groups):
             macro = C_CONST_MACROS[group.base_type]
-            for c in group.entries:
-                if not c.parts:
-                    with self.subTest(name=c.name):
-                        self.assertRegex(self.text, rf"(?m)^#define XY_{c.name.upper()} \(?-?{macro}\(")
+            for entry in group.entries:
+                if not entry.parts:
+                    with self.subTest(name=entry.name):
+                        self.assertRegex(self.text, rf"(?m)^#define XY_{entry.name.upper()} \(?-?{macro}\(")
 
     def test_u32_group_literal_term_takes_the_u32_macro(self) -> None:
         self.assertIn("#define XY_FEAT_ALL (XY_FEAT_ONE | UINT32_C(8))\n", self.text)
@@ -151,7 +152,7 @@ class Declarations(unittest.TestCase):
             with self.subTest(first=group.entries[0].name):
                 self.assertEqual(lines[first - 1], f"/* {group.docstring} */" if group.docstring else "")
                 run = lines[first : first + len(group.entries)]
-                self.assertEqual([line.split()[1] for line in run], [f"XY_{c.name.upper()}" for c in group.entries])
+                self.assertEqual([line.split()[1] for line in run], [f"XY_{entry.name.upper()}" for entry in group.entries])
                 self.assertEqual(lines[first + len(group.entries)], "")
 
     def test_typed_groups_stay_enums(self) -> None:
@@ -219,7 +220,7 @@ class Validate(unittest.TestCase):
 
     def test_header_macros_are_the_ones_it_emits(self) -> None:
         text = header(load(KITCHEN_SINK))
-        for macro in emit_c.header_macros("xy"):
+        for macro in c.header_macros("xy"):
             with self.subTest(macro=macro):
                 self.assertRegex(text, rf"(?m)^#\s*(define|if defined\()\s*{macro}\b")
 

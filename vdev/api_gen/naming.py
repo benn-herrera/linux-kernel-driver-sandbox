@@ -59,6 +59,17 @@ def lua_to_string(name: str, *, typename: str | None) -> str:
     return name if typename is None else f"{typename}_{name}"
 
 
+def lua_lookup_table(conversion: str) -> str:
+    """The module-local table a Lua lookup conversion reads, from the conversion's Lua
+    name: `status_to_string_names`."""
+    return f"{conversion}_names"
+
+
+def cpp_member(name: str) -> str:
+    """The C++ wrapper's private data member holding the value `name`: `info_`."""
+    return f"{name}_"
+
+
 def unknown_value_name(typename: str | None) -> str:
     """What a conversion returns for a value no entry has: `UNKNOWN_RESULT` for an enum,
     `UNKNOWN` for a nameless group."""
