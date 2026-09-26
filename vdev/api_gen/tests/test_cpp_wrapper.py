@@ -71,17 +71,16 @@ class BaseTypes(unittest.TestCase):
         self.api = load(KITCHEN_SINK)
         self.text = wrapper(KITCHEN_SINK)
 
-    def test_group_constants_take_the_group_base_type_under_its_docstring(self) -> None:
-        types = {name: c_type for c_type, name in re.findall(r"^inline constexpr (\w+) (\w+) = ", self.text, re.M)}
-        self.assertEqual(types.pop("API_VERSION"), "uint32_t")
-        expected = {}
+    def test_untyped_constants_are_auto_from_the_header_macro_under_their_docstring(self) -> None:
+        types = {name: c_type for c_type, name in re.findall(r"^inline constexpr (.+) (\w+) = ", self.text, re.M)}
+        expected = {"API_VERSION": "auto"}
         lines = self.text.splitlines()
         for group in (*self.api.bit_const_groups, *self.api.const_groups):
-            base = C_BASE_TYPES[group.base_type]
-            expected |= {c.name.upper(): base for c in group.entries}
+            expected |= {c.name.upper(): "auto" for c in group.entries}
             key = group.entries[0].name.upper()
-            first = lines.index(f"inline constexpr {base} {key} = XY_{key};")
+            first = lines.index(f"inline constexpr auto {key} = XY_{key};")
             self.assertEqual(lines[first - 1], f"// {group.docstring}" if group.docstring else "")
+        expected |= {c.name.upper(): "const char*" for c in self.api.string_consts}
         self.assertEqual(types, expected)
 
     def test_enum_class_underlying_type_is_the_base_type(self) -> None:
@@ -118,15 +117,101 @@ class Validate(unittest.TestCase):
     def test_lua_keyword_is_not_its_objection(self) -> None:
         self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "end = ")), [])
 
+    def test_generated_names_are_refused_as_parameters(self) -> None:
+        for needle, name, where in (
+            ('unit = "u32"', "result", "function.open_port.result"),
+            ('unit = "u32"', "status", "function.open_port.status"),
+            ('buf = { _type', "handle", "function.send.handle"),
+            ('buf = { _type', "handle_", "function.send.handle_"),
+        ):
+            with self.subTest(name=name):
+                replacement = needle.replace(needle.split(" ")[0], name, 1)
+                self.assertEqual(
+                    self.validate(mutate(FIXTURE, needle, replacement)),
+                    [f"wrapper: {where}: '{name}' is a name the generated code uses"],
+                )
+
+    def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
+        text = wrapper(KITCHEN_SINK)
+        for name in emit_cpp_wrapper.GENERATED_NAMES:
+            with self.subTest(name=name):
+                self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
+
     def test_member_collision(self) -> None:
         self.assertEqual(
             self.validate(mutate(FIXTURE, "[function.send]", "[function.release]")),
-            ["wrapper: class Port: release would be defined more than once"],
+            ["wrapper: class Port: release would be defined more than once, by the wrapper's own member and function.release"],
         )
 
     def test_namespace_collision(self) -> None:
         text = mutate(FIXTURE, "[[untyped_const]]\n", "[[untyped_const]]\nx = 1\n") + '\n[struct.x]\nv = "u32"\n'
-        self.assertEqual(self.validate(text), ["wrapper: namespace xy: X would be defined more than once"])
+        self.assertEqual(
+            self.validate(text), ["wrapper: namespace xy: X would be defined more than once, by untyped_const.x and struct.x"]
+        )
+
+    def test_enums_may_share_a_conversion_name(self) -> None:
+        api = load(KITCHEN_SINK)
+        self.assertEqual({t.to_string for t in api.typed_consts}, {"to_string"})
+        self.assertEqual(emit_cpp_wrapper.validate(api), [])
+
+    def test_conversion_collisions(self) -> None:
+        for needle, name, message in (
+            ('_to_string = "limit_to_string"', "to_string",
+             "to_string would be defined more than once, by untyped_const[0]._to_string and typed_const.status._to_string"),
+            ('_to_string = "feat_to_string"', "limit_to_string",
+             "limit_to_string would be defined more than once, by untyped_bit_const[0]._to_string and untyped_const[0]._to_string"),
+            ('_to_string = "limit_to_string"', "Stats",
+             "Stats would be defined more than once, by struct.stats and untyped_const[0]._to_string"),
+        ):
+            with self.subTest(message=message):
+                text = mutate(FIXTURE, needle, f'_to_string = "{name}"')
+                self.assertEqual(self.validate(text), [f"wrapper: namespace xy: {message}"])
+
+
+CONVERSION = re.compile(r"^inline (const char\*|std::string) (\w+)\((\w+) value\) \{$", re.M)
+
+
+class ToString(unittest.TestCase):
+    def test_signatures_in_fixture(self) -> None:
+        self.assertEqual(
+            CONVERSION.findall(wrapper()),
+            [
+                ("std::string", "feat_to_string", "int32_t"),
+                ("std::string", "limit_to_string", "int32_t"),
+                ("const char*", "to_string", "Status"),
+            ],
+        )
+
+    def test_only_groups_with_the_property_have_a_conversion(self) -> None:
+        self.assertEqual(
+            [name for _, name, param in CONVERSION.findall(wrapper(KITCHEN_SINK))],
+            ["access_to_string", "limit_to_string", "to_string", "to_string"],
+        )
+        text = FIXTURE
+        for needle in ('_to_string = "feat_to_string"\n', '_to_string = "limit_to_string"\n', '_to_string = "to_string"\n'):
+            text = mutate(text, needle, "")
+        text = wrapper(text)
+        self.assertEqual(CONVERSION.findall(text), [])
+        self.assertNotIn("#include <string>", text)
+        self.assertNotIn("#include <charconv>", text)
+
+    def test_parameter_is_the_group_base_type(self) -> None:
+        text = wrapper(mutate(KITCHEN_SINK, '_base_type = "u32"\nmagic', '_base_type = "u32"\n_to_string = "wire_to_string"\nmagic'))
+        self.assertIn(("std::string", "wire_to_string", "uint32_t"), CONVERSION.findall(text))
+
+    def test_switch_names_the_last_entry_of_a_shared_value(self) -> None:
+        text = wrapper(KITCHEN_SINK)
+        self.assertIn('    case Status::ErrAgain: return "ERR_AGAIN";\n', text)
+        self.assertNotIn("case Status::ErrBusy:", text)
+        self.assertIn('return "UNKNOWN_STATUS";', text)
+        self.assertIn('    case MAX_UNITS: return "MAX_UNITS";\n', text)
+        self.assertIn('return "UNKNOWN";', text)
+
+    def test_bit_conversion_tests_only_single_bit_entries(self) -> None:
+        text = wrapper(KITCHEN_SINK)
+        self.assertIn("  if (value & ACC_A) {\n", text)
+        self.assertIn("  if (value & ACC_B) {\n", text)
+        self.assertNotIn("value & ACC_AB", text)
 
 if __name__ == "__main__":
     unittest.main()

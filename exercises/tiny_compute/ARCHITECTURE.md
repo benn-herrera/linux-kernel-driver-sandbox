@@ -61,11 +61,11 @@ The API definition, then three consumers of the driver, each one layer up from t
 ### Library
 
 - designed as a foreign-function surface first: opaque handle, fixed-width arguments, enum results with explicit values, no callbacks, no varargs
-- the header is the binding. It is written so that a preprocessor-free reader (LuaJIT `ffi.cdef`) accepts it once `#` lines and the visibility macro are stripped: constants are enums, not macros; every struct is declared with a typedef; comments are `/* */`
+- the header is for C and C++ consumers; the Lua module does not read it. The module gets its FFI declarations from the generator's cdef rendering of the structs and functions and its constants from the definition's model, so the header's untyped constants are macros typed by their group's `_base_type` (`UINT32_C` for the capability flags) and its enums are the typed groups (`tcdl_result`)
 - the handle is the device fd xored with a constant cast to a pointer, so the library carries no state of its own and a handle costs nothing to copy
 - error mapping is one direction: errno from the ioctl to a `tcdl_result`; the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to `TCDL_ERR_UNSUPPORTED`
 - the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once; the C header (with the ABI pins in its implementation-only block), the header-only C++ wrapper, the Lua module and the implementation stub are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). `lib/tcdl_api.cpp` is the one hand-written piece and follows the generated header
-- device capabilities live in the driver's per-device state and gate the operations; `tcdl_info.device_caps` reports them, and the composed masks (`TCDL_CAP_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side, since convenience is not the ABI header's job
+- device capabilities live in the driver's per-device state and gate the operations; `tcdl_info.device_caps` reports them, and the composed masks (`TCDL_CAP_DMA_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side, since convenience is not the ABI header's job
 
 ### Driver Test
 

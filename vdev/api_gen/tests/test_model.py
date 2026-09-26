@@ -1,4 +1,6 @@
+import tempfile
 import unittest
+from pathlib import Path
 
 from api_gen import model, naming
 from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate
@@ -37,6 +39,10 @@ class ModelErrors(unittest.TestCase):
                           "function.send.buf: unknown key(s) _size")
         self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_colour = "red"'),
                           "opaque_ref.port: unknown key(s) _colour")
+        self.assert_error(mutate(FIXTURE, "[_general]\n", '[_general]\n_colour = "red"\n'),
+                          "_general: unknown key(s) _colour")
+        self.assert_error(mutate(FIXTURE, "[_driver_data]\n", '[_driver_data]\n_colour = "red"\n'),
+                          "_driver_data: unknown key(s) _colour")
 
     def test_opaque_ref_has_only_properties(self) -> None:
         self.assert_error(mutate(FIXTURE, '_ctor = "open_port"', 'ctor = "open_port"'),
@@ -69,6 +75,21 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, "_optional = true", '_optional = "yes"'), "_optional must be true or false")
         self.assertTrue(load().functions[0].params[2].optional)
 
+    def test_optional_needs_a_nullable_parameter(self) -> None:
+        for text, message in (
+            (mutate(FIXTURE, 'unit = "u32"', 'unit = { _type = "u32", _optional = true }'),
+             "function.open_port.unit._optional: a by-value parameter has no null to pass"),
+            (mutate(KITCHEN_SINK, 'hport = "port"\npdst = { _type = "memory", _ref = "out",',
+                    'hport = "port"\npdst = { _type = "memory", _ref = "out", _optional = true,'),
+             'function.recv.pdst._optional: a memory parameter is optional only with _ref = "in"'),
+            (mutate(KITCHEN_SINK, 'data = { _type = "memory", _ref = "inout",', 'data = { _type = "memory", _ref = "inout", _optional = true,'),
+             'function.bump.data._optional: a memory parameter is optional only with _ref = "in"'),
+        ):
+            with self.subTest(message=message):
+                self.assert_error(text, message)
+        memory_in = load(mutate(FIXTURE, '_ref = "in", _count = "u64"', '_ref = "in", _optional = true, _count = "u64"'))
+        self.assertTrue(next(f for f in memory_in.functions if f.name == "send").params[1].optional)
+
     def test_return_enum_needs_zero(self) -> None:
         self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 1"), "no zero-valued entry")
 
@@ -76,19 +97,82 @@ class ModelErrors(unittest.TestCase):
         self.assert_error(mutate(FIXTURE, '_library = "libxy.so"', '_library = "lib\\"xy.so"'), "must not contain")
         self.assert_error(mutate(FIXTURE, '_header = "xy/', '_header = "xy\\\\'), "must not contain")
 
-    def test_bit_index_range(self) -> None:
-        self.assert_error(mutate(FIXTURE, "_value = 3,", "_value = 31,"), "bit index must be 0..30")
-        load(mutate(FIXTURE, "_value = 3,", "_value = 30,"))
+    def test_library_and_header_refuse_control_characters(self) -> None:
+        for needle, replacement, where in (
+            ('_library = "libxy.so"', '_library = "libxy.so\\n"', "_general._library"),
+            ('_header = "xy/', '_header = "xy\\r/', "_driver_data._header"),
+        ):
+            with self.subTest(where=where):
+                self.assert_error(mutate(FIXTURE, needle, replacement),
+                                  f"{where} must not contain '\"', '\\' or a control character")
 
-    def test_version_first_byte_range(self) -> None:
-        self.assert_error(mutate(FIXTURE, "[1, 2, 3, 4]", "[128, 2, 3, 4]"), "first byte must be 0..127")
-        load(mutate(FIXTURE, "[1, 2, 3, 4]", "[127, 2, 3, 4]"))
+    def test_bit_index_fits_the_base_type(self) -> None:
+        for base_type, top in (("i32", 30), ("u32", 31)):
+            text = mutate(FIXTURE, "[[untyped_bit_const]]\n", f'[[untyped_bit_const]]\n_base_type = "{base_type}"\n')
+            for index in (top + 1, -1):
+                with self.subTest(base_type=base_type, index=index):
+                    self.assert_error(
+                        mutate(text, "_value = 3,", f"_value = {index},"),
+                        f"untyped_bit_const.feat_b: bit index {index} is outside 0..{top} for _base_type {base_type}",
+                    )
+            value = next(c for c in load(mutate(text, "_value = 3,", f"_value = {top},")).bit_consts if c.name == "feat_b")
+            self.assertEqual(value.value, 1 << top)
+
+    def test_version_bytes_are_0_to_255(self) -> None:
+        self.assertEqual(load(mutate(FIXTURE, "[1, 2, 3, 4]", "[255, 255, 255, 255]")).version_value(), 0xFFFFFFFF)
+        for version in ("[256, 2, 3, 4]", "[1, 2, 3, -1]"):
+            with self.subTest(version=version):
+                self.assert_error(mutate(FIXTURE, "[1, 2, 3, 4]", version), "4 integers in 0..255")
 
     def test_docstring_terminators_rejected(self) -> None:
         self.assert_error(mutate(FIXTURE, '_docstring = "wire magic"', '_docstring = "wire */ magic"'), "must not contain")
 
-    def test_int32_range(self) -> None:
-        self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 0x80000000"), "int32 range")
+    def test_typed_const_fits_its_base_type(self) -> None:
+        self.assert_error(mutate(FIXTURE, "ok = 0", "ok = 0x80000000"), "typed_const.status.ok: 2147483648 does not fit i32")
+        u32 = mutate(FIXTURE, '_docstring = "call outcome"', '_base_type = "u32"')
+        self.assert_error(mutate(u32, "err_busy = { _value = 9", "err_busy = { _value = -9"),
+                          "typed_const.status.err_busy: -9 does not fit u32")
+        # above the i32 maximum is the header's objection, not the loader's
+        entries = load(mutate(u32, "0x7fffffff", "0xffffffff")).typed_consts[0].entries
+        self.assertEqual(next(e for e in entries if e.name == "err_other").value, 2**32 - 1)
+
+    def test_untyped_value_fits_its_group_base_type(self) -> None:
+        for base_type, low, high in (("i32", -(2**31), 2**31 - 1), ("u32", 0, 2**32 - 1)):
+            text = mutate(FIXTURE, "[[untyped_const]]\n", f'[[untyped_const]]\n_base_type = "{base_type}"\n')
+            for bad in (low - 1, high + 1):
+                with self.subTest(base_type=base_type, value=bad):
+                    self.assert_error(mutate(text, "max_units = 16", f"max_units = {bad}"),
+                                      f"untyped_const.max_units: {bad} does not fit {base_type} ({low}..{high})")
+            for good in (low, high):
+                with self.subTest(base_type=base_type, value=good):
+                    self.assertEqual(load(mutate(text, "max_units = 16", f"max_units = {good}")).consts[0].value, good)
+
+    def test_sum_and_its_literal_terms_fit_the_base_type(self) -> None:
+        self.assert_error(mutate(FIXTURE, "max_units = 16", 'max_units = 16\nbig = ["0x7fffffff", "max_units"]'),
+                          "untyped_const.big: 2147483663 does not fit i32")
+        self.assert_error(mutate(FIXTURE, "max_units = 16", 'max_units = 16\nbig = ["0x80000000", "-1"]'),
+                          "untyped_const.big: term 0x80000000: 2147483648 does not fit i32")
+        self.assert_error(mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "0x80000000"]'),
+                          "untyped_bit_const.feat_ab: term 0x80000000: 2147483648 does not fit i32")
+
+    def test_sum_terms_share_its_base_type(self) -> None:
+        u32_bits = '\n[[untyped_bit_const]]\n_base_type = "u32"\nfeat_c = 0\n'
+        self.assert_error(
+            mutate(FIXTURE, "\n[[untyped_const]]", u32_bits + 'feat_x = ["feat_c", "feat_b"]\n\n[[untyped_const]]'),
+            "untyped_bit_const.feat_x (u32) composes untyped_bit_const.feat_b (i32): a sum's terms share its _base_type",
+        )
+        u32_plain = '\n[[untyped_const]]\n_base_type = "u32"\nwire = ["max_units"]\n'
+        self.assert_error(
+            mutate(FIXTURE, "\n[[string_const]]", u32_plain + "\n[[string_const]]"),
+            "untyped_const.wire (u32) composes untyped_const.max_units (i32): a sum's terms share its _base_type",
+        )
+
+    def test_sum_may_name_an_earlier_group_of_the_same_base_type(self) -> None:
+        text = mutate(FIXTURE, "\n[[untyped_const]]", '\n[[untyped_bit_const]]\nfeat_x = ["feat_b", "1"]\n\n[[untyped_const]]')
+        text = mutate(text, "\n[[string_const]]", '\n[[untyped_const]]\ntotal = ["max_units", "4"]\n\n[[string_const]]')
+        api = load(text)
+        self.assertEqual(next(c for c in api.bit_consts if c.name == "feat_x").value, 9)
+        self.assertEqual(next(c for c in api.consts if c.name == "total").value, 20)
 
     def test_builtin_shadow(self) -> None:
         self.assert_error(FIXTURE + '\n[struct.u32]\nx = "u64"\n', "shadows builtin")
@@ -103,8 +187,13 @@ class ModelErrors(unittest.TestCase):
             "already defined by untyped_bit_const.feat_a",
         )
 
-    def test_string_const_rejects_newline(self) -> None:
-        self.assert_error(mutate(FIXTURE, 'product = "xy widget"', 'product = "xy\\nwidget"'), "newline")
+    def test_string_const_rejects_control_characters(self) -> None:
+        for escape in ("\\n", "\\r", "\\t", "\\u0000", "\\u001b", "\\u007f"):
+            with self.subTest(escape=escape):
+                self.assert_error(
+                    mutate(FIXTURE, 'product = "xy widget"', f'product = "xy{escape}widget"'),
+                    "string_const.product: value must not contain '\"', '\\' or a control character",
+                )
 
     def test_ctor_cannot_cache_a_memory_out(self) -> None:
         self.assert_error(
@@ -136,6 +225,13 @@ class ModelErrors(unittest.TestCase):
         load(mutate(FIXTURE, "bytes = ", "return = "))
         load(mutate(FIXTURE, 'unit = "u32"', 'result = "u32"'))
 
+    def test_undecodable_definition_is_a_definition_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "xy_api.adef.toml"
+            path.write_bytes(b'[_general]\n_namespace = "\xff"\n')  # deliberately not UTF-8
+            with self.assertRaises(model.DefinitionError):
+                model.load(path)
+
     def test_single_table_constants_are_rejected(self) -> None:
         for key in ("untyped_const", "untyped_bit_const", "string_const"):
             with self.subTest(key=key):
@@ -161,8 +257,6 @@ class ModelErrors(unittest.TestCase):
         )
 
         u32 = '[[untyped_const]]\n_base_type = "u32"\n'
-        self.assert_error(mutate(FIXTURE, "[[untyped_const]]\nmax_units = 16", u32 + "max_units = -16"), "must not be negative")
-        self.assert_error(mutate(FIXTURE, "[[untyped_const]]\nmax_units = 16", u32 + "max_units = 0x80000000"), "int32 range")
         self.assertEqual(load(mutate(FIXTURE, "[[untyped_const]]\n", u32)).const_groups[0].base_type, "u32")
 
     def test_float_constants_are_not_implemented(self) -> None:
@@ -219,6 +313,21 @@ class ModelErrors(unittest.TestCase):
             "untyped_const.bad: composes unknown constant 'bogus' (only earlier untyped_const entries or literals)",
         )
 
+    def test_literal_term_is_decimal_or_0x_hex_with_an_optional_minus(self) -> None:
+        for term, value, fmt in (("4", 4, "dec"), ("-4", -4, "dec"), ("0x1f", 31, "hex"), ("0x1F", 31, "hex"),
+                                 ("-0x3", -3, "hex"), ("0", 0, "dec")):
+            with self.subTest(term=term):
+                api = load(mutate(FIXTURE, "max_units = 16", f'max_units = 16\ntotal = ["max_units", "{term}"]'))
+                total = next(c for c in api.consts if c.name == "total")
+                self.assertEqual(total.parts, ("max_units", model.LiteralTerm(value, fmt)))
+                self.assertEqual(total.value, 16 + value)
+        for term in ("0o17", "0b11", "1_000", "+5", " 5", "5 ", "0X1F", "0x", "-", "--1", "1e3"):
+            with self.subTest(term=term):
+                self.assert_error(
+                    mutate(FIXTURE, "max_units = 16", f'max_units = 16\ntotal = ["max_units", "{term}"]'),
+                    f"untyped_const.total: term '{term}' is neither an entry name nor a literal",
+                )
+
     def test_plain_group_composes_by_addition(self) -> None:
         api = load(mutate(FIXTURE, "max_units = 16", 'max_units = 16\ntotal = ["max_units", "4"]'))
         self.assertEqual(next(c for c in api.consts if c.name == "total").value, 20)
@@ -246,21 +355,6 @@ class ModelErrors(unittest.TestCase):
     def test_missing_general(self) -> None:
         self.assert_error("[function]\n", "missing [_general] table")
 
-    def test_general_name_is_rejected(self) -> None:
-        self.assert_error(mutate(FIXTURE, "[_general]\n", '[_general]\nname = "xy_api"\n'), "file name is the output stem")
-
-    def test_old_root_table_spellings_are_unknown(self) -> None:
-        self.assert_error(mutate(FIXTURE, "[_general]", "[general]"), "unknown table(s) [general]")
-        self.assert_error(mutate(FIXTURE, "[_driver_data]", "[driver_data]"), "unknown table(s) [driver_data]")
-
-    def test_old_general_key_spellings_are_unknown(self) -> None:
-        self.assert_error(mutate(FIXTURE, "_namespace = ", "namespace = "), "_general: unknown key(s) namespace")
-        self.assert_error(mutate(FIXTURE, "_version = ", "version = "), "_general: unknown key(s) version")
-        self.assert_error(mutate(FIXTURE, "_library = ", "library = "), "_general: unknown key(s) library")
-
-    def test_old_driver_data_key_spelling_is_unknown(self) -> None:
-        self.assert_error(mutate(FIXTURE, "_header = ", "header = "), "_driver_data: unknown key(s) header")
-
     def test_unknown_format(self) -> None:
         self.assert_error(mutate(FIXTURE, '_format = "hex" }\n\n[opaque', '_format = "oct" }\n\n[opaque'), "_format must be one of")
 
@@ -279,6 +373,22 @@ class ModelErrors(unittest.TestCase):
     def test_plain_and_string_constants_share_the_constant_namespace(self) -> None:
         self.assert_error(mutate(FIXTURE, "max_units = 16", "ok = 16"), "XY_OK already defined")
         self.assert_error(mutate(FIXTURE, 'product = "xy widget"', 'max_units = "x"'), "XY_MAX_UNITS already defined")
+
+    def test_to_string_is_a_name(self) -> None:
+        for needle, value, message in (
+            ('_to_string = "to_string"', '"_x"', "typed_const.status._to_string: '_x': a key beginning with '_' is a property"),
+            ('_to_string = "to_string"', "5", "typed_const.status._to_string must be an identifier"),
+            ('_to_string = "feat_to_string"', '"9x"', "untyped_bit_const[0]._to_string: '9x' is not an identifier"),
+            ('_to_string = "limit_to_string"', '"a-b"', "untyped_const[0]._to_string: 'a-b' is not an identifier"),
+        ):
+            with self.subTest(message=message):
+                self.assert_error(mutate(FIXTURE, needle, f"_to_string = {value}"), message)
+
+    def test_string_group_has_no_to_string(self) -> None:
+        self.assert_error(
+            mutate(FIXTURE, "[[string_const]]\n", '[[string_const]]\n_to_string = "product_to_string"\n'),
+            "string_const[0]: unknown key(s) _to_string",
+        )
 
     def test_class_must_be_an_identifier(self) -> None:
         self.assert_error(mutate(FIXTURE, '_dtor = "destroy_port"', '_dtor = "destroy_port"\n_class = "a-b"'),
@@ -311,17 +421,29 @@ class Shape(unittest.TestCase):
         api = load(KITCHEN_SINK)
         self.assertEqual(
             [(g.docstring, g.base_type, [c.name for c in g.entries]) for g in api.bit_const_groups],
-            [("feature flags", "i32", ["feat_a", "feat_b", "feat_ab", "feat_lit"]), (None, "u32", ["feat_all"])],
+            [
+                ("feature flags", "i32", ["feat_a", "feat_b", "feat_ab", "feat_lit"]),
+                (None, "u32", ["feat_one", "feat_all"]),
+                ("access flags", "i32", ["acc_a", "acc_b", "acc_ab"]),
+            ],
         )
         self.assertEqual(
             [(g.docstring, g.base_type, [c.name for c in g.entries]) for g in api.const_groups],
-            [("limits", "i32", ["max_units", "extra", "max_total", "neg"]), ("wire values", "u32", ["magic"])],
+            [
+                ("limits", "i32", ["max_units", "extra", "max_total", "neg", "low", "floor", "dip"]),
+                ("wire values", "u32", ["magic"]),
+            ],
         )
         self.assertEqual(
-            [c.name for c in api.bit_consts], ["feat_a", "feat_b", "feat_ab", "feat_lit", "feat_all"]
+            [c.name for c in api.bit_consts],
+            ["feat_a", "feat_b", "feat_ab", "feat_lit", "feat_one", "feat_all", "acc_a", "acc_b", "acc_ab"],
         )
-        self.assertEqual([c.name for c in api.consts], ["max_units", "extra", "max_total", "neg", "magic"])
-        self.assertEqual(api.bit_consts[-1].parts, ("feat_ab",))
+        self.assertEqual(
+            [c.name for c in api.consts], ["max_units", "extra", "max_total", "neg", "low", "floor", "dip", "magic"]
+        )
+        self.assertEqual(
+            next(c for c in api.bit_consts if c.name == "feat_all").parts, ("feat_one", model.LiteralTerm(8, "dec"))
+        )
         self.assertEqual({t.name: t.base_type for t in api.typed_consts}, {"status": "i32", "mode": "u32"})
         self.assertEqual(
             [(g.docstring, [c.name for c in g.entries]) for g in api.string_const_groups],
@@ -337,6 +459,35 @@ class Shape(unittest.TestCase):
         self.assertEqual(by_name["feat_all"], 9)
         plain = {c.name: c.value for c in api.consts}
         self.assertEqual(plain["max_total"], 20)
+
+    def test_to_string_loads_on_typed_bit_and_plain_groups(self) -> None:
+        api = load()
+        self.assertEqual(
+            (api.typed_consts[0].to_string, api.bit_const_groups[0].to_string, api.const_groups[0].to_string),
+            ("to_string", "feat_to_string", "limit_to_string"),
+        )
+
+    def test_to_string_absent_is_none(self) -> None:
+        api = load(KITCHEN_SINK)
+        self.assertEqual([g.to_string for g in api.bit_const_groups], [None, None, "access_to_string"])
+        self.assertEqual([g.to_string for g in api.const_groups], ["limit_to_string", None])
+        self.assertEqual([g.to_string for g in api.string_const_groups], [None])
+        typed = load(mutate(FIXTURE, '_to_string = "to_string"\n', "")).typed_consts[0]
+        self.assertIsNone(typed.to_string)
+
+    def test_names_include_to_string(self) -> None:
+        names = load().names()
+        for pair in (
+            ("typed_const.status._to_string", "to_string"),
+            ("untyped_bit_const[0]._to_string", "feat_to_string"),
+            ("untyped_const[0]._to_string", "limit_to_string"),
+        ):
+            self.assertIn(pair, names)
+
+    def test_single_bit_entries_exclude_composed_multi_bit_ones(self) -> None:
+        groups = load(KITCHEN_SINK).bit_const_groups
+        self.assertEqual([c.name for c in model.single_bit_entries(groups[0])], ["feat_a", "feat_b"])
+        self.assertEqual([c.name for c in model.single_bit_entries(groups[1])], ["feat_one"])
 
     def test_version_value(self) -> None:
         self.assertEqual(load().version_value(), 0x01020304)

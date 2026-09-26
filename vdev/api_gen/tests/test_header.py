@@ -1,7 +1,7 @@
 import unittest
 
 from api_gen import emit_c, model
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate, param_lists
+from api_gen.tests.support import C_CONST_MACROS, FIXTURE, KITCHEN_SINK, load, mutate, param_lists
 
 
 class Preprocessor(unittest.TestCase):
@@ -10,7 +10,7 @@ class Preprocessor(unittest.TestCase):
         self.text = emit_c.header(self.api, source_name="xy_api.adef.toml")
 
     def test_only_permitted_preprocessor_lines(self) -> None:
-        allowed = ("#pragma once", "#include", "#if", "#else", "#endif", "# define", "# include")
+        allowed = ("#pragma once", "#include", "#if", "#else", "#endif", "# define", "# include", "#define XY_")
         for line in self.text.splitlines():
             if line.startswith("#"):
                 self.assertTrue(line.startswith(allowed), line)
@@ -98,23 +98,72 @@ class Declarations(unittest.TestCase):
             decls["bump"], "xy_port hport, uint32_t* level, xy_stats* tally, void* data, uint32_t data_count"
         )
 
-    def test_bit_constants_use_the_spec_spelling(self) -> None:
-        self.assertRegex(self.text, r"XY_FEAT_B = \(1u << 3\)")
-        self.assertIn("XY_FEAT_AB = XY_FEAT_A | XY_FEAT_B", self.text)
-        self.assertIn("XY_FEAT_ALL = XY_FEAT_AB", self.text)
+    def test_untyped_constants_are_macros_in_the_spec_spelling(self) -> None:
+        lines = set(self.text.splitlines())
+        for expected in (
+            "#define XY_API_VERSION UINT32_C(0x01020304)",
+            "#define XY_FEAT_A (INT32_C(1) << 0)",
+            "#define XY_FEAT_B (INT32_C(1) << 3) /* the b feature */",
+            "#define XY_FEAT_AB (XY_FEAT_A | XY_FEAT_B)",
+            "#define XY_FEAT_LIT (XY_FEAT_A | INT32_C(4))",
+            "#define XY_ACC_AB (XY_ACC_A | XY_ACC_B)",
+            "#define XY_MAX_UNITS INT32_C(16)",
+            "#define XY_MAX_TOTAL (XY_MAX_UNITS + XY_EXTRA)",
+            "#define XY_MAGIC UINT32_C(0xbeef) /* wire magic */",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, lines)
 
-    def test_each_constant_group_is_one_enum_under_its_docstring(self) -> None:
+    def test_negative_value_is_the_macro_of_its_magnitude_negated(self) -> None:
+        lines = set(self.text.splitlines())
+        for expected in (
+            "#define XY_NEG (-INT32_C(0x5))",
+            "#define XY_LOW (-INT32_C(7))",
+            "#define XY_FLOOR (-INT32_C(0x7fffffff) - 1)",
+            "#define XY_DIP (XY_MAX_UNITS + (-INT32_C(3)))",
+            "  XY_ERR_FLOOR = (-INT32_C(0x7fffffff) - 1)",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, lines)
+        decimal = mutate(KITCHEN_SINK, '\nfloor = { _value = -2147483648, _format = "hex" }', "\nfloor = -2147483648")
+        decimal_min = emit_c.header(load(decimal), source_name="x")
+        self.assertIn("#define XY_FLOOR (-INT32_C(2147483647) - 1)", decimal_min.splitlines())
+
+    def test_literal_term_renders_from_its_parsed_value(self) -> None:
+        text = emit_c.header(load(mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "0x1E"]')), source_name="x")
+        self.assertIn("#define XY_FEAT_AB (XY_FEAT_A | INT32_C(0x1e))", text.splitlines())
+
+    def test_every_uncomposed_literal_takes_its_group_base_type_macro(self) -> None:
+        for group in (*self.api.bit_const_groups, *self.api.const_groups):
+            macro = C_CONST_MACROS[group.base_type]
+            for c in group.entries:
+                if not c.parts:
+                    with self.subTest(name=c.name):
+                        self.assertRegex(self.text, rf"(?m)^#define XY_{c.name.upper()} \(?-?{macro}\(")
+
+    def test_u32_group_literal_term_takes_the_u32_macro(self) -> None:
+        self.assertIn("#define XY_FEAT_ALL (XY_FEAT_ONE | UINT32_C(8))\n", self.text)
+
+    def test_each_constant_group_is_one_run_of_macros_under_its_docstring(self) -> None:
         lines = self.text.splitlines()
         for group in (*self.api.bit_const_groups, *self.api.const_groups):
-            first = next(i for i, line in enumerate(lines) if line.startswith(f"  XY_{group.entries[0].name.upper()} = "))
+            first = lines.index(next(line for line in lines if line.startswith(f"#define XY_{group.entries[0].name.upper()} ")))
             with self.subTest(first=group.entries[0].name):
-                self.assertEqual(lines[first - 1], "enum {")
-                self.assertEqual(lines[first - 2], f"/* {group.docstring} */" if group.docstring else "")
-                self.assertEqual(lines[first + len(group.entries)], "};")
+                self.assertEqual(lines[first - 1], f"/* {group.docstring} */" if group.docstring else "")
+                run = lines[first : first + len(group.entries)]
+                self.assertEqual([line.split()[1] for line in run], [f"XY_{c.name.upper()}" for c in group.entries])
+                self.assertEqual(lines[first + len(group.entries)], "")
+
+    def test_typed_groups_stay_enums(self) -> None:
+        self.assertIn("enum xy_status {\n  XY_OK = 0,\n", self.text)
+        self.assertIn("typedef enum xy_status xy_status;\n", self.text)
+        self.assertIn("enum xy_mode {\n", self.text)
+        self.assertNotIn("#define XY_OK", self.text)
+        self.assertNotIn("enum {", self.text)
 
     def test_constant_blocks_precede_types_in_spec_order(self) -> None:
         markers = (
-            "XY_API_VERSION", "XY_FEAT_A =", "XY_MAX_UNITS", "enum xy_status", "static const char XY_PRODUCT",
+            "XY_API_VERSION", "#define XY_FEAT_A ", "XY_MAX_UNITS", "enum xy_status", "static const char XY_PRODUCT",
             "struct xy_port_opaque;", "struct xy_stats {", "XY_API xy_status xy_open_port(",
         )
         indices = [self.text.index(m) for m in markers]
@@ -147,9 +196,37 @@ class Validate(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertIn(message, emit_c.validate(load(text)))
 
+    def test_constant_named_like_a_header_macro(self) -> None:
+        for needle, replacement, where, macro in (
+            ("feat_a = 0\n", "feat_a = 0\napi = 5\n", "untyped_bit_const.api", "XY_API"),
+            ("max_units = 16", "c_api = 16", "untyped_const.c_api", "XY_C_API"),
+            ('product = "xy widget"', 'impl = "x"', "string_const.impl", "XY_IMPL"),
+            ("err_busy = ", "api = ", "typed_const.status.api", "XY_API"),
+        ):
+            with self.subTest(where=where):
+                self.assertEqual(
+                    emit_c.validate(load(mutate(FIXTURE, needle, replacement))),
+                    [f"header: {where}: constant {macro} is the header's own macro"],
+                )
+
+    def test_typed_enum_value_above_the_i32_maximum_is_not_an_enumerator(self) -> None:
+        u32 = mutate(FIXTURE, '_docstring = "call outcome"', '_base_type = "u32"')
+        self.assertEqual(
+            emit_c.validate(load(mutate(u32, "0x7fffffff", "0x80000000"))),
+            ["header: typed_const.status.err_other: value 0x80000000 exceeds 0x7fffffff; a C17 enumerator is an int"],
+        )
+        self.assertEqual(emit_c.validate(load(u32)), [])
+
+    def test_header_macros_are_the_ones_it_emits(self) -> None:
+        text = emit_c.header(load(KITCHEN_SINK), source_name="x")
+        for macro in emit_c.header_macros("xy"):
+            with self.subTest(macro=macro):
+                self.assertRegex(text, rf"(?m)^#\s*(define|if defined\()\s*{macro}\b")
+
     def test_other_languages_keywords_are_not_its_objection(self) -> None:
         self.assertEqual(emit_c.validate(load(mutate(FIXTURE, "bytes = ", "end = "))), [])
         self.assertEqual(emit_c.validate(load(mutate(FIXTURE, "bytes = ", "class = "))), [])
+        self.assertEqual(emit_c.validate(load(mutate(KITCHEN_SINK, "feat_one = 0", "feat_one = 31"))), [])
 
 
 if __name__ == "__main__":

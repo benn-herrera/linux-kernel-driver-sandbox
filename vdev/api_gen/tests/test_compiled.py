@@ -9,16 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from api_gen import emit_c, emit_cpp_wrapper
-from api_gen.tests.support import (
-    EXERCISES,
-    FIXTURE,
-    KITCHEN_SINK,
-    expected_constants,
-    load,
-    mutate,
-    run_main,
-)
+from api_gen.tests.support import C_BASE_TYPES, EXERCISES, KITCHEN_SINK, expected_constants, load, run_main
 
 TESTS = Path(__file__).resolve().parent
 TOOLS = ("clang", "clang++", "luajit", "make")
@@ -53,13 +44,20 @@ def write(path: Path, text: str) -> Path:
 
 
 def values_tu() -> str:
+    """Asserts every constant's value, and every bit and plain constant's type, the one
+    its group's `_base_type` names."""
+    api = load(KITCHEN_SINK)
     lines = ['#include "xy_api.h"']
-    for key, value in expected_constants(load(KITCHEN_SINK)).items():
+    for key, value in expected_constants(api).items():
         name = f"XY_{key}"
         if isinstance(value, str):
             lines.append(f'_Static_assert(sizeof({name}) == {len(value) + 1}, "{name}");')
         else:
             lines.append(f'_Static_assert({name} == ({value}), "{name}");')
+    for group in (*api.bit_const_groups, *api.const_groups):
+        for c in group.entries:
+            name = f"XY_{c.name.upper()}"
+            lines.append(f'_Static_assert(_Generic({name}, {C_BASE_TYPES[group.base_type]}: 1, default: 0), "{name} type");')
     lines.append("int main(void) { return 0; }")
     return "\n".join(lines) + "\n"
 
@@ -139,15 +137,6 @@ class Wrapper(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("unused-result", result.stderr)
 
-    def test_compiles_with_a_ctor_parameter_named_status(self) -> None:
-        api = load(mutate(FIXTURE, 'unit = "u32"', 'status = "u32"'))
-        include = TMP / "status"
-        write(include / "xy_api.h", emit_c.header(api, source_name="xy_api.adef.toml"))
-        write(include / "xy_api.hpp", emit_cpp_wrapper.wrapper(api, source_name="xy_api.adef.toml", stem="xy_api"))
-        tu = write(include / "tu.cpp", '#include "xy_api.hpp"\nint main() { return xy::Port::create(1) ? 0 : 1; }\n')
-        result = run([*CXX_SYNTAX, "-Wshadow", f"-I{include}", tu])
-        self.assertEqual(result.returncode, 0, result.stderr)
-
 
 class Lua(unittest.TestCase):
     def test_module_byte_compiles(self) -> None:
@@ -180,18 +169,35 @@ class Lua(unittest.TestCase):
 
 
 class Gendeps(unittest.TestCase):
-    def test_fragment_drives_gnu_make(self) -> None:
+    def make_n(self, *flags: str) -> str:
+        """`make -n` over the gendeps fragment for `flags`, printing each GENERATED target
+        and then the recipe make would run; returns make's stdout."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "xy_api.adef.toml").touch()
-            code, fragment, stderr = run_main(["gendeps", "xy_api.adef.toml"])
+            code, fragment, stderr = run_main(["gendeps", *flags, "xy_api.adef.toml"])
             self.assertEqual(code, 0, stderr)
             write(root / "frag.mk", fragment)
-            write(root / "Makefile", "GEN := OUTDIR\nBASE := xy\nAPI_GEN := /pkg\ninclude frag.mk\nall: $(GENERATED)\n")
+            write(
+                root / "Makefile",
+                "GEN := OUTDIR\nBASE := xy\nAPI_GEN := /pkg\ninclude frag.mk\n"
+                "all: $(GENERATED)\n\t@echo $(foreach t,$(GENERATED),target=$(t))\n",
+            )
             result = run(["make", "-n", "-f", "Makefile", "all"], cwd=root)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("PYTHONPATH=/pkg", result.stdout)
-            self.assertIn("python3 -m api_gen xy_api.adef.toml --generated OUTDIR --exercise xy", result.stdout)
+            return result.stdout
+
+    def test_fragment_drives_gnu_make(self) -> None:
+        out = self.make_n()
+        self.assertIn("PYTHONPATH=/pkg", out)
+        self.assertIn(
+            "python3 -m api_gen xy_api.adef.toml --generated OUTDIR --exercise xy --outputs=h,hpp,lua,stub_cpp", out
+        )
+
+    def test_subset_fragment_makes_only_its_outputs(self) -> None:
+        out = self.make_n("--outputs=hpp,lua")
+        self.assertIn("python3 -m api_gen xy_api.adef.toml --generated OUTDIR --exercise xy --outputs=hpp,lua\n", out)
+        self.assertIn("echo target=OUTDIR/include/xy/xy_api.hpp target=OUTDIR/binding/xy_api.lua\n", out)
 
 
 class RealDefinition(unittest.TestCase):

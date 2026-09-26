@@ -1,7 +1,9 @@
 """The C header, and the declaration text the Lua module hands to ffi.cdef."""
 
 from api_gen import naming
-from api_gen.model import Api, BitConst, Function, Group, OpaqueRef, Param, Struct, TypedConst
+from api_gen.model import (
+    Api, BitConst, EnumEntry, Function, Group, LiteralTerm, OpaqueRef, Param, Struct, Term, TypedConst,
+)
 
 C_KEYWORDS = frozenset(
     "auto break case char const continue default do double else enum extern float for goto if "
@@ -12,8 +14,25 @@ LABEL = "header"
 
 
 def validate(api: Api) -> list[str]:
-    """Every objection the header has to `api`: a name that is a C keyword."""
-    return [f"{LABEL}: {where}: '{name}' is a C keyword" for where, name in api.names() if name in C_KEYWORDS]
+    """Every objection the header has to `api`: a name that is a C keyword, a constant
+    whose C name is one of the header's own macros, and a typed enum value above the
+    `int32_t` maximum, which a C17 enumerator cannot hold."""
+    problems = [f"{where}: '{name}' is a C keyword" for where, name in api.names() if name in C_KEYWORDS]
+    macros = header_macros(api.namespace)
+    problems += [
+        f"{where}: constant {naming.const_name(api.namespace, name)} is the header's own macro"
+        for where, name in api.constant_names()
+        if naming.const_name(api.namespace, name) in macros
+    ]
+    enumerator_max = naming.BASE_C_TYPES["i32"].max_value
+    problems += [
+        f"typed_const.{t.name}.{e.name}: value 0x{e.value:x} exceeds 0x{enumerator_max:x}; "
+        "a C17 enumerator is an int"
+        for t in api.typed_consts
+        for e in t.entries
+        if e.value > enumerator_max
+    ]
+    return [f"{LABEL}: {p}" for p in problems]
 
 
 def c_type(api: Api, type_name: str) -> str:
@@ -24,20 +43,25 @@ def c_type(api: Api, type_name: str) -> str:
 
 
 def int_literal(value: int, fmt: str) -> str:
-    """An integer spelled for C and Lua alike: decimal, or lower-case unpadded hex."""
+    """An integer spelled as a Lua number, and as a C literal when non-negative: decimal,
+    or lower-case unpadded hex."""
     if fmt == "hex":
         return f"-0x{-value:x}" if value < 0 else f"0x{value:x}"
     return str(value)
 
 
-def _term_text(ns: str, term: str) -> str:
-    """A composed entry's list term as the header spells it: a literal exactly as the
-    definition wrote it, a name as its constant."""
-    try:
-        int(term, 0)
-    except ValueError:
-        return naming.const_name(ns, term)
-    return term
+def typed_literal(value: int, fmt: str, base_type: str) -> str:
+    """`value` as a C constant expression of `base_type`: the type's `<stdint.h>` macro
+    around a non-negative literal spelled per `fmt`, the sign outside the macro. A
+    negative literal would be the negation of a literal typed on its own, unsigned for
+    hex beyond the signed maximum and wider than the type for the decimal minimum; the
+    type's minimum, whose magnitude the type cannot hold, is the negated maximum less one."""
+    base = naming.BASE_C_TYPES[base_type]
+    if value >= 0:
+        return f"{base.const_macro}({int_literal(value, fmt)})"
+    if value == base.min_value:
+        return f"(-{base.const_macro}({int_literal(base.max_value, fmt)}) - 1)"
+    return f"(-{base.const_macro}({int_literal(-value, fmt)}))"
 
 
 def c_params(api: Api, param: Param) -> list[tuple[str, str]]:
@@ -65,6 +89,14 @@ def param_type(api: Api, param: Param) -> str:
     if param.ref is not None:
         return f"{base}*"
     return base
+
+
+def header_macros(namespace: str) -> frozenset[str]:
+    """Every macro the header defines or tests for itself, beside one per constant."""
+    return frozenset({
+        naming.c_api_macro(namespace), naming.api_macro(namespace),
+        naming.impl_macro(namespace), naming.version_const(namespace),
+    })
 
 
 def header(api: Api, *, source_name: str) -> str:
@@ -113,7 +145,7 @@ def cdef(api: Api) -> str:
     opaque and struct declarations, and function declarations with no visibility macro.
     """
     typedefs = [
-        f"typedef {naming.BASE_C_TYPES[t.base_type]} {naming.type_name(api.namespace, t.name)};\n"
+        f"typedef {naming.BASE_C_TYPES[t.base_type].c_type} {naming.type_name(api.namespace, t.name)};\n"
         for t in api.typed_consts
     ]
     return "\n".join(typedefs + [declarations(api, function_prefix="", constants=False)])
@@ -123,22 +155,10 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
     ns = api.namespace
     blocks = []
     if constants:
-        blocks.append(_version_enum(api))
-        blocks += [_comment_line(g.docstring) + _bit_enum(api, g) for g in api.bit_const_groups]
-        blocks += [
-            _comment_line(g.docstring)
-            + _anonymous_enum(
-                [
-                    (
-                        naming.const_name(ns, c.name),
-                        " + ".join(_term_text(ns, p) for p in c.parts) if c.parts else int_literal(c.value, c.format),
-                        c.docstring,
-                    )
-                    for c in g.entries
-                ]
-            )
-            for g in api.const_groups
-        ]
+        version = f"{naming.BASE_C_TYPES['u32'].const_macro}(0x{api.version_value():08x})"
+        blocks.append(_define(naming.version_const(ns), version, None))
+        blocks += [_constant_group(api, g, operator="|") for g in api.bit_const_groups]
+        blocks += [_constant_group(api, g, operator="+") for g in api.const_groups]
         blocks += [_typed_enum(api, t) for t in api.typed_consts]
         blocks += [
             _comment_line(g.docstring)
@@ -163,41 +183,47 @@ def _trailing(doc: str | None) -> str:
     return f" /* {doc} */" if doc else ""
 
 
-def _anonymous_enum(entries: list[tuple[str, str, str | None]]) -> str:
-    """`enum { ... };` from (name, value text, docstring) entries."""
-    lines = "".join(
-        f"  {name} = {value}{',' if i < len(entries) - 1 else ''}{_trailing(doc)}\n"
-        for i, (name, value, doc) in enumerate(entries)
-    )
-    return "enum {\n" + lines + "};\n"
+def _define(name: str, value: str, doc: str | None) -> str:
+    return f"#define {name} {value}{_trailing(doc)}\n"
 
 
-def _version_enum(api: Api) -> str:
-    shifts = (24, 16, 8, 0)
-    value = " | ".join(f"(0x{b:02x} << {s})" for b, s in zip(api.version, shifts))
-    return _anonymous_enum([(naming.version_const(api.namespace), value, None)])
-
-
-def _bit_enum(api: Api, group: Group[BitConst]) -> str:
+def _constant_group(api: Api, group: Group[BitConst] | Group[EnumEntry], *, operator: str) -> str:
+    """A bit or plain group as one `#define` per entry under its docstring, each typed by
+    the group's base type: a literal through its `<stdint.h>` macro, a single bit as that
+    macro's 1 shifted, a composed entry as its terms joined by `operator`."""
     ns = api.namespace
-    return _anonymous_enum(
-        [
-            (
-                naming.const_name(ns, c.name),
-                f"(1u << {c.bit})" if c.bit is not None else " | ".join(_term_text(ns, p) for p in c.parts),
-                c.docstring,
-            )
-            for c in group.entries
-        ]
-    )
+    base = naming.BASE_C_TYPES[group.base_type]
+    lines = []
+    for c in group.entries:
+        if c.parts:
+            value = _sum(api, c.parts, operator=operator, base_type=group.base_type)
+        elif isinstance(c, BitConst):
+            value = f"({base.const_macro}(1) << {c.bit})"
+        else:
+            value = typed_literal(c.value, c.format, group.base_type)
+        lines.append(_define(naming.const_name(ns, c.name), value, c.docstring))
+    return _comment_line(group.docstring) + "".join(lines)
+
+
+def _sum(api: Api, parts: tuple[Term, ...], *, operator: str, base_type: str) -> str:
+    """A composed entry's value, symbolic and parenthesised; every term is of `base_type`,
+    a literal through `typed_literal()`."""
+    return "(" + f" {operator} ".join(
+        typed_literal(p.value, p.format, base_type) if isinstance(p, LiteralTerm) else naming.const_name(api.namespace, p)
+        for p in parts
+    ) + ")"
 
 
 def _typed_enum(api: Api, typed: TypedConst) -> str:
     ns = api.namespace
     name = naming.type_name(ns, typed.name)
     entries = typed.entries
+
+    def value(e: EnumEntry) -> str:
+        return int_literal(e.value, e.format) if e.value >= 0 else typed_literal(e.value, e.format, typed.base_type)
+
     lines = "".join(
-        f"  {naming.const_name(ns, e.name)} = {int_literal(e.value, e.format)}"
+        f"  {naming.const_name(ns, e.name)} = {value(e)}"
         f"{',' if i < len(entries) - 1 else ''}{_trailing(e.docstring)}\n"
         for i, e in enumerate(entries)
     )

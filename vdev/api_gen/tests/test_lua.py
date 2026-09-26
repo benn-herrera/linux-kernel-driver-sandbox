@@ -226,36 +226,57 @@ class Optional(unittest.TestCase):
         self.assertNotIn("pstats ~= nil", self.text)
         self.assertIn('local pstats = ffi.new("xy_stats")\n', self.text)
 
-    def test_by_value_optional_is_refused(self) -> None:
-        text = mutate(KITCHEN_SINK, 'mode = "mode"', 'mode = { _type = "mode", _optional = true }')
+
+CONVERSION = re.compile(r"^function M\.(\w+)\(value\)$", re.M)
+
+
+def module(text: str) -> str:
+    return emit_lua.module(load(text), source_name="x", library="libxy.so")
+
+
+class ToString(unittest.TestCase):
+    def test_rendered_names(self) -> None:
+        self.assertEqual(CONVERSION.findall(module(FIXTURE)), ["feat_to_string", "limit_to_string", "status_to_string"])
         self.assertEqual(
-            emit_lua.validate(load(text)),
-            ["lua: function.configure.mode: optional needs a pointer parameter"],
+            CONVERSION.findall(module(KITCHEN_SINK)),
+            ["access_to_string", "limit_to_string", "status_to_string", "mode_to_string"],
         )
 
+    def test_only_groups_with_the_property_have_a_conversion(self) -> None:
+        text = FIXTURE
+        for needle in ('_to_string = "feat_to_string"\n', '_to_string = "limit_to_string"\n', '_to_string = "to_string"\n'):
+            text = mutate(text, needle, "")
+        text = module(text)
+        self.assertEqual(CONVERSION.findall(text), [])
+        self.assertNotIn("_names", text)
+        self.assertNotIn('require("bit")', text)
 
-class ErrorToStr(unittest.TestCase):
-    def test_no_error_to_str_with_two_return_enums(self) -> None:
-        text = mutate(FIXTURE, '[function.spend]\n_return = "status"', '[function.spend]\n_return = "other"')
-        text = mutate(text, "[opaque_ref.port]", "[typed_const.other]\nfine = 0\n\n[opaque_ref.port]")
-        text = emit_lua.module(load(text), source_name="x", library="libxy.so")
-        self.assertNotIn("error_to_str", text)
-        self.assertIn("function M.other_to_str(value)", text)
+    def test_bit_is_required_only_for_a_bit_group_conversion(self) -> None:
+        self.assertIn('local bit = require("bit")\n', module(FIXTURE))
+        self.assertNotIn('require("bit")', module(mutate(FIXTURE, '_to_string = "feat_to_string"\n', "")))
 
+    def test_every_conversion_answers_nil_first(self) -> None:
+        api = load(KITCHEN_SINK)
+        text = module(KITCHEN_SINK)
+        names = CONVERSION.findall(text)
+        with_to_string = [t for t in (*api.bit_const_groups, *api.const_groups, *api.typed_consts) if t.to_string]
+        self.assertEqual(len(names), len(with_to_string))
+        for name in names:
+            with self.subTest(name=name):
+                self.assertIn(f'function M.{name}(value)\n    if value == nil then return "nil" end\n', text)
 
-class ToStr(unittest.TestCase):
-    def test_nil_maps_to_the_zero_valued_entry(self) -> None:
-        text = emit_lua.module(load(KITCHEN_SINK), source_name="x", library="libxy.so")
-        self.assertIn(
-            'function M.status_to_str(value)\n    if value == nil then return "OK" end\n'
-            "    return status_names[value]\nend\n",
-            text,
-        )
+    def test_lookup_names_the_last_entry_of_a_shared_value_and_unknown(self) -> None:
+        text = module(KITCHEN_SINK)
+        self.assertIn('    [M.ERR_AGAIN] = "ERR_AGAIN",\n', text)
+        self.assertNotIn("[M.ERR_BUSY]", text)
+        self.assertIn('return status_to_string_names[value] or "UNKNOWN_STATUS"\n', text)
+        self.assertIn('return limit_to_string_names[value] or "UNKNOWN"\n', text)
 
-    def test_enum_with_no_zero_entry_has_no_nil_clause(self) -> None:
-        text = mutate(KITCHEN_SINK, "fine = 0", "fine = 5")
-        text = emit_lua.module(load(text), source_name="x", library="libxy.so")
-        self.assertIn("function M.mode_to_str(value)\n    return mode_names[value]\nend\n", text)
+    def test_bit_conversion_tests_only_single_bit_entries(self) -> None:
+        text = module(KITCHEN_SINK)
+        self.assertIn("    if bit.band(value, M.ACC_A) ~= 0 then\n", text)
+        self.assertIn("    if bit.band(value, M.ACC_B) ~= 0 then\n", text)
+        self.assertNotIn("M.ACC_AB)", text)
 
 
 class Validate(unittest.TestCase):
@@ -278,12 +299,20 @@ class Validate(unittest.TestCase):
         self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "int = ")), [])
         self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "class = ")), [])
 
-    def test_generated_locals_are_reserved_for_parameters_only(self) -> None:
-        self.assertEqual(
-            self.validate(mutate(FIXTURE, 'unit = "u32"', 'result = "u32"')),
-            ["lua: function.open_port.result: 'result' is a name the generated code binds"],
-        )
+    def test_generated_names_are_reserved_for_parameters_only(self) -> None:
+        for name in ("result", "type", "assert", "tonumber", "setmetatable", "string", "self", "h"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    self.validate(mutate(FIXTURE, 'unit = "u32"', f'{name} = "u32"')),
+                    [f"lua: function.open_port.{name}: '{name}' is a name the generated code uses"],
+                )
         self.assertEqual(self.validate(mutate(FIXTURE, "status", "result")), [])
+
+    def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
+        text = module(KITCHEN_SINK)
+        for name in emit_lua.GENERATED_NAMES:
+            with self.subTest(name=name):
+                self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
 
     def test_constant_and_class_name_clash(self) -> None:
         text = mutate(FIXTURE, "max_units = 16", "io = 16")
@@ -293,6 +322,39 @@ class Validate(unittest.TestCase):
     def test_member_collision(self) -> None:
         text = mutate(FIXTURE, 'generation = { _type = "u32", _ref = "out" }', 'send = { _type = "u32", _ref = "out" }')
         self.assertEqual(self.validate(text), ["lua: M.Port.send would be defined more than once"])
+
+    def test_bit_flag_beyond_signed_32_bits(self) -> None:
+        reason = "LuaJIT bit operations are signed 32-bit, so the flag would not equal its own masked result"
+        text = mutate(KITCHEN_SINK, "feat_one = 0", "feat_one = 31")
+        self.assertEqual(
+            self.validate(text),
+            [
+                f"lua: untyped_bit_const.feat_one: value 0x80000000 exceeds 0x7fffffff; {reason}",
+                f"lua: untyped_bit_const.feat_all: value 0x80000008 exceeds 0x7fffffff; {reason}",
+            ],
+        )
+        self.assertEqual(self.validate(mutate(KITCHEN_SINK, "feat_one = 0", "feat_one = 30")), [])
+
+    def test_conversion_name_is_keyword_checked(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, '_to_string = "to_string"', '_to_string = "end"')),
+            ["lua: typed_const.status._to_string: 'end' is a Lua keyword"],
+        )
+
+    def test_enum_conversion_is_prefixed_so_a_bare_name_does_not_collide(self) -> None:
+        self.assertEqual(self.validate(mutate(FIXTURE, '_to_string = "limit_to_string"', '_to_string = "to_string"')), [])
+
+    def test_conversion_collisions(self) -> None:
+        for name, message in (
+            ("status_to_string", "M.status_to_string would be both untyped_const[0]._to_string and typed_const.status._to_string"),
+            ("feat_to_string", "M.feat_to_string would be both untyped_bit_const[0]._to_string and untyped_const[0]._to_string"),
+            ("MAX_UNITS", "M.MAX_UNITS would be both a constant and untyped_const[0]._to_string"),
+            ("raw", "M.raw would be both untyped_const[0]._to_string and the raw function table"),
+            ("Port", "M.Port would be both untyped_const[0]._to_string and a class"),
+        ):
+            with self.subTest(name=name):
+                text = mutate(FIXTURE, '_to_string = "limit_to_string"', f'_to_string = "{name}"')
+                self.assertEqual(self.validate(text), [f"lua: {message}"])
 
 
 if __name__ == "__main__":

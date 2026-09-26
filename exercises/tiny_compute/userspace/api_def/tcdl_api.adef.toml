@@ -13,7 +13,8 @@ _library = "libtiny_compute.so"
 # except that the values are literals instead of shifts.
 [[untyped_bit_const]]
 _docstring = "device capability flags"
-_base_type = "i32"
+_base_type = "u32"
+_to_string = "cap_to_string"
 cap_compute = 0
 cap_dma_read = { _value = 1, _docstring = "can be present separately from write" }
 cap_dma_write = { _value = 2, _docstring = "can be present separately from read" }
@@ -25,6 +26,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
   [typed_const.result]
     _docstring = "all api functions return a result."
     _base_type = "i32"
+    _to_string = "to_string"
     ok = 0
     err_no_device = { _value = 1, _docstring = "requested device absent." }
     err_invalid_handle = 2

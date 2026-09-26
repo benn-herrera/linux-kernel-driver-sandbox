@@ -19,10 +19,12 @@ _library = "libxy.so"
 feat_a = 0
 feat_b = { _value = 3, _docstring = "the b feature" }
 feat_ab = { _value = ["feat_a", "feat_b"], _format = "hex" }
+_to_string = "feat_to_string"
 
 [[untyped_const]]
 max_units = 16
 magic = { _value = 0xbeef, _format = "hex", _docstring = "wire magic" }
+_to_string = "limit_to_string"
 
 [[string_const]]
 product = "xy widget"
@@ -30,6 +32,7 @@ vendor = { _value = "acme", _docstring = "who made it" }
 
 [typed_const.status]
 _docstring = "call outcome"
+_to_string = "to_string"
 ok = 0
 err_busy = { _value = 9, _docstring = "try later" }
 err_other = { _value = 0x7fffffff, _format = "hex" }
@@ -88,14 +91,26 @@ feat_lit = { _value = ["feat_a", "4"] }
 
 [[untyped_bit_const]]
 _base_type = "u32"
-feat_all = ["feat_ab"]
+feat_one = 0
+feat_all = ["feat_one", "8"]
+
+[[untyped_bit_const]]
+_docstring = "access flags"
+_to_string = "access_to_string"
+acc_a = 0
+acc_b = 1
+acc_ab = ["acc_a", "acc_b"]
 
 [[untyped_const]]
 _docstring = "limits"
+_to_string = "limit_to_string"
 max_units = 16
 extra = 4
 max_total = ["max_units", "extra"]
 neg = { _value = -5, _format = "hex" }
+low = -7
+floor = { _value = -2147483648, _format = "hex" }
+dip = ["max_units", "-3"]
 
 [[untyped_const]]
 _docstring = "wire values"
@@ -108,14 +123,17 @@ vendor = { _value = "acme", _docstring = "who made it" }
 
 [typed_const.status]
 _docstring = "call outcome"
+_to_string = "to_string"
 ok = 0
 err_busy = { _value = 9, _docstring = "try later" }
 err_other = { _value = 0x7fffffff, _format = "hex" }
 err_again = 9
 err_unsupported = 12
+err_floor = { _value = -2147483648, _format = "hex" }
 
 [typed_const.mode]
 _base_type = "u32"
+_to_string = "to_string"
 fine = 0
 slow = 1
 
@@ -225,6 +243,7 @@ feat_a = "XYD_FEAT_A"
 
 # SPEC.md's `_base_type` spellings, stated independently of naming.BASE_C_TYPES.
 C_BASE_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
+C_CONST_MACROS = {"i32": "INT32_C", "u32": "UINT32_C"}
 
 MINIMAL = '[_general]\n_namespace = "xy"\n_version = [0,0,0,1]\n'
 
@@ -247,10 +266,14 @@ def param_lists(text: str, pattern: str) -> dict[str, str]:
 
 
 def run_main(argv: list[str]) -> tuple[int, str, str]:
-    """Run the CLI with `argv` (no program name); return (exit code, stdout, stderr)."""
+    """Run the CLI with `argv` (no program name); return (exit code, stdout, stderr). A
+    usage error exits through argparse's `SystemExit`, whose code is returned the same."""
     stdout, stderr = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        code = api_gen_main.main(argv)
+        try:
+            code = api_gen_main.main(argv)
+        except SystemExit as e:
+            code = e.code
     return code, stdout.getvalue(), stderr.getvalue()
 
 

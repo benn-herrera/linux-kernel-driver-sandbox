@@ -19,10 +19,19 @@ local function checks()
         end
     end
 
-    assert(M.status_to_str(9) == "ERR_AGAIN")
-    assert(M.error_to_str == M.status_to_str)
-    assert(M.error_to_str(nil) == "OK")
-    assert(M.mode_to_str(1) == "SLOW")
+    assert(M.status_to_string(9) == "ERR_AGAIN")
+    assert(M.status_to_string(12345) == "UNKNOWN_STATUS")
+    assert(M.mode_to_string(1) == "SLOW")
+    assert(M.access_to_string(3) == "ACC_A|ACC_B")
+    assert(M.access_to_string(1) == "ACC_A")
+    assert(M.access_to_string(0) == "NONE")
+    assert(M.access_to_string(9) == "ACC_A|0x8")
+    assert(M.limit_to_string(16) == "MAX_UNITS")
+    assert(M.limit_to_string(M.NEG) == "NEG")
+    assert(M.limit_to_string(99) == "UNKNOWN")
+    for _, convert in ipairs({M.status_to_string, M.mode_to_string, M.access_to_string, M.limit_to_string}) do
+        assert(convert(nil) == "nil")
+    end
     assert(M.Token == nil)
     -- FFI functions are cdata, not Lua functions: call them
     assert(M.raw.spend(nil) == M.OK)
@@ -41,7 +50,7 @@ local function checks()
     assert(p.pwrap.n == 11)
 
     assert(p:send("abcd") == true)
-    assert(M.error_to_str(select(2, p:send("abcd"))) == "OK")
+    assert(M.status_to_string(select(2, p:send("abcd"))) == "nil")
     assert(select(2, p:send("abc")) == M.ERR_BUSY)
     assert(p:recv(5) == "rr\0rr")
     local no_token = ffi.new("xy_token")

@@ -53,7 +53,7 @@ Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 - After changing the generator or `cpp.mk` flags, run `userspace-clean-vdev`.
 - Generated files are build products under `out/`, never written into the source tree.
 - The ioctl header under `driver/` is hand-written UAPI; never generate it.
-- Pin every constant the library relays from the driver in `[driver_data.const_pins]`; a relayed constant without a pin is a review finding.
+- Pin every constant the library relays from the driver in `[_driver_data.const_pins]`; a relayed constant without a pin is a review finding.
 
 ## Style and editor
 
