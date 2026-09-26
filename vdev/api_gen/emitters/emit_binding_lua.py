@@ -191,12 +191,22 @@ def _doc_lines(fn: Function) -> str:
     return "".join(f"-- {line}\n" for doc in fn.docs() for line in doc.splitlines())
 
 
+def _unboxed(api: Api, type_name: str) -> str:
+    """The type a Lua caller passes and receives for `type_name`: a boxed scalar's base
+    type, else the type itself."""
+    return next((b.base_type for b in api.boxed_scalars if b.name == type_name), type_name)
+
+
 def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> str:
     """Enum values and builtins narrower than 64 bits become Lua numbers, a struct a
     table of its fields converted the same way (nested structs included); 64-bit and
-    opaque values stay cdata. `indent` is the indentation of the line the expression
-    starts on."""
+    opaque values stay cdata. A boxed scalar, reached only as a struct field here, is a
+    copy of its FFI struct: indexing a struct field of struct type yields a reference into
+    the parent, which the GC does not keep alive. `indent` is the indentation of the line
+    the expression starts on."""
     kind = api.kind(type_name)
+    if kind == "boxed":
+        return f'ffi.new("{c.c_type(api, type_name)}", {expr})'
     if kind == "struct":
         fields = next(s for s in api.structs if s.name == type_name).fields
         inner = indent + "    "
@@ -209,10 +219,10 @@ def _lua_value(api: Api, type_name: str, expr: str, *, indent: str = "    ") -> 
 
 
 def _box(api: Api, type_name: str) -> str:
-    """The ffi.new type for a value the C side reaches through a pointer: a struct
-    itself, anything else a one-element array."""
+    """The ffi.new type for a value the C side reaches through a pointer: a struct or
+    boxed scalar itself, anything else a one-element array."""
     c_type = c.c_type(api, type_name)
-    return c_type if api.kind(type_name) == "struct" else f"{c_type}[1]"
+    return c_type if api.kind(type_name) in ("boxed", "struct") else f"{c_type}[1]"
 
 
 def _alloc(api: Api, p: Param) -> str:
@@ -232,8 +242,13 @@ def _alloc(api: Api, p: Param) -> str:
 def _read_back(api: Api, p: Param) -> str:
     """The Lua value of what the C call wrote through a reference parameter. An
     `_optional` `inout` parameter reads back `nil` when the caller's own value was nil,
-    since `_alloc` never built a pointer for the call to write through."""
-    value = _lua_value(api, p.type, p.name if api.kind(p.type) == "struct" else f"{p.name}[0]")
+    since `_alloc` never built a pointer for the call to write through. A boxed scalar
+    reads back its base type's value from `.value`."""
+    kind = api.kind(p.type)
+    if kind == "boxed":
+        value = _lua_value(api, _unboxed(api, p.type), f"{p.name}.value")
+    else:
+        value = _lua_value(api, p.type, p.name if kind == "struct" else f"{p.name}[0]")
     if p.optional and p.ref != "out":
         return f"({p.name} ~= nil and {value} or nil)"
     return value
@@ -254,7 +269,8 @@ def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
     buffer (a string, or for an `out` count a number), a struct (a table or its own
     cdata type), a by-value opaque (its own cdata type, never bare `cdata`), a 64-bit
     builtin (a number or 64-bit cdata, since a literal like `48ULL` may be `uint64_t`
-    or `int64_t`), or a plain number (every narrower builtin and every enum). An
+    or `int64_t`), or a plain number (every narrower builtin and every enum); a boxed
+    scalar is checked as its base type, which is what the caller passes. An
     `_optional` parameter's condition also admits `nil`, and its expected text gains
     an " or nil" suffix; the loader refuses `_optional` on a by-value parameter and on a
     `memory` one other than `_ref = "in"`, so neither reaches here."""
@@ -272,7 +288,7 @@ def _type_check(api: Api, param: Param, name: str) -> tuple[str, str]:
     elif kind == "opaque":
         c_type = c.c_type(api, param.type)
         condition, expected = f'ffi.istype("{c_type}", {name})', f"a {c_type}"
-    elif param.type in _CDATA_INTEGERS:
+    elif _unboxed(api, param.type) in _CDATA_INTEGERS:
         condition = f'type({name}) == "number" or ffi.istype("uint64_t", {name}) or ffi.istype("int64_t", {name})'
         expected = "a number or 64-bit cdata"
     else:
@@ -357,7 +373,8 @@ def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str],
     parameter is a Lua string, never cdata the consumer sees: `in` passes the caller's
     string straight through; `out` and `inout` allocate a buffer and return its bytes
     as a string, exactly as a scalar `out`/`inout` is returned. Every other `out` is
-    allocated and returned rather than taken."""
+    allocated and returned rather than taken. A boxed scalar by value arrives as its base
+    type's value and is boxed for the call."""
     args, call, allocs, rets = [], [], [], []
     for p in params:
         if p.type == "memory":
@@ -373,6 +390,8 @@ def _marshal(api: Api, params: tuple[Param, ...]) -> tuple[list[str], list[str],
         call.append(p.name)
         if p.ref != "out":
             args.append(p.name)
+        if p.ref is None and api.kind(p.type) == "boxed":
+            allocs.append(f'    local {p.name} = ffi.new("{c.c_type(api, p.type)}", {p.name})\n')
         if p.ref is not None:
             allocs.append(_alloc(api, p))
             if p.ref != "in":

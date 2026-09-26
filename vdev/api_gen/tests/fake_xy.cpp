@@ -137,3 +137,9 @@ XY_API xy_status xy_probe(xy_port hport, xy_mode* pmode, const void* payload, ui
   const bool payload_ok = payload == nullptr ? payload_count == 0 : payload_count == 2;
   return payload_ok && (limit == nullptr || *limit == 3) ? XY_OK : XY_ERR_BUSY;
 }
+
+XY_API xy_status xy_echo_offset(xy_port hport, xy_offset pos, xy_offset* ppos) {
+  (void)hport;
+  *ppos = pos;
+  return XY_OK;
+}

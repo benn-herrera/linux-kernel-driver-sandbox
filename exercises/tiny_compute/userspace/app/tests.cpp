@@ -86,14 +86,14 @@ bool test_dma_round_trip(tcdl::Device& d) {
     pattern[e - i] = uint16_t(i);
   }
 
-  auto tr = d.dma_to_device(0x0ul, pattern.data(), pattern.size() * sizeof(pattern[0]));
+  auto tr = d.dma_to_device(tcdl::DmaOffset{0x0ul}, pattern.data(), pattern.size() * sizeof(pattern[0]));
   if (tr != tcdl::Result::Ok) {
     fprintf(stderr, "DMA to device failed with error %s(%u).\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
 
   auto readback = vector<uint16_t>(pattern.size(), 0xffff);
-  tr = d.dma_from_device(0x0ul, readback.data(), readback.size() * sizeof(readback[0]));
+  tr = d.dma_from_device(tcdl::DmaOffset{0x0ul}, readback.data(), readback.size() * sizeof(readback[0]));
   if (tr != tcdl::Result::Ok) {
     fprintf(stderr, "DMA from device failed with error %s(%d).\n", tcdl::to_string(tr), unsigned(tr));
     return false;

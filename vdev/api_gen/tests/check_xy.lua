@@ -118,6 +118,14 @@ local function checks()
     assert(type_error("payload must be a string or nil", p.probe, p, 42))
     assert(type_error("limit must be a number or nil", p.probe, p, nil, "3"))
 
+    -- a boxed scalar: the caller passes and receives its base type's value, never the box
+    assert(select("#", p:echo_offset(2 ^ 40)) == 2)
+    local moved_to = p:echo_offset(2 ^ 40)
+    assert(moved_to == 1099511627776ULL)
+    assert(type(moved_to) == "cdata")
+    assert(p:echo_offset(48ULL) == 48ULL)
+    assert(type_error("pos must be a number or 64-bit cdata", p.echo_offset, p, "48"))
+
     assert(p:destroy_port() == true)
     local again, again_err = p:destroy_port()
     assert(again == nil and again_err == M.ERR_OTHER)

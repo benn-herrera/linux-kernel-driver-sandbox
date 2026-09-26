@@ -33,6 +33,7 @@ class Stub(unittest.TestCase):
         definitions = param_lists(stub(KITCHEN_SINK), r"XY_API xy_status ")
         self.assertEqual(list(definitions), [f.name for f in api.functions])
         self.assertEqual(definitions, declared)
+        self.assertEqual(definitions["echo_offset"], "xy_port hport, xy_offset pos, xy_offset* ppos")
 
     def test_every_body_voids_each_parameter_then_returns_default_initialized(self) -> None:
         api = load(KITCHEN_SINK)

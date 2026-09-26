@@ -22,17 +22,19 @@ _LITERAL_TERM = re.compile(r"(-?)(?:0x([0-9a-fA-F]+)|([0-9]+))\Z")
 FORMATS = ("dec", "hex")
 REFS = ("in", "out", "inout")
 TABLES = frozenset(
-    {"_general", "untyped_bit_const", "untyped_const", "string_const", "typed_const", "opaque_ref", "struct", "function",
-     "_driver_data"}
+    {"_general", "untyped_bit_const", "untyped_const", "string_const", "typed_const", "opaque_ref", "boxed_scalar",
+     "struct", "function", "_driver_data"}
 )
 GROUP_PROPERTIES = frozenset({"_docstring", "_base_type", "_to_string"})
 STRING_GROUP_PROPERTIES = frozenset({"_docstring"})  # a string constant has no fixed-width representation
 OPAQUE_PROPERTIES = frozenset({"_docstring", "_class", "_ctor", "_dtor"})
+BOXED_PROPERTIES = frozenset({"_docstring", "_base_type"})
 CONST_ATTRIBUTES = frozenset({"_value", "_docstring", "_format"})
 FIELD_ATTRIBUTES = frozenset({"_type", "_docstring"})
 PARAM_ATTRIBUTES = frozenset({"_type", "_ref", "_count", "_optional", "_docstring"})
 COUNT_TYPES = ("u8", "u16", "u32", "u64")
 FLOAT_TYPES = ("f32", "f64")
+INTEGER_TYPES = tuple(t for t in naming.BUILTIN_C_TYPES if t not in FLOAT_TYPES)  # a boxed scalar's _base_type
 
 
 class DefinitionError(Exception):
@@ -117,6 +119,11 @@ class OpaqueRef(Node):
 
 
 @dataclass(frozen=True, kw_only=True)
+class BoxedScalar(Node):
+    base_type: str  # one of INTEGER_TYPES
+
+
+@dataclass(frozen=True, kw_only=True)
 class Field(Node):
     type: str
 
@@ -175,6 +182,7 @@ class Api:
     string_const_groups: tuple[Group[StringConst], ...]
     typed_consts: tuple[TypedConst, ...]
     opaque_refs: tuple[OpaqueRef, ...]
+    boxed_scalars: tuple[BoxedScalar, ...]
     structs: tuple[Struct, ...]
     functions: tuple[Function, ...]
     driver_data: DriverData | None
@@ -232,13 +240,15 @@ class Api:
         return next(e for e in returns.entries if e.value == 0)
 
     def kind(self, type_name: str) -> str:
-        """One of "builtin", "enum", "opaque", "struct" for a validated type name."""
+        """One of "builtin", "enum", "opaque", "boxed", "struct" for a validated type name."""
         if type_name in BUILTIN_TYPES:
             return "builtin"
         if any(t.name == type_name for t in self.typed_consts):
             return "enum"
         if any(o.name == type_name for o in self.opaque_refs):
             return "opaque"
+        if any(b.name == type_name for b in self.boxed_scalars):
+            return "boxed"
         if any(s.name == type_name for s in self.structs):
             return "struct"
         raise KeyError(type_name)
@@ -258,6 +268,7 @@ class Api:
                 names.append((f"typed_const.{t.name}._to_string", t.to_string))
         for o in self.opaque_refs:
             names += [(f"opaque_ref.{o.name}", o.name), (f"opaque_ref.{o.name}._class", o.class_name)]
+        names += [(f"boxed_scalar.{b.name}", b.name) for b in self.boxed_scalars]
         for s in self.structs:
             names.append((f"struct.{s.name}", s.name))
             names += [(f"struct.{s.name}.{f.name}", f.name) for f in s.fields]
@@ -332,12 +343,16 @@ def from_dict(data: Mapping) -> Api:
     opaque_refs = [
         _opaque_ref(name, body) for name, body in _named_tables(_table(data, "opaque_ref"), "opaque_ref")
     ]
+    boxed_scalars = tuple(
+        _boxed_scalar(name, body) for name, body in _named_tables(_table(data, "boxed_scalar"), "boxed_scalar")
+    )
     struct_tables = _named_tables(_table(data, "struct"), "struct")
 
     type_names: dict[str, str] = {}
     for category, names in (
         ("typed_const", [t.name for t in typed_consts]),
         ("opaque_ref", [o.name for o in opaque_refs]),
+        ("boxed_scalar", [b.name for b in boxed_scalars]),
         ("struct", [name for name, _ in struct_tables]),
     ):
         for name in names:
@@ -369,6 +384,7 @@ def from_dict(data: Mapping) -> Api:
         string_const_groups=string_const_groups,
         typed_consts=typed_consts,
         opaque_refs=tuple(opaque_refs),
+        boxed_scalars=boxed_scalars,
         structs=tuple(structs),
         functions=functions,
         driver_data=_driver_data(data.get("_driver_data"), {c.name for g in bit_const_groups for c in g.entries}),
@@ -679,6 +695,17 @@ def _opaque_ref(name: str, body: dict) -> OpaqueRef:
     )
 
 
+def _boxed_scalar(name: str, body: dict) -> BoxedScalar:
+    where = f"boxed_scalar.{name}"
+    props, members = _split(body, BOXED_PROPERTIES, where)
+    if members:
+        raise DefinitionError(f"{where}: '{members[0][0]}': a boxed_scalar has no members; its properties begin with _")
+    base_type = props.get("_base_type")
+    if base_type not in INTEGER_TYPES:
+        raise DefinitionError(f"{where}._base_type is required, one of {', '.join(INTEGER_TYPES)}")
+    return BoxedScalar(name=name, docstring=_docstring(props.get("_docstring"), f"{where}._docstring"), base_type=base_type)
+
+
 def _check_lifecycles(opaque_refs: list[OpaqueRef], functions: Mapping[str, Function]) -> None:
     for o in opaque_refs:
         where = f"opaque_ref.{o.name}"
@@ -824,6 +851,7 @@ def _check_unique_identifiers(api: Api) -> None:
     for o in api.opaque_refs:
         where = f"opaque_ref.{o.name}"
         idents += [(naming.type_name(ns, o.name), where), (naming.opaque_struct(ns, o.name), where)]
+    idents += [(naming.type_name(ns, b.name), f"boxed_scalar.{b.name}") for b in api.boxed_scalars]
     idents += [(naming.type_name(ns, s.name), f"struct.{s.name}") for s in api.structs]
     idents += [(naming.function_name(ns, f.name), f"function.{f.name}") for f in api.functions]
     repeated = duplicates(idents)

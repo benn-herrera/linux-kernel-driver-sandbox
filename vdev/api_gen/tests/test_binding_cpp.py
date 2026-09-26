@@ -45,6 +45,24 @@ class Wrapper(unittest.TestCase):
         self.assertIn("    return Status(xy_send(handle_, buf, buf_count));\n", text)
 
 
+class BoxedScalar(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = wrapper(KITCHEN_SINK)
+
+    def test_lifted_into_the_namespace_as_an_alias_before_the_structs(self) -> None:
+        self.assertIn("\nusing Offset = xy_offset;\nusing Stats = xy_stats;\n", self.text)
+
+    def test_methods_take_it_as_the_c_signature_does(self) -> None:
+        self.assertIn("  Status echo_offset(Offset pos, Offset& ppos) {\n", self.text)
+        self.assertIn("    return Status(xy_echo_offset(handle_, pos, &ppos));\n", self.text)
+        text = wrapper(KITCHEN_SINK + (
+            '\n[function.move]\n_return = "status"\nhport = "port"\n'
+            'src = { _type = "offset", _ref = "in" }\ndst = { _type = "offset", _ref = "inout", _optional = true }\n'
+        ))
+        self.assertIn("  Status move(const Offset& src, Offset* dst = nullptr) {\n", text)
+        self.assertIn("    return Status(xy_move(handle_, &src, dst));\n", text)
+
+
 class OptionalParam(unittest.TestCase):
     def setUp(self) -> None:
         self.text = wrapper(KITCHEN_SINK)
@@ -147,10 +165,11 @@ class Validate(unittest.TestCase):
                 self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
 
     def test_rendered_names_are_refused_as_parameters(self) -> None:
-        for name in ("xy_send", "xy_port", "xy_status", "Port", "Stats", "Status", "uint32_t"):
+        boxed = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+        for name in ("xy_send", "xy_port", "xy_status", "Port", "Stats", "Status", "uint32_t", "xy_offset", "Offset"):
             with self.subTest(name=name):
                 self.assertEqual(
-                    self.validate(mutate(FIXTURE, 'unit = "u32"', f'{name} = "u32"')),
+                    self.validate(mutate(boxed, 'unit = "u32"', f'{name} = "u32"')),
                     [f"wrapper: function.open_port.{name}: '{name}' is a name the generated code uses"],
                 )
 
@@ -192,6 +211,13 @@ class Validate(unittest.TestCase):
         text = mutate(FIXTURE, "[[untyped_const]]\n", "[[untyped_const]]\nx = 1\n") + '\n[struct.x]\nv = "u32"\n'
         self.assertEqual(
             self.validate(text), ["wrapper: namespace xy: X would be defined more than once, by untyped_const.x and struct.x"]
+        )
+
+    def test_boxed_scalar_alias_is_in_the_namespace_list(self) -> None:
+        text = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n\n[struct.Offset]\nv = "u32"\n'
+        self.assertEqual(
+            self.validate(text),
+            ["wrapper: namespace xy: Offset would be defined more than once, by boxed_scalar.offset and struct.Offset"],
         )
 
     def test_enums_may_share_a_conversion_name(self) -> None:

@@ -3,7 +3,8 @@
 // out parameters; 3 send; 4 recv; 5 configure; 6 stats_of; 7 move construction; 8 move assignment;
 // 9 release; 10 destructors freed the slots; 11 PRODUCT; 12 DataLink::create; 13 bump; 14 seek and tune;
 // 15 annotate (an _optional struct in parameter); 16 the _to_string conversions; 17 probe (an enum out
-// parameter as the C typedef, _optional memory in, scalar in, inout and out parameters).
+// parameter as the C typedef, _optional memory in, scalar in, inout and out parameters); 18 echo_offset (a
+// boxed scalar by value and out).
 #include "xy_api.hpp"
 
 #include <cstring>
@@ -17,6 +18,8 @@ static_assert(std::is_nothrow_move_constructible_v<xy::Port>);
 static_assert(std::is_nothrow_move_assignable_v<xy::Port>);
 static_assert(std::is_same_v<xy::Stats, xy_stats>);
 static_assert(std::is_same_v<xy::Wrap, xy_wrap>);
+static_assert(std::is_same_v<xy::Offset, xy_offset>);
+static_assert(!std::is_convertible_v<uint64_t, xy::Offset>);
 static_assert(std::is_same_v<std::underlying_type_t<xy::Status>, int32_t>);
 static_assert(std::is_same_v<std::underlying_type_t<xy::Mode>, uint32_t>);
 static_assert(std::is_same_v<decltype(xy::API_VERSION), const uint32_t>);
@@ -98,6 +101,11 @@ int main() {
       port.probe(mode, "ab", 2, &probe_limit, &probe_level, &peek) != xy::Status::Ok || probe_level != 5 ||
       peek != 9 || port.probe(mode, "abc", 3) != xy::Status::ErrBusy) {
     return 17;
+  }
+
+  xy::Offset moved_to{};
+  if (port.echo_offset(xy::Offset{1ULL << 40}, moved_to) != xy::Status::Ok || moved_to.value != 1ULL << 40) {
+    return 18;
   }
 
   xy::Port moved = std::move(port);

@@ -34,7 +34,7 @@ class Cdef(unittest.TestCase):
         )
         for t in self.api.typed_consts:
             self.assertIn(f"typedef {C_BASE_TYPES[t.base_type]} xy_{t.name};", cdef)
-        for decl in ("struct xy_port_opaque;", "struct xy_link_opaque;", "struct xy_stats {", "struct xy_wrap {"):
+        for decl in ("struct xy_port_opaque;", "struct xy_link_opaque;", "struct xy_offset {", "struct xy_stats {", "struct xy_wrap {"):
             self.assertIn(decl, cdef)
 
     def test_raw_lists_every_function(self) -> None:
@@ -113,7 +113,8 @@ class Classes(unittest.TestCase):
                 c_type = naming.type_name(self.api.namespace, p.type)
                 base = f"a table or {c_type}" if kind == "struct" else f"a {c_type}"
             else:
-                base = "a number or 64-bit cdata" if p.type in ("i64", "u64") else "a number"
+                scalar = next((b.base_type for b in self.api.boxed_scalars if b.name == p.type), p.type)
+                base = "a number or 64-bit cdata" if scalar in ("i64", "u64") else "a number"
             return f"{base} or nil" if p.optional else base
 
         def visible_args(params: tuple[model.Param, ...]) -> list[model.Param]:
@@ -209,6 +210,36 @@ class Classes(unittest.TestCase):
         lua = emit_binding_lua.emit(load(text), source_name="x", stem="xy_api", library="libxy.so")
         condition = 'type(limit) == "number" or ffi.istype("uint64_t", limit) or ffi.istype("int64_t", limit)'
         self.assertIn(f'assert({condition}, "Port.configure: limit must be a number or 64-bit cdata")', lua)
+
+
+class BoxedScalar(unittest.TestCase):
+    def setUp(self) -> None:
+        self.text = module(KITCHEN_SINK)
+
+    def test_a_method_boxes_the_callers_number(self) -> None:
+        self.assertIn("function M.Port.echo_offset(self, pos)\n", self.text)
+        self.assertIn('    local pos = ffi.new("xy_offset", pos)\n', self.text)
+        self.assertIn("lib.xy_echo_offset(self._handle, pos, ppos)", self.text)
+
+    def test_an_out_returns_the_unboxed_value(self) -> None:
+        self.assertIn('    local ppos = ffi.new("xy_offset")\n', self.text)
+        self.assertIn("    return ppos.value, nil\n", self.text)
+        narrow = module(mutate(KITCHEN_SINK, '_base_type = "u64"', '_base_type = "u32"'))
+        self.assertIn("    return tonumber(ppos.value), nil\n", narrow)
+        self.assertIn('assert(type(pos) == "number", "Port.echo_offset: pos must be a number")', narrow)
+
+    def test_a_reference_boxes_into_the_struct_not_an_array(self) -> None:
+        text = module(KITCHEN_SINK + (
+            '\n[function.move]\n_return = "status"\nhport = "port"\n'
+            'src = { _type = "offset", _ref = "in" }\ndst = { _type = "offset", _ref = "inout", _optional = true }\n'
+        ))
+        self.assertIn('    local src = ffi.new("xy_offset", src)\n', text)
+        self.assertIn('    local dst = dst ~= nil and ffi.new("xy_offset", dst) or nil\n', text)
+        self.assertIn("    return (dst ~= nil and dst.value or nil), nil\n", text)
+
+    def test_a_struct_field_stays_a_copy_of_the_ffi_struct(self) -> None:
+        text = module(mutate(KITCHEN_SINK, "[struct.wrap.n]", 'at = "offset"\n[struct.wrap.n]'))
+        self.assertIn('        at = ffi.new("xy_offset", pwrap.at),\n', text)
 
 
 class Optional(unittest.TestCase):

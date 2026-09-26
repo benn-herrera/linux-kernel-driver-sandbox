@@ -64,6 +64,11 @@ class ModelErrors(unittest.TestCase):
         ):
             with self.subTest(needle=needle):
                 self.assertEqual(load(mutate(FIXTURE, needle, spelled_out)), api)
+        self.assertEqual(
+            load(mutate(KITCHEN_SINK, '[boxed_scalar.offset]\n_docstring = "a device offset"\n_base_type = "u64"',
+                        '[boxed_scalar]\noffset = { _docstring = "a device offset", _base_type = "u64" }')),
+            load(KITCHEN_SINK),
+        )
 
     def test_ref_values(self) -> None:
         self.assert_error(mutate(FIXTURE, '_ref = "in"', '_ref = "both"'), "function.send.buf._ref must be one of in, out, inout")
@@ -446,6 +451,65 @@ class ModelErrors(unittest.TestCase):
         load(mutate(KITCHEN_SINK, '_class = "data_link"', '_class = "port"'))
 
 
+BOXED = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+
+
+class BoxedScalar(unittest.TestCase):
+    def assert_error(self, text: str, fragment: str) -> None:
+        with self.assertRaises(model.DefinitionError) as caught:
+            load(text)
+        self.assertIn(fragment, str(caught.exception))
+
+    def test_loads_as_a_named_type_of_kind_boxed(self) -> None:
+        api = load(KITCHEN_SINK)
+        self.assertEqual(api.boxed_scalars, (model.BoxedScalar(name="offset", docstring="a device offset", base_type="u64"),))
+        self.assertEqual(api.kind("offset"), "boxed")
+        self.assertIn(("boxed_scalar.offset", "offset"), api.names())
+        fn = next(f for f in api.functions if f.name == "echo_offset")
+        self.assertEqual([(p.type, p.ref) for p in fn.params[1:]], [("offset", None), ("offset", "out")])
+
+    def test_usable_with_any_ref_optional_as_a_scalar_and_as_a_struct_field(self) -> None:
+        text = BOXED + (
+            '\n[struct.span]\nat = "offset"\n'
+            '\n[function.move]\n_return = "status"\nsrc = { _type = "offset", _ref = "in", _optional = true }\n'
+            'dst = { _type = "offset", _ref = "inout" }\n'
+        )
+        api = load(text)
+        self.assertEqual(next(s for s in api.structs if s.name == "span").fields[0].type, "offset")
+        move = next(f for f in api.functions if f.name == "move")
+        self.assertEqual([(p.ref, p.optional) for p in move.params], [("in", True), ("inout", False)])
+
+    def test_base_type_is_any_integer_builtin_and_required(self) -> None:
+        for base_type in ("i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"):
+            with self.subTest(base_type=base_type):
+                api = load(mutate(BOXED, '_base_type = "u64"', f'_base_type = "{base_type}"'))
+                self.assertEqual(api.boxed_scalars[0].base_type, base_type)
+        message = "boxed_scalar.offset._base_type is required, one of i8, u8, i16, u16, i32, u32, i64, u64"
+        for value in ('"f64"', '"memory"', '"status"', "8", '["u64"]'):
+            with self.subTest(value=value):
+                self.assert_error(mutate(BOXED, '_base_type = "u64"', f"_base_type = {value}"), message)
+        self.assert_error(mutate(BOXED, '_base_type = "u64"', '_docstring = "no base"'), message)
+
+    def test_has_only_properties(self) -> None:
+        self.assert_error(mutate(BOXED, '_base_type = "u64"', '_base_type = "u64"\nvalue = "u64"'),
+                          "boxed_scalar.offset: 'value': a boxed_scalar has no members; its properties begin with _")
+        self.assert_error(mutate(BOXED, '_base_type = "u64"', '_base_type = "u64"\n_class = "x"'),
+                          "boxed_scalar.offset: unknown key(s) _class")
+
+    def test_refused_as_return_and_with_count(self) -> None:
+        self.assert_error(BOXED + '\n[function.where]\n_return = "offset"\n', "function.where._return: unknown typed_const 'offset'")
+        self.assert_error(BOXED + '\n[function.where]\n_return = "status"\nat = { _type = "offset", _ref = "in", _count = "u32" }\n',
+                          "function.where.at._count: only a 'memory' parameter has a count")
+
+    def test_shares_the_type_namespace_and_the_c_identifiers(self) -> None:
+        self.assert_error(BOXED + '\n[struct.offset]\nx = "u32"\n', "struct.offset: type name already defined in boxed_scalar")
+        self.assert_error(mutate(BOXED, "[boxed_scalar.offset]", "[boxed_scalar.port]"),
+                          "boxed_scalar.port: type name already defined in opaque_ref")
+        self.assert_error(mutate(BOXED, "[boxed_scalar.offset]", "[boxed_scalar.u64]"), "boxed_scalar.u64: shadows builtin type u64")
+        self.assert_error(BOXED + '\n[function.offset]\n_return = "status"\n',
+                          "function.offset: C identifier xy_offset already defined by boxed_scalar.offset")
+
+
 class Naming(unittest.TestCase):
     def test_every_spec_naming_row(self) -> None:
         self.assertEqual(naming.const_name("tcdl", "cap_compute"), "TCDL_CAP_COMPUTE")
@@ -560,7 +624,8 @@ class Shape(unittest.TestCase):
             ],
             [
                 ("port", "open_port", "pport", ["pstats", "generation", "pwrap"],
-                 ["send", "recv", "configure", "stats_of", "bump", "annotate", "seek", "tune", "probe"], "destroy_port"),
+                 ["send", "recv", "configure", "stats_of", "bump", "annotate", "seek", "tune", "probe", "echo_offset"],
+                 "destroy_port"),
                 ("link", "open_link", "plink", [], [], None),
             ],
         )

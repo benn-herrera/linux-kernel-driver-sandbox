@@ -55,6 +55,9 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     dma_alignment = { _type = "u32", _docstring = "dma memory i/o must be aligned to and multiples of this value" }
     device_caps = { _type = "u32", _docstring = "bitwise or of cap bit flags" }
 
+[boxed_scalar]
+  dma_offset = { _base_type = "u64", _docstring = "source or dest offset into device buffer." }
+
 [function]
   [function.create_device]
     _docstring = "multiple devices and multiple access to single device supported. info out param is optional."
@@ -80,13 +83,13 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     _docstring = "be sure to check offset and size against dma_alignment"
     _return = "result"
     htcd = "handle"
-    dst_device_offset = "u64"
+    dst_dma_offset = "dma_offset"
     psrc = { _type = "memory", _ref = "in", _count = "u64" }
   [function.dma_from_device]
     _docstring = "be sure to check offset and size against dma_alignment"
     _return = "result"
     htcd = "handle"
-    src_device_offset = "u64"
+    src_dma_offset = "dma_offset"
     pdst = { _type = "memory", _ref = "out", _count = "u64" }
 
 [_driver_data]

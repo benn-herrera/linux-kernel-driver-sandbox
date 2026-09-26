@@ -63,6 +63,10 @@ class Declarations(unittest.TestCase):
             (("status", None), "xy_status"),
             (("stats", None), "xy_stats"),
             (("port", None), "xy_port"),
+            (("offset", None), "xy_offset"),
+            (("offset", "in"), "const xy_offset*"),
+            (("offset", "out"), "xy_offset*"),
+            (("offset", "inout"), "xy_offset*"),
             (("stats", "in"), "const xy_stats*"),
             (("stats", "out"), "xy_stats*"),
             (("stats", "inout"), "xy_stats*"),
@@ -165,10 +169,26 @@ class Declarations(unittest.TestCase):
     def test_constant_blocks_precede_types_in_spec_order(self) -> None:
         markers = (
             "XY_API_VERSION", "#define XY_FEAT_A ", "XY_MAX_UNITS", "enum xy_status", "static const char XY_PRODUCT",
-            "struct xy_port_opaque;", "struct xy_stats {", "XY_API xy_status xy_open_port(",
+            "struct xy_port_opaque;", "typedef struct xy_offset ", "struct xy_stats {", "XY_API xy_status xy_open_port(",
         )
         indices = [self.text.index(m) for m in markers]
         self.assertEqual(indices, sorted(set(indices)))
+
+    def test_boxed_scalar_is_a_one_member_struct_under_its_docstring(self) -> None:
+        self.assertIn("\n/* a device offset */\ntypedef struct xy_offset { uint64_t value; } xy_offset;\n", self.text)
+        self.assertEqual(param_lists(self.text, r"XY_API xy_status ")["echo_offset"], "xy_port hport, xy_offset pos, xy_offset* ppos")
+        for base_type, c_type in (("i8", "int8_t"), ("u32", "uint32_t"), ("i64", "int64_t")):
+            with self.subTest(base_type=base_type):
+                text = header(load(mutate(KITCHEN_SINK, '_base_type = "u64"', f'_base_type = "{base_type}"')))
+                self.assertIn(f"typedef struct xy_offset {{ {c_type} value; }} xy_offset;\n", text)
+
+    def test_boxed_scalar_precedes_a_struct_holding_it(self) -> None:
+        text = header(load(KITCHEN_SINK + '\n[struct.span]\nat = "offset"\n'))
+        self.assertIn("struct xy_span {\n\txy_offset at;\n};\n", text)
+        self.assertLess(text.index("typedef struct xy_offset "), text.index("struct xy_span {"))
+
+    def test_boxed_scalar_is_part_of_the_cdef(self) -> None:
+        self.assertIn("typedef struct xy_offset { uint64_t value; } xy_offset;\n", c.cdef(self.api))
 
     def test_docstrings_placed_per_spec(self) -> None:
         lines = self.text.splitlines()

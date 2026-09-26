@@ -22,11 +22,12 @@ LABEL = "wrapper"
 def _rendered_names(api: Api) -> set[str]:
     """Every name the class's generated text spells where a definition parameter or member
     name is in scope: the C functions it calls, the C typedefs and fixed-width types its
-    signatures name, and the namespace's enum classes, struct aliases and classes."""
+    signatures name, and the namespace's enum classes, boxed scalar and struct aliases and
+    classes."""
     ns = api.namespace
     names = {naming.function_name(ns, f.name) for f in api.functions}
-    names |= {naming.type_name(ns, t.name) for t in (*api.typed_consts, *api.opaque_refs, *api.structs)}
-    names |= {naming.upper_camel(t.name) for t in (*api.typed_consts, *api.structs)}
+    names |= {naming.type_name(ns, t.name) for t in (*api.typed_consts, *api.opaque_refs, *api.boxed_scalars, *api.structs)}
+    names |= {naming.upper_camel(t.name) for t in (*api.typed_consts, *api.boxed_scalars, *api.structs)}
     names |= {naming.upper_camel(shape.opaque.class_name) for shape in api.classes()}
     return names | set(naming.BUILTIN_C_TYPES.values())
 
@@ -56,6 +57,7 @@ def validate(api: Api) -> list[str]:
     namespace = [(const(naming.VERSION_KEY), "the API version constant")]
     namespace += [(const(name), where) for where, name in api.constant_names(enum_entries=False)]
     namespace += [(naming.upper_camel(t.name), f"typed_const.{t.name}") for t in api.typed_consts]
+    namespace += [(naming.upper_camel(b.name), f"boxed_scalar.{b.name}") for b in api.boxed_scalars]
     namespace += [(naming.upper_camel(s.name), f"struct.{s.name}") for s in api.structs]
     namespace += [(naming.upper_camel(shape.opaque.class_name), f"opaque_ref.{shape.opaque.name}._class") for shape in classes]
     namespace += [
@@ -125,8 +127,9 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
     ]
     out += ["\n" + run for run in runs]
     out += [_enum(api, t) for t in api.typed_consts]
-    if api.structs:
-        out.append("\n" + "".join(f"using {naming.upper_camel(s.name)} = {naming.type_name(ns, s.name)};\n" for s in api.structs))
+    aliased = (*api.boxed_scalars, *api.structs)
+    if aliased:
+        out.append("\n" + "".join(f"using {naming.upper_camel(t.name)} = {naming.type_name(ns, t.name)};\n" for t in aliased))
     out += [_class(api, shape) for shape in api.classes()]
     out.append(f"\n}}  // namespace {ns}\n")
     return "".join(out)
@@ -203,8 +206,8 @@ def _bit_to_string(group: Group[BitConst]) -> str:
 
 def _ref_type(api: Api, type_name: str) -> str:
     """C++ spelling of a non-memory type the C side reaches through a pointer or caches:
-    the struct alias, else the C type."""
-    if api.kind(type_name) == "struct":
+    the boxed scalar or struct alias, else the C type."""
+    if api.kind(type_name) in ("boxed", "struct"):
         return naming.upper_camel(type_name)
     return c.c_type(api, type_name)
 

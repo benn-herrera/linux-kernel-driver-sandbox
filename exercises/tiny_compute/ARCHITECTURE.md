@@ -60,7 +60,7 @@ The API definition, then three consumers of the driver, each one layer up from t
 
 ### Library
 
-- designed as a foreign-function surface first: opaque handle, fixed-width arguments, enum results with explicit values, no callbacks, no varargs
+- designed as a foreign-function surface first: opaque handle, fixed-width arguments, enum results with explicit values, no callbacks, no varargs; a device offset is its own boxed type (`tcdl_dma_offset`), so it cannot be swapped with a byte count where both would otherwise be `uint64_t`
 - the header is for C and C++ consumers; the Lua module does not read it. The module gets its FFI declarations from the generator's cdef rendering of the structs and functions and its constants from the definition's model, so the header's untyped constants are macros typed by their group's `_base_type` (`UINT32_C` for the capability flags) and its enums are the typed groups (`tcdl_result`)
 - the handle is the device fd xored with a constant cast to a pointer, so the library carries no state of its own and a handle costs nothing to copy
 - error mapping is one direction: errno from the ioctl to a `tcdl_result`; the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to `TCDL_ERR_UNSUPPORTED`
@@ -83,8 +83,6 @@ The API definition, then three consumers of the driver, each one layer up from t
 
 The stack from driver to script, one host coordinating several accelerators through a library and a binding, is in place. Remaining, in order:
 
-- DONE 2026-09-25: the generator's test suite restructured; compiled and executed checks against a fake library in the container, text assertions replaced by properties from the model, files split by output.
-- DONE 2026-09-25: the API generator's emitters, C header with ABI pins, Lua module, header-only C++ wrapper and implementation stub; the test program runs on the wrapper and the Lua test on the module.
 - The torture suite in Lua against the binding, multi-process, across the two instances the test machine boots: the isolation check (a DMA pattern written to one device must not be readable from the other, and operations on the two must not serialise on each other), then `open`/`release` under contention and the per-device locks. The driver side is done. The C++ program shrinks to a smoke test through the library plus its one threaded case.
 - proper dmsg logging
 - A Rust port of the driver.

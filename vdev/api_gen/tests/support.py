@@ -147,6 +147,10 @@ port = { _docstring = "a port", _ctor = "open_port", _dtor = "destroy_port" }
 _ctor = "open_link"
 _class = "data_link"
 
+[boxed_scalar.offset]
+_docstring = "a device offset"
+_base_type = "u64"
+
 [struct.stats]
 _docstring = "counters"
 count = { _type = "u32", _docstring = "items seen" }
@@ -245,6 +249,13 @@ payload = { _type = "memory", _ref = "in", _count = "u32", _optional = true }
 limit = { _type = "u32", _ref = "in", _optional = true }
 level = { _type = "u32", _ref = "inout", _optional = true }
 ppeek = { _type = "u32", _ref = "out", _optional = true }
+
+[function.echo_offset]
+_docstring = "ppos = pos"
+_return = "status"
+hport = "port"
+pos = "offset"
+ppos = { _type = "offset", _ref = "out" }
 
 [_driver_data]
 _header = "xy/driver/xy_ioctl.h"

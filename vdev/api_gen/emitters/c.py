@@ -4,7 +4,7 @@ render."""
 
 from api_gen import naming
 from api_gen.model import (
-    Api, BitConst, EnumEntry, Function, Group, LiteralTerm, OpaqueRef, Param, Struct, Term, TypedConst,
+    Api, BitConst, BoxedScalar, EnumEntry, Function, Group, LiteralTerm, OpaqueRef, Param, Struct, Term, TypedConst,
 )
 
 C_KEYWORDS = frozenset(
@@ -81,7 +81,7 @@ def header_macros(namespace: str) -> frozenset[str]:
 def cdef(api: Api) -> str:
     """The declaration text the Lua module hands to ffi.cdef: a typedef of its base type
     for each typed enum (not its body, since the Lua module carries constants as literals),
-    opaque and struct declarations, and function declarations with no visibility macro.
+    opaque, boxed scalar and struct declarations, and function declarations with no visibility macro.
     """
     typedefs = [
         f"typedef {naming.BASE_C_TYPES[t.base_type].c_type} {naming.type_name(api.namespace, t.name)};\n"
@@ -108,6 +108,7 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
             for g in api.string_const_groups
         ]
     blocks += [_opaque(api, o) for o in api.opaque_refs]
+    blocks += [_boxed(api, b) for b in api.boxed_scalars]  # before the structs, so a struct may hold one
     blocks += [_struct(api, s) for s in api.structs]
     if api.functions:
         blocks.append("".join(_function(api, f, function_prefix) for f in api.functions))
@@ -176,6 +177,12 @@ def _opaque(api: Api, opaque: OpaqueRef) -> str:
         f"{_comment_line(opaque.docstring)}struct {target};\n"
         f"typedef struct {target}* {naming.type_name(ns, opaque.name)};\n"
     )
+
+
+def _boxed(api: Api, boxed: BoxedScalar) -> str:
+    name = naming.type_name(api.namespace, boxed.name)
+    value = naming.BUILTIN_C_TYPES[boxed.base_type]
+    return f"{_comment_line(boxed.docstring)}typedef struct {name} {{ {value} value; }} {name};\n"
 
 
 def _struct(api: Api, struct: Struct) -> str:
