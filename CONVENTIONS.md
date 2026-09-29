@@ -58,6 +58,7 @@ Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 ## Style and editor
 
 - Driver sources follow kernel coding style; `format` applies it ("Style tools"), and a driver change is not done until `checkpatch-vdev` is clean.
+- Git hooks are tracked and inert under `githooks/`, one file per hook name; they take effect once the human runs `just install-hooks`, which copies them into `.git/hooks/` beside whatever other packages installed there, and `just uninstall-hooks` removes only those ("Style tools"). `just verify` runs the installed pre-commit hook; `just format-check` is `format`'s non-rewriting check, for anyone but the human running the hook (AGENTS.md reserves the rewrite for the human).
 - Editor C/C++ intelligence comes from the image's clangd through `just clangd-vdev`, never a host clangd ("Editor language server").
 - Markdown prose is one paragraph or list item per line, never hard-wrapped: a rendered page looks the same, and an edit or a diff touches one line.
 

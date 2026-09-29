@@ -184,6 +184,19 @@ format: export-clang-format-vdev
   find "${driver}" -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
   printf 'formatted every driver c source under %s/\n' "${driver}"
 
+[doc("check every *.c and *.h under the active exercise's ./exercises/EXERCISE/driver/ against clang-format and the kernel tree's .clang-format; never rewrites, exit status is clang-format's own")]
+format-check: export-clang-format-vdev
+  #!/usr/bin/env bash
+  set -euo pipefail
+  driver="./exercises/{{EXERCISE}}/driver"
+  [[ -d "${driver}" ]] || { printf "exercise '%s' not found under ./exercises\n" "{{EXERCISE}}" >&2; exit 1; }
+  files=()
+  while IFS= read -r f; do
+    files+=("${f}")
+  done < <(find "${driver}" -type f \( -iname '*.h' -o -iname '*.c' \))
+  (( ${#files[@]} > 0 )) || exit 0
+  clang-format --dry-run --Werror --style="file:{{OUT_DIR}}/clang-format" "${files[@]}"
+
 # Test machine: boots out/ on the host under QEMU. run-vtarget and test-vtarget share vtarget-qemu.
 
 # The one QEMU invocation: guards the inputs, then execs QEMU with APPEND as the kernel command line.
@@ -233,8 +246,27 @@ test-vtarget: host-check
       END { if (!p) print "" }'
   printf 'log: %s\n' "{{VTARGET_TEST_LOG}}"
 
-[doc("format module sources and check for kernel coding standard compliance")]
-precommit: format checkpatch-vdev
+[doc("copy the tracked hooks under githooks/ into .git/hooks/; hooks other packages installed there are left alone")]
+install-hooks:
+  @cp -vf "{{REPO_DIR}}"/githooks/*-* "{{REPO_DIR}}/.git/hooks/"
+  @echo "git hooks active"
+
+[doc("remove from .git/hooks/ the hooks that githooks/ tracks; others are left alone")]
+uninstall-hooks:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  for f in "{{REPO_DIR}}"/githooks/*-*; do
+    rm -vf "{{REPO_DIR}}/.git/hooks/${f##*/}"
+  done
+  echo "git hooks inactive"
+
+[doc("run the installed pre-commit hook; refuses if it is missing or differs from githooks/pre-commit")]
+verify:
+  #!/usr/bin/env bash
+  set -euo pipefail
+  cmp -s "{{REPO_DIR}}/githooks/pre-commit" "{{REPO_DIR}}/.git/hooks/pre-commit" 2>/dev/null \
+    || { printf 'installed pre-commit hook missing or stale; run: just install-hooks\n' >&2; exit 1; }
+  exec "{{REPO_DIR}}/.git/hooks/pre-commit"
 
 [doc("build the active exercise's modules and userspace, then the initramfs, in vdev")]
 stage-vdev: machine-vdev

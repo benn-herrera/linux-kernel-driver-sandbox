@@ -62,7 +62,9 @@ dmesg
 
 ### Additional deets
 
-`just format` and `just checkpatch-vdev` apply and check kernel style on driver sources. `just --list` is the authoritative recipe list; ARCHITECTURE.md explains what each piece does and how they fit together.
+`just format` applies kernel style to driver sources and is the human's to run; `just format-check` and `just checkpatch-vdev` check it without rewriting.
+`just install-hooks` copies the tracked hooks under `githooks/` into `.git/hooks/` (`just uninstall-hooks` removes them). `just verify` runs the installed pre-commit hook: it reformats staged driver sources and refuses the commit if that changes anything, or if `checkpatch-vdev` then fails.
+`just --list` is the authoritative recipe list; ARCHITECTURE.md explains what each piece does and how they fit together.
 
 ### Editor setup
 

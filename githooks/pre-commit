@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+# pre-commit hook - formats staged driver sources against kernel style and
+# blocks the commit if that changes anything, or if checkpatch then finds a
+# violation format cannot fix.
+#
+# Tracked and inert: this file takes effect once `just install-hooks` copies
+# it into .git/hooks/ (`just uninstall-hooks` removes it). `just verify`
+# refuses to run unless the installed copy matches this one.
+#
+# `just format` rewrites driver sources in place and is the human's to run
+# (AGENTS.md); this hook firing on the human's own commit IS the human
+# running it, and the fast path below means a commit that stages no driver
+# file never reaches the rewrite. `just format-check` is the non-rewriting
+# equivalent, for anyone else.
+#
+# No stashing: two accounts share this working tree, and stash/pop would
+# recreate files under whichever account runs the hook. A staged driver
+# file with unstaged edits is refused before the rewrite runs, so the
+# reformat never merges unstaged content into what gets restaged.
+#
+# Bypass once with: git commit --no-verify
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
+
+# No mapfile/readarray, no associative arrays: the host has only macOS's
+# bundled bash (3.2), which predates both.
+staged=()
+while IFS= read -r f; do
+  staged+=("${f}")
+done < <(git diff --cached --name-only --diff-filter=ACMR)
+driver_files=()
+# bash 3.2 treats "${arr[@]}" on an empty array as an unbound-variable error
+# under set -u; ${arr[@]+"${arr[@]}"} is the guard (also used in justfile).
+for f in ${staged[@]+"${staged[@]}"}; do
+  case "${f}" in
+    exercises/*/driver/*.c|exercises/*/driver/*.h) driver_files+=("${f}") ;;
+  esac
+done
+(( ${#driver_files[@]} > 0 )) || exit 0
+
+unstaged=()
+while IFS= read -r f; do
+  unstaged+=("${f}")
+done < <(git diff --name-only)
+
+conflicts=()
+for d in "${driver_files[@]}"; do
+  for u in ${unstaged[@]+"${unstaged[@]}"}; do
+    if [[ "${d}" == "${u}" ]]; then
+      conflicts+=("${d}")
+      break
+    fi
+  done
+done
+
+if (( ${#conflicts[@]} > 0 )); then
+  printf '%s\n' "${conflicts[@]}" >&2
+  printf 'pre-commit: driver sources have unstaged edits; stage or set them aside so the check sees what will be committed\n' >&2
+  exit 1
+fi
+
+just format
+
+changed=()
+while IFS= read -r f; do
+  changed+=("${f}")
+done < <(git diff --name-only -- "${driver_files[@]}")
+if (( ${#changed[@]} > 0 )); then
+  printf 'pre-commit: reformatted: %s; review, git add, and commit again\n' "${changed[*]}" >&2
+  exit 1
+fi
+
+if ! just checkpatch-vdev; then
+  printf 'pre-commit: checkpatch-vdev failed; bypass once with: git commit --no-verify\n' >&2
+  exit 1
+fi
