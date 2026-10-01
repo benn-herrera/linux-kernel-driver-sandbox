@@ -1,0 +1,98 @@
+# ARCHITECTURE – tiny_compute_rs
+
+A copy of `tiny_compute` whose library is implemented in Rust. The driver is the same C driver; the API definition is the same but for the library's file name; the C++ and Lua test programs are unchanged, and the Rust test program is an identical copy of `tiny_compute`'s, which is the point: a consumer cannot tell which language implements the library.
+
+## Project Layout
+
+### Driver Impl – exercises/tiny_compute_rs/driver
+
+- common.h: device constants (macros and enums), structs, function prototypes
+- main.c: entry point
+- init_exit.c: driver life cycle
+- probe_remove.c: device instance life cycle
+- fops.c: file descriptor management and ioctl dispatcher (ABI)
+- dma.c: DMA operations implementation
+- irq.c: interrupt handler for compute and DMA operations
+- tcd_ioctl.h: userspace-facing ABI header
+- Makefile: kbuild format makefile fragment
+
+### Userspace – exercises/tiny_compute_rs/userspace
+
+The API definition, then four consumers of the driver, each one layer up from the last:
+
+- api_def/: the userspace API defined once, generated into every consumer
+  - tcdl_api.adef.toml: types, constants, functions and docstrings of the `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`; `_library` names `libtiny_compute_rs.so`
+  - Makefile: `OUTPUTS` selects the Rust implementation pair (`abi_rs`, `stub_rs`) and every consumer (`h`, `hpp`, `lua`, `rs`)
+- lib/: `libtiny_compute_rs.so`, the Rust library over the ioctl ABI, a cargo `cdylib` crate
+  - src/lib.rs: the implementation, started from the generated stub; it includes the generated relay `tcdl_api_abi.rs` (the C-ABI exports, the pins) as `mod abi` and writes the safe bodies the relay calls; the opaque handle wraps the device fd as the C++ one does
+  - build.rs: renders the driver's UAPI header through bindgen into `OUT_DIR/wrapped_api.rs` (an enum wrapper makes the `_IOR`/`_IOWR` ioctl numbers evaluable), sets the `SONAME`
+  - Cargo.toml, Cargo.lock: no dependencies; the lock is tracked because the container mounts the repository read-only
+- app_cpp/: `app_cpp`, the C++ test program, linked against the library
+  - common.h: utility definitions and function prototypes
+  - main.cpp: entry point
+  - tests.cpp: functionality tests through the generated C++ wrapper `tcdl_api.hpp`
+  - Makefile: `LINK_TYPE := EXE` plus `../../../cpp.mk`
+- app_rs/: `app_rs`, the Rust test program, a cargo bin crate; `src/main.rs` includes the generated binding `tcdl_api.rs` as `mod tcdl_api` and mirrors `app_cpp/tests.cpp` through `tcdl_api::Device`; `build.rs` points the linker at the library
+- app_lua/: LuaJIT scripts, staged as-is and run as tests
+  - app_lua.lua: the entry point, a `#!/usr/bin/luajit` script shipped as `/usr/bin/app_lua` (the extension is dropped on copy); the tests, written against the generated module `binding/tcdl_api.lua`, which is staged beside it and binds `libtiny_compute_rs.so` through the FFI
+  - lib_lua/: the Lua sources the entry point requires (`util.lua`: `printf`, `dev_info_to_string`), shipped whole to `/usr/bin/lib_lua/` and reached as `require("lib_lua.util")`
+
+## Project Design
+
+### Driver
+
+- professional standards - strict kernel formatting with checkpatch validation, no circumvention thereof
+  - namespacing convention for all structs, functions, etc is `tcd_` and `TCD_`
+- separation of concerns by translation units to keep each implementation file comprehensible
+- multi-thread safe
+  - mutex guards around interrupt-gated operations
+  - completion per interrupt-gated operation
+- multi-device capable
+  - every piece of state lives in the per-device `tcd_dev`; the only shared object is the driver-wide IDA that numbers instances
+  - each instance registers `/dev/tiny_compute<N>` with an IDA-allocated `N` and a `devm_kasprintf` name; `remove` releases the number after the node is gone so it can be reused
+  - the test machine boots two `edu` instances so both paths run every time
+- resilient, with full error trapping for all potential failure modes
+- reasonable userspace ABI
+  - balances driver thinness with standard userspace functionality and responsibility expectations
+  - synchronous interrupt-driven operations
+  - TBD: asynchronous interrupt-driven operations? current lean is that's a userspace concern.
+  - implemented:
+    - open/close (fops)
+    - info - simple sync RO op
+    - liveness - simple sync RW op
+    - compute - interrupt-gated sync RW op 
+    - bidirectional DMA - interrupt-gated sync RW ops through the device's 4 KiB buffer; the driver stages through coherent buffers and userspace never sees a bus address
+
+### Library
+
+- designed as a foreign-function surface first: opaque handle, fixed-width arguments, enum results with explicit values, no callbacks, no varargs; a device offset is its own boxed type (`tcdl_dma_offset`), so it cannot be swapped with a byte count where both would otherwise be `uint64_t`
+- the header is for C and C++ consumers; the Lua module does not read it. The module gets its FFI declarations from the generator's cdef rendering of the structs and functions and its constants from the definition's model, so the header's untyped constants are macros typed by their group's `_base_type` (`UINT32_C` for the capability flags) and its enums are the typed groups (`tcdl_result`)
+- the handle is the device fd xored with a constant cast to a pointer, so the library carries no state of its own and a handle costs nothing to copy
+- error mapping is one direction: errno from the ioctl to a `tcdl_result`; the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to `TCDL_ERR_UNSUPPORTED`
+- the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once; the C header, the header-only C++ wrapper, the Lua module, the Rust binding, the Rust C-ABI relay (with the ABI pins) and the Rust implementation stub are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). `lib/src/lib.rs` is the one hand-written piece: the relay it includes exports the C ABI and calls its safe functions
+- device capabilities live in the driver's per-device state and gate the operations; `tcdl_info.device_caps` reports them, and the composed masks (`TCDL_CAP_DMA_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side, since convenience is not the ABI header's job
+
+### Driver Test
+
+- the C++ program and the Lua script both go through the library; nothing in userspace issues an ioctl except `lib/src/lib.rs`
+- exercise every ABI function
+  - acquisition, info, liveness, compute, DMA round trip (pattern out and back through the device buffer, compared byte for byte)
+- two homes, split by what each language can do
+  - the C++ program: the smoke test through the library, and the one threaded case, two threads on one fd (**NYI**)
+  - the Lua script: **IN PROGRESS** everything multi-device and multi-process, since Lua has no threads and coroutines are cooperative; N processes across all devices, the isolation check, and the adversarial phase
+- isolate testing into two phases
+  - 'walk right down Main Street' (what's being done now)
+  - **NYI**: 'be mean and nasty' aka adversarial usage patterns (coming soon to a horror show near you)
+
+## Roadmap
+
+The stack from driver to script, one host coordinating several accelerators through a library and a binding, is in place. Remaining, in order:
+
+- The torture suite in Lua against the binding, multi-process, across the two instances the test machine boots: the isolation check (a DMA pattern written to one device must not be readable from the other, and operations on the two must not serialise on each other), then `open`/`release` under contention and the per-device locks. The driver side is done. The C++ program shrinks to a smoke test through the library plus its one threaded case.
+- proper dmsg logging
+- A Rust port of the driver.
+- Driver-side device mocking to present additional design considerations to ABI and surfaces to userspace.
+  - will build on existing IRQ and DMA mechanisms
+  - computation will be mocked and placed into device buffer, user will have to fetch them via normal mechanism
+  - will blend device handling logic in the driver with more sophisticated 'compute device' ABI offered to userland 
+- Removal while open: `misc_deregister` does not close open files, so an ioctl can run after `remove` (reachable via sysfs `unbind`). A removed flag in `tcd_dev`, set in `remove` under the operation locks and checked by every ioctl (`-ENODEV`), plus the adversarial test that exercises it.

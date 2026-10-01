@@ -1,9 +1,11 @@
 """Definitions and helpers shared by the api_gen tests."""
 
 import contextlib
+import difflib
 import io
 import re
 import tomllib
+import unittest
 from pathlib import Path
 
 from api_gen import __main__ as api_gen_main
@@ -12,6 +14,7 @@ from api_gen.emitters import emit_c
 
 FIXTURE = """
 [_general]
+_name = "xy_api"
 _namespace = "xy"
 _version = [1, 2, 3, 4]
 _library = "libxy.so"
@@ -69,16 +72,17 @@ buf = { _type = "memory", _ref = "in", _count = "u64", _docstring = "bytes to se
 _return = "status"
 htoken = "token"
 
-[_driver_data]
-_header = "xy/driver/xy_ioctl.h"
-[_driver_data.const_pins]
+[_wrapped_api]
+_header = "driver/xy_ioctl.h"
 feat_a = "XYD_FEAT_A"
 """
 
-# FIXTURE with every feature the compiled checks exercise; fake_xy.cpp, check_xy.lua and
-# consumer_xy.cpp are written against it.
+# Every feature the compiled checks exercise, FIXTURE's items among them (its bit-group
+# conversion on a group of its own, access_to_string); fake_xy.cpp, fake_xy.rs, check_xy.lua,
+# consumer_xy.cpp and consumer_xy.rs are written against it.
 KITCHEN_SINK = """
 [_general]
+_name = "xy_api"
 _namespace = "xy"
 _version = [1, 2, 3, 4]
 _library = "libxy.so"
@@ -128,7 +132,7 @@ _to_string = "to_string"
 ok = 0
 err_busy = { _value = 9, _docstring = "try later" }
 err_other = { _value = 0x7fffffff, _format = "hex" }
-err_again = 9
+err_again = 10
 err_unsupported = 12
 err_floor = { _value = -2147483648, _format = "hex" }
 
@@ -257,17 +261,15 @@ hport = "port"
 pos = "offset"
 ppos = { _type = "offset", _ref = "out" }
 
-[_driver_data]
-_header = "xy/driver/xy_ioctl.h"
-[_driver_data.const_pins]
+[_wrapped_api]
+_header = "driver/xy_ioctl.h"
 feat_a = "XYD_FEAT_A"
 """
 
 # SPEC.md's `_base_type` spellings, stated independently of naming.BASE_C_TYPES.
 C_BASE_TYPES = {"i32": "int32_t", "u32": "uint32_t"}
-C_CONST_MACROS = {"i32": "INT32_C", "u32": "UINT32_C"}
 
-MINIMAL = '[_general]\n_namespace = "xy"\n_version = [0,0,0,1]\n'
+MINIMAL = '[_general]\n_name = "xy_api"\n_namespace = "xy"\n_version = [0,0,0,1]\n'
 
 EXERCISES = Path("/work/exercises")
 
@@ -276,9 +278,32 @@ def load(text: str = FIXTURE) -> model.Api:
     return model.from_dict(tomllib.loads(text))
 
 
+def objections(text: str) -> list[str]:
+    """Every objection the loader has to definition `text`, in order; none where it loads."""
+    try:
+        load(text)
+    except model.DefinitionError as e:
+        return [str(o) for o in e.objections()]
+    return []
+
+
+def assert_objection(test: unittest.TestCase, text: str, message: str) -> None:
+    """The loader refuses definition `text` with `message` and nothing else."""
+    test.assertEqual(objections(text), [message])
+
+
+def assert_matches_expected(test: unittest.TestCase, expected: Path, actual: str) -> None:
+    """`actual` is the text of the file `expected`, byte for byte, else a unified diff."""
+    text = expected.read_text(encoding="utf-8")
+    if actual != text:
+        test.fail("".join(difflib.unified_diff(
+            text.splitlines(keepends=True), actual.splitlines(keepends=True), expected.name, "emitted",
+        )))
+
+
 def header(api: model.Api) -> str:
     """`api`'s C header, as generation writes it from xy_api.adef.toml."""
-    return emit_c.emit(api, source_name="xy_api.adef.toml", stem="xy_api", library=None)
+    return emit_c.emit(api, source_name="xy_api.adef.toml", name="xy_api", library=None, project="xy")
 
 
 def mutate(text: str, needle: str, replacement: str, *, every: bool = False) -> str:
@@ -288,6 +313,75 @@ def mutate(text: str, needle: str, replacement: str, *, every: bool = False) -> 
     count = text.count(needle)
     assert count >= 1 if every else count == 1, f"fixture holds {count} of {needle!r}"
     return text.replace(needle, replacement)
+
+
+# FIXTURE with two independent loader errors: two functions whose _return names no
+# typed_const, one of them port's _dtor.
+TWO_BAD_RETURNS = mutate(
+    mutate(FIXTURE, '_docstring = "release the port"\n_return = "status"', '_return = "nope"'),
+    '_return = "status"\nhtoken', '_return = "gone"\nhtoken',
+)
+
+# FIXTURE without its [_wrapped_api], the last table.
+NO_WRAPPED_API = FIXTURE[: FIXTURE.index("[_wrapped_api]")]
+
+# KITCHEN_SINK with what only the Rust outputs' compile gates and a Rust stub built as the
+# library exercise: the constructor caching an enum `out`; a method taking an enum by every
+# `_ref` the binding passes through a local of the enum's base type; methods taking an opaque
+# through `_ref`, `link` with a class and `token` without; a method of `&self` and seven
+# parameters, so a stub fn of eight, where clippy's too_many_arguments begins; and a buffer
+# whose count type cannot count every slice.
+REFS = mutate(
+    KITCHEN_SINK, 'generation = { _type = "u32", _ref = "out" }', 'generation = { _type = "mode", _ref = "out" }'
+) + """
+[function.steer]
+_return = "status"
+hport = "port"
+want = { _type = "mode", _ref = "in" }
+cur = { _type = "mode", _ref = "inout" }
+hint = { _type = "mode", _ref = "in", _optional = true }
+seen = { _type = "mode", _ref = "inout", _optional = true }
+last = { _type = "mode", _ref = "out", _optional = true }
+
+[function.link_to]
+_return = "status"
+hport = "port"
+peer = { _type = "link", _ref = "in" }
+maybe = { _type = "link", _ref = "in", _optional = true }
+
+[function.relink]
+_return = "status"
+hport = "port"
+cur = { _type = "link", _ref = "inout" }
+
+[function.lend]
+_return = "status"
+hport = "port"
+tok = { _type = "token", _ref = "in" }
+
+[function.wide]
+_return = "status"
+hport = "port"
+a0 = "u8"
+a1 = "u8"
+a2 = "u8"
+a3 = "u8"
+a4 = "u8"
+a5 = "u8"
+a6 = "u8"
+
+[function.send_short]
+_return = "status"
+hport = "port"
+buf = { _type = "memory", _ref = "in", _count = "u8" }
+"""
+
+
+# Five structs whose UpperCamel re-exports take prelude names the relay does not spell, so
+# its module-scope check must not refuse them: Default, Drop, String, ToString, TryFrom.
+UNSPELLED_PRELUDE_STRUCTS = "".join(
+    f'\n[struct.{name}]\nv = "u32"\n' for name in ("default", "drop", "string", "to_string", "try_from")
+)
 
 
 def param_lists(text: str, pattern: str) -> dict[str, str]:

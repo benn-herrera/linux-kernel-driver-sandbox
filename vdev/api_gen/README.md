@@ -1,7 +1,7 @@
 # README – api_gen
 
 **ACKNOWLEDGEMENT** - api_gen is AI-generated code.
-The .apdef.toml file specification was human designed & authored, the generation system was human specified, but this Python
+The .adef.toml file specification was human designed & authored, the generation system was human specified, but this Python
 module's code was agentically produced.
 
 ## Human design spec provided
@@ -15,9 +15,11 @@ The way out from this is to have a DSL for specifying the API and a generator pr
 - C++ friendly pure C header under which an implementation will be written.
 - Language bindings - as many as you feel like implementing a generator for
   - lua (LuaJIT FFI)
-  - **NYI** header-only C++ api
+  - header-only C++ api
   - **NYI** Python via ctypes 
 - an optional stub file for the C++ implementation
+
+What the generator produces today, seven outputs among them a Rust binding, a Rust ABI relay and a Rust implementation stub, is listed in SPEC.md, "Outputs".
 
 ### Additional human inputs
 

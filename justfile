@@ -148,7 +148,7 @@ api-gen-test-vdev: machine-vdev
 generate-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} generate
 
-[doc("build the active exercise's userspace, exercises/EXERCISE/userspace/, with clang (lib/ then app/); executables, lib*.so, script/* and the generated header and binding land in out/userspace/")]
+[doc("build the active exercise's userspace on the dev box: lib/, app_cpp/ and app_rs/ if present, into out/userspace/ with app_lua/ and the generated include/ and binding/ (see vdev/justfile userspace)")]
 userspace-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} userspace
 
@@ -167,7 +167,7 @@ clangd-vdev *ARGS: guard-vdev
   mkdir -p "{{OUT_DIR}}"
   exec podman run --rm -i --workdir /work {{MOUNTS}} "{{IMAGE}}" clangd --compile-commands-dir=/work/out "--path-mappings={{REPO_DIR}}=/work" "$@"
 
-[doc("run the kernel tree's checkpatch.pl over the active exercise's exercises/EXERCISE/driver/; fails on any error or warning")]
+[doc("run the kernel tree's checkpatch.pl over every *.c and *.h under every exercise's exercises/*/driver/; fails on any error or warning")]
 checkpatch-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} checkpatch
 
@@ -175,25 +175,21 @@ checkpatch-vdev: machine-vdev
 export-clang-format-vdev *ARGS: machine-vdev
   @[[ -f "{{OUT_DIR}}/clang-format" ]] || just run-vdev {{VDEV_JUST}} export-clang-format "$@"
 
-[doc("Rewrite IN PLACE every *.c and *.h under the active exercise's ./exercises/EXERCISE/driver/ with clang-format and the kernel tree's .clang-format")]
+[doc("Rewrite IN PLACE every *.c and *.h under every exercise's ./exercises/*/driver/ with clang-format and the kernel tree's .clang-format")]
 format: export-clang-format-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  driver="./exercises/{{EXERCISE}}/driver"
-  [[ -d "${driver}" ]] || { printf "exercise '%s' not found under ./exercises\n" "{{EXERCISE}}" >&2; exit 1; }
-  find "${driver}" -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
-  printf 'formatted every driver c source under %s/\n' "${driver}"
+  find ./exercises/*/driver -type f \( -iname '*.h' -o -iname '*.c' \) | xargs clang-format -i --style="file:{{OUT_DIR}}/clang-format"
+  printf 'formatted every driver c source under ./exercises/*/driver/\n'
 
-[doc("check every *.c and *.h under the active exercise's ./exercises/EXERCISE/driver/ against clang-format and the kernel tree's .clang-format; never rewrites, exit status is clang-format's own")]
+[doc("check every *.c and *.h under every exercise's ./exercises/*/driver/ against clang-format and the kernel tree's .clang-format; never rewrites, exit status is clang-format's own")]
 format-check: export-clang-format-vdev
   #!/usr/bin/env bash
   set -euo pipefail
-  driver="./exercises/{{EXERCISE}}/driver"
-  [[ -d "${driver}" ]] || { printf "exercise '%s' not found under ./exercises\n" "{{EXERCISE}}" >&2; exit 1; }
   files=()
   while IFS= read -r f; do
     files+=("${f}")
-  done < <(find "${driver}" -type f \( -iname '*.h' -o -iname '*.c' \))
+  done < <(find ./exercises/*/driver -type f \( -iname '*.h' -o -iname '*.c' \))
   (( ${#files[@]} > 0 )) || exit 0
   clang-format --dry-run --Werror --style="file:{{OUT_DIR}}/clang-format" "${files[@]}"
 
@@ -260,7 +256,7 @@ uninstall-hooks:
   done
   echo "git hooks inactive"
 
-[doc("run the installed pre-commit hook; refuses if it is missing or differs from githooks/pre-commit")]
+[doc("run the installed pre-commit hook, which formats and checkpatches every exercise's driver sources when any is staged; refuses if it is missing or differs from githooks/pre-commit")]
 verify:
   #!/usr/bin/env bash
   set -euo pipefail
@@ -268,11 +264,11 @@ verify:
     || { printf 'installed pre-commit hook missing or stale; run: just install-hooks\n' >&2; exit 1; }
   exec "{{REPO_DIR}}/.git/hooks/pre-commit"
 
-[doc("build the active exercise's modules and userspace, then the initramfs, in vdev")]
+[doc("build the active exercise's modules and userspace, the compile database, then the initramfs, in one container run (see vdev/justfile stage)")]
 stage-vdev: machine-vdev
   just run-vdev {{VDEV_JUST}} stage
 
-[doc("one dev iteration: build the active exercise's modules and userspace and the initramfs in vdev, then boot vtarget and run lkds-test")]
+[doc("one dev iteration: build the active exercise's modules, userspace, compile database and initramfs in vdev, then boot vtarget and run lkds-test")]
 test: machine-vdev
   @just {{EXERCISE_ARG}} stage-vdev
   just test-vtarget

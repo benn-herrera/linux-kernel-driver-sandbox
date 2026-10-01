@@ -10,33 +10,34 @@ LABEL = "header"
 
 
 def validate(api: Api) -> list[str]:
-    """Every objection the header has to `api`: a name that is a C keyword, a constant
-    whose C name is one of the header's own macros, and a typed enum value above the
-    `int32_t` maximum, which a C17 enumerator cannot hold."""
-    problems = [f"{where}: '{name}' is a C keyword" for where, name in api.names() if name in c.C_KEYWORDS]
+    """Every objection the header has to `api`: a name that is a C keyword, a parameter
+    named like a type the declarations spell, a constant whose C name is one of the
+    header's own macros, and a typed enum value above the `int32_t` maximum, which a C17
+    enumerator cannot hold."""
+    objections = [f"{where}: '{name}' is a C keyword" for where, name in api.names() if name in c.C_KEYWORDS]
+    objections += c.parameter_type_objections(api)
     macros = c.header_macros(api.namespace)
-    problems += [
+    objections += [
         f"{where}: constant {naming.const_name(api.namespace, name)} is the header's own macro"
         for where, name in api.constant_names()
         if naming.const_name(api.namespace, name) in macros
     ]
     enumerator_max = naming.BASE_C_TYPES["i32"].max_value
-    problems += [
+    objections += [
         f"typed_const.{t.name}.{e.name}: value 0x{e.value:x} exceeds 0x{enumerator_max:x}; "
         "a C17 enumerator is an int"
         for t in api.typed_consts
         for e in t.entries
         if e.value > enumerator_max
     ]
-    return [f"{LABEL}: {p}" for p in problems]
+    return [f"{LABEL}: {o}" for o in objections]
 
 
-def output_path(*, stem: str, exercise: str) -> Path:
-    return Path("include") / exercise / f"{stem}.h"
+def output_path(*, name: str, project: str) -> Path:
+    return Path("include") / project / f"{name}.h"
 
 
-def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
-    """The C header."""
+def emit(api: Api, *, source_name: str, name: str, library: str | None, project: str) -> str:
     ns = api.namespace
     c_api, api_macro, impl = naming.c_api_macro(ns), naming.api_macro(ns), naming.impl_macro(ns)
     prelude = f"""\
@@ -59,17 +60,17 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
 
 """
     text = prelude + c.declarations(api, function_prefix=f"{api_macro} ")
-    if api.driver_data is not None:
+    if api.wrapped_api is not None:
         asserts = "".join(
             f'static_assert({naming.const_name(ns, key)} == {macro}, '
             f'"{naming.const_name(ns, key)} must match {macro}");\n'
-            for key, macro in api.driver_data.const_pins
+            for key, macro in api.wrapped_api.pins
         )
         text += f"""\
 
 #if defined({impl})
-# include "{api.driver_data.header}"
-/* ABI pins: the implementation build fails if a relayed constant disagrees with the driver's UAPI header */
+# include "{project}/{api.wrapped_api.header}"
+/* Pins to the wrapped API: the implementation build fails if a pinned constant disagrees with its header */
 # include <assert.h>
 {asserts}#endif
 """

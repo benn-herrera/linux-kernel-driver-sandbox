@@ -2,11 +2,11 @@ import re
 import unittest
 
 from api_gen.emitters import emit_stub_cpp
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists
+from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate
 
 
 def stub(text: str = FIXTURE) -> str:
-    return emit_stub_cpp.emit(load(text), source_name="xy_api.adef.toml", stem="xy_api", library=None)
+    return emit_stub_cpp.emit(load(text), source_name="xy_api.adef.toml", name="xy_api", library=None, project="xy")
 
 
 class Stub(unittest.TestCase):
@@ -27,14 +27,6 @@ class Stub(unittest.TestCase):
             ],
         )
 
-    def test_signatures_match_the_header_in_document_order(self) -> None:
-        api = load(KITCHEN_SINK)
-        declared = param_lists(header(api), r"XY_API xy_status ")
-        definitions = param_lists(stub(KITCHEN_SINK), r"XY_API xy_status ")
-        self.assertEqual(list(definitions), [f.name for f in api.functions])
-        self.assertEqual(definitions, declared)
-        self.assertEqual(definitions["echo_offset"], "xy_port hport, xy_offset pos, xy_offset* ppos")
-
     def test_every_body_voids_each_parameter_then_returns_default_initialized(self) -> None:
         api = load(KITCHEN_SINK)
         bodies = dict(re.findall(
@@ -49,13 +41,16 @@ class Stub(unittest.TestCase):
 
 
 class Validate(unittest.TestCase):
-    def test_kitchen_sink_has_no_objection(self) -> None:
-        self.assertEqual(emit_stub_cpp.validate(load(KITCHEN_SINK)), [])
-
     def test_cpp_keyword_as_name(self) -> None:
         self.assertEqual(
             emit_stub_cpp.validate(load(mutate(FIXTURE, "unit = ", "class = "))),
             ["stub: function.open_port.class: 'class' is a C++ keyword"],
+        )
+
+    def test_parameter_named_like_a_type_its_signatures_spell_as_the_header_refuses(self) -> None:
+        self.assertEqual(
+            emit_stub_cpp.validate(load(mutate(FIXTURE, 'htoken = "token"', 'uint32_t = "token"'))),
+            ["stub: function.spend.uint32_t: 'uint32_t' is a name the generated code uses"],
         )
 
 

@@ -5,6 +5,7 @@ render."""
 from api_gen import naming
 from api_gen.model import (
     Api, BitConst, BoxedScalar, EnumEntry, Function, Group, LiteralTerm, OpaqueRef, Param, Struct, Term, TypedConst,
+    generated_name_objections,
 )
 
 C_KEYWORDS = frozenset(
@@ -22,8 +23,8 @@ def c_type(api: Api, type_name: str) -> str:
 
 
 def int_literal(value: int, fmt: str) -> str:
-    """An integer spelled as a Lua number, and as a C literal when non-negative: decimal,
-    or lower-case unpadded hex."""
+    """An integer spelled as a Lua number, a Rust literal with its sign in front, and a C
+    literal when non-negative: decimal, or lower-case unpadded hex."""
     if fmt == "hex":
         return f"-0x{-value:x}" if value < 0 else f"0x{value:x}"
     return str(value)
@@ -60,6 +61,8 @@ def param_list(api: Api, fn: Function) -> str:
 
 
 def param_type(api: Api, param: Param) -> str:
+    """C spelling of a parameter: `c_type()` by value, a pointer to it through `_ref`
+    (`const` for `in`), a `void` pointer for `memory`."""
     if param.type == "memory":
         return "const void*" if param.ref == "in" else "void*"
     base = c_type(api, param.type)
@@ -70,6 +73,19 @@ def param_type(api: Api, param: Param) -> str:
     return base
 
 
+def type_names(api: Api) -> set[str]:
+    """Every type name the declarations spell: the fixed-width types and the typedefs."""
+    typedefs = (*api.typed_consts, *api.opaque_refs, *api.boxed_scalars, *api.structs)
+    return {*naming.BUILTIN_C_TYPES.values(), *(naming.type_name(api.namespace, t.name) for t in typedefs)}
+
+
+def parameter_type_objections(api: Api) -> list[str]:
+    """A parameter named like one of `type_names()`: in a prototype the name hides that type
+    from every parameter after it."""
+    params = ((f"function.{fn.name}.{p.name}", p.name) for fn in api.functions for p in fn.params)
+    return generated_name_objections(params, type_names(api))
+
+
 def header_macros(namespace: str) -> frozenset[str]:
     """Every macro the header defines or tests for itself, beside one per constant."""
     return frozenset({
@@ -78,19 +94,10 @@ def header_macros(namespace: str) -> frozenset[str]:
     })
 
 
-def cdef(api: Api) -> str:
-    """The declaration text the Lua module hands to ffi.cdef: a typedef of its base type
-    for each typed enum (not its body, since the Lua module carries constants as literals),
-    opaque, boxed scalar and struct declarations, and function declarations with no visibility macro.
-    """
-    typedefs = [
-        f"typedef {naming.BASE_C_TYPES[t.base_type].c_type} {naming.type_name(api.namespace, t.name)};\n"
-        for t in api.typed_consts
-    ]
-    return "\n".join(typedefs + [declarations(api, function_prefix="", constants=False)])
-
-
 def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> str:
+    """The header's declarations in its order, each function after `function_prefix`
+    (`NS_API ` in the header): with `constants`, the version, the bit, plain, enum and string
+    constants, then the opaque refs, boxed scalars, structs and functions."""
     ns = api.namespace
     blocks = []
     if constants:

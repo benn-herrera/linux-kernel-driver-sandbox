@@ -49,7 +49,7 @@ bool test_compute(tcdl::Device& d) {
  	static constexpr uint32_t kFactVal = 6 * 5 * 4 * 3 * 2;
   uint32_t fact = 0;
   const auto tr = d.compute_factorial(kFactArg, fact);
-  if (tr != tcdl::Result::Ok) {
+  if (tr != tcdl::OpResult::Ok) {
     fprintf(stderr, "compute_factorial returned error %s(%u)\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
@@ -87,14 +87,14 @@ bool test_dma_round_trip(tcdl::Device& d) {
   }
 
   auto tr = d.dma_to_device(tcdl::DmaOffset{0x0ul}, pattern.data(), pattern.size() * sizeof(pattern[0]));
-  if (tr != tcdl::Result::Ok) {
+  if (tr != tcdl::OpResult::Ok) {
     fprintf(stderr, "DMA to device failed with error %s(%u).\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
 
   auto readback = vector<uint16_t>(pattern.size(), 0xffff);
   tr = d.dma_from_device(tcdl::DmaOffset{0x0ul}, readback.data(), readback.size() * sizeof(readback[0]));
-  if (tr != tcdl::Result::Ok) {
+  if (tr != tcdl::OpResult::Ok) {
     fprintf(stderr, "DMA from device failed with error %s(%d).\n", tcdl::to_string(tr), unsigned(tr));
     return false;
   }
@@ -110,7 +110,7 @@ bool test_dma_round_trip(tcdl::Device& d) {
 }
 
 auto create_dev(uint32_t idx) {
-  tcdl::Result res{};
+  tcdl::OpResult res{};
   auto d = tcdl::Device::create(idx, &res);
   if (!d) {
     fprintf(stderr, "failed creating device: %s(%u).\n", tcdl::to_string(res), unsigned(res));

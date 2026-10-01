@@ -38,7 +38,7 @@ static_assert(int32_t(xy::Status::ErrFloor) == INT32_MIN);
 
 int main() {
   xy::Status r = xy::Status::Ok;
-  if (xy::Port::create(99, &r) || r != xy::Status::ErrBusy || std::strcmp(xy::to_string(r), "ERR_AGAIN") != 0) {
+  if (xy::Port::create(99, &r) || r != xy::Status::ErrBusy || std::strcmp(xy::to_string(r), "ERR_BUSY") != 0) {
     return 1;
   }
 

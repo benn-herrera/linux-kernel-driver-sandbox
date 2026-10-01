@@ -5,22 +5,27 @@ from pathlib import Path
 
 from api_gen import naming
 from api_gen.emitters import c
-from api_gen.model import Api, BitConst, ClassShape, EnumEntry, Function, Group, OpaqueRef, Param, duplicates, single_bit_entries
+from api_gen.model import (
+    Api, BitConst, ClassShape, EnumEntry, Function, Group, OpaqueRef, Param, duplicate_objections,
+    generated_name_objections, named_values, single_bit_entries,
+)
 
 _LUA_KEYWORDS = frozenset(
     "and break do else elseif end false for function goto if in local nil not or repeat return "
     "then true until while".split()
 )
 _GENERATED_NAMES = (
-    "M", "ffi", "bit", "lib",
-    "assert", "type", "tonumber", "setmetatable", "require", "string", "table",
-    "self", "result", "handle", "h",
+    "M", "ffi", "lib",
+    "assert", "type", "tonumber", "setmetatable",
+    "self", "result", "h",
 )
 """Every free name the generated text binds or references where a class function's
 arguments are in scope: the module's locals, the globals it calls, and the locals a class
 function binds. A parameter is the one definition name that becomes a bare Lua name, so
-a parameter named like one of these would shadow it; the locals of a conversion function
-(`value`, `names`) share no scope with a parameter."""
+a parameter named like one of these would shadow it. The names the module uses only where
+no parameter is in scope are not here: `require` at the top, `bit`, `string`, `table` and
+a conversion's locals (`value`, `names`) in the conversion functions, and the `handle`
+local of the dtor's method, which takes no parameter but `self`."""
 # LuaJIT hands a 64-bit integer back as cdata, since a Lua number is a double; every
 # other builtin scalar, the floating-point ones included, converts to a number exactly.
 _CDATA_INTEGERS = frozenset({"i64", "u64"})
@@ -31,43 +36,44 @@ _NIL_CLAUSE = '    if value == nil then return "nil" end\n'
 
 def validate(api: Api) -> list[str]:
     """Every objection the Lua module has to `api`: a name that is a Lua keyword, a
-    parameter named like one of `_GENERATED_NAMES`, a bit flag beyond the signed 32-bit
-    range, a module field (constant, conversion, `raw` or class) defined twice, and a class
-    member defined twice."""
-    problems = [f"{where}: '{name}' is a Lua keyword" for where, name in api.names() if name in _LUA_KEYWORDS]
+    parameter of a class function named like one of `_GENERATED_NAMES`, a bit flag beyond
+    the signed 32-bit range, a module field (constant, conversion, `raw` or class) defined
+    twice, and a class member defined twice."""
+    objections = [f"{where}: '{name}' is a Lua keyword" for where, name in api.names() if name in _LUA_KEYWORDS]
     signed_max = naming.BASE_C_TYPES["i32"].max_value
-    problems += [
+    objections += [
         f"untyped_bit_const.{entry.name}: value 0x{entry.value:x} exceeds 0x{signed_max:x}; LuaJIT bit operations are "
         "signed 32-bit, so the flag would not equal its own masked result"
         for entry in api.bit_consts
         if entry.value > signed_max
     ]
-    problems += [
-        f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code uses"
-        for fn in api.functions
-        for p in fn.params
-        if p.name in _GENERATED_NAMES
-    ]
     classes = api.classes()
-    fields = [(name, "a constant") for _, literals in _constant_sections(api) for name, _ in literals]
+    params = [
+        (f"function.{fn.name}.{p.name}", p.name)
+        for shape in classes
+        for fn, rendered, _ in shape.class_params()
+        for p in rendered
+    ]
+    objections += generated_name_objections(params, _GENERATED_NAMES)
+    const = naming.unprefixed_const_name
+    fields = [(where, const(name)) for where, name in api.constant_names(version=True)]
     fields += _conversion_names(api)
-    fields.append(("raw", "the raw function table"))
-    fields += [(naming.upper_camel(shape.opaque.class_name), "a class") for shape in classes]
-    problems += [f"M.{name} would be both {' and '.join(whats)}" for name, whats in duplicates(fields).items()]
+    fields.append(("the raw function table", "raw"))
+    fields += [(f"opaque_ref.{s.opaque.name}._class", naming.upper_camel(s.opaque.class_name)) for s in classes]
+    objections += duplicate_objections(fields, "module M")
     for shape in classes:
-        members = [("new", "the constructor"), ("_handle", "the handle")]
-        members += [(f.name, f"function.{f.name}") for f in _class_methods(shape)]
-        members += [(p.name, f"function.{shape.ctor.name}.{p.name}") for p in shape.cached]
-        cls = naming.upper_camel(shape.opaque.class_name)
-        problems += [f"M.{cls}.{m} would be both {' and '.join(whats)}" for m, whats in duplicates(members).items()]
-    return [f"{LABEL}: {p}" for p in problems]
+        members = shape.members(own=("new", "_handle"))
+        if shape.dtor is not None:
+            members.append((f"function.{shape.dtor.name}", shape.dtor.name))
+        objections += duplicate_objections(members, f"class {naming.upper_camel(shape.opaque.class_name)}")
+    return [f"{LABEL}: {o}" for o in objections]
 
 
-def output_path(*, stem: str, exercise: str) -> Path:
-    return Path("binding") / f"{stem}.lua"
+def output_path(*, name: str, project: str) -> Path:
+    return Path("binding") / f"{name}.lua"
 
 
-def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
+def emit(api: Api, *, source_name: str, name: str, library: str | None, project: str) -> str:
     """The LuaJIT module, loading `library`, which the generator has resolved."""
     ns = api.namespace
     out = [
@@ -75,17 +81,17 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
         'local ffi = require("ffi")\n',
         'local bit = require("bit")\n' if any(g.to_string is not None for g in api.bit_const_groups) else "",
         "\n",
-        _cdef(c.cdef(api)),
+        _cdef(api),
         f'\nlocal lib = ffi.load("{library}")\n\nlocal M = {{}}\n\n',
     ]
 
     for doc, literals in _constant_sections(api):
-        out += [f"-- {line}\n" for line in (doc or "").splitlines()]
+        out += [f"-- {doc}\n"] if doc else []
         out += [f"M.{name} = {value}\n" for name, value in literals]
 
     out += [_bit_to_string(g) for g in api.bit_const_groups if g.to_string is not None]
     out += [
-        _lookup(naming.lua_to_string(g.to_string, typename=None), g.entries, unknown=naming.unknown_value_name(None))
+        _lookup(naming.lua_to_string(g.to_string, typename=None), named_values(g), unknown=naming.unknown_value_name(None))
         for g in api.const_groups
         if g.to_string is not None
     ]
@@ -133,14 +139,14 @@ def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]
 
 
 def _conversion_names(api: Api) -> list[tuple[str, str]]:
-    """(module field, where the definition names it) for every `_to_string` conversion."""
+    """(where the definition names it, module field) for every `_to_string` conversion."""
     names = [
-        (naming.lua_to_string(g.to_string, typename=None), f"{g.name}._to_string")
+        (f"{g.name}._to_string", naming.lua_to_string(g.to_string, typename=None))
         for g in (*api.bit_const_groups, *api.const_groups)
         if g.to_string is not None
     ]
     names += [
-        (naming.lua_to_string(t.to_string, typename=t.name), f"typed_const.{t.name}._to_string")
+        (f"typed_const.{t.name}._to_string", naming.lua_to_string(t.to_string, typename=t.name))
         for t in api.typed_consts
         if t.to_string is not None
     ]
@@ -148,10 +154,10 @@ def _conversion_names(api: Api) -> list[tuple[str, str]]:
 
 
 def _lookup(name: str, entries: tuple[EnumEntry, ...], *, unknown: str) -> str:
-    """A value-to-name conversion through a table, one key per value named by its last
-    entry: the order a table constructor assigns repeated keys in is undefined."""
-    by_value = {e.value: naming.unprefixed_const_name(e.name) for e in entries}
-    keys = "".join(f'    [M.{key}] = "{key}",\n' for key in by_value.values())
+    """A value-to-name conversion through a table, one key per value of `entries`: the order
+    a table constructor assigns repeated keys in is undefined, so a plain group's come from
+    `named_values()`."""
+    keys = "".join(f'    [M.{key}] = "{key}",\n' for key in (naming.unprefixed_const_name(e.name) for e in entries))
     table = naming.lua_lookup_table(name)
     return (
         f"\nlocal {table} = {{\n{keys}}}\n"
@@ -183,12 +189,20 @@ def _bit_to_string(group: Group[BitConst]) -> str:
     )
 
 
-def _cdef(text: str) -> str:
+def _cdef(api: Api) -> str:
+    """The `ffi.cdef` block: a typedef of its base type for each typed enum (not its body,
+    since the module carries constants as literals), then the header's opaque, boxed scalar,
+    struct and function declarations with no visibility macro."""
+    typedefs = [
+        f"typedef {naming.BASE_C_TYPES[t.base_type].c_type} {naming.type_name(api.namespace, t.name)};\n"
+        for t in api.typed_consts
+    ]
+    text = "\n".join([*typedefs, c.declarations(api, function_prefix="", constants=False)])
     return f"ffi.cdef[[\n{text}]]\n"
 
 
 def _doc_lines(fn: Function) -> str:
-    return "".join(f"-- {line}\n" for doc in fn.docs() for line in doc.splitlines())
+    return "".join(f"-- {doc}\n" for doc in fn.docs())
 
 
 def _unboxed(api: Api, type_name: str) -> str:
@@ -313,11 +327,6 @@ def _arg_asserts(api: Api, params: tuple[Param, ...], *, context: str) -> list[s
         condition, expected = _type_check(api, p, name)
         lines.append(f'    assert({condition}, "{context}: {name} must be {expected}")\n')
     return lines
-
-
-def _class_methods(shape: ClassShape) -> tuple[Function, ...]:
-    """Every method of the class, the dtor's included."""
-    return shape.methods if shape.dtor is None else (*shape.methods, shape.dtor)
 
 
 def _class(api: Api, shape: ClassShape) -> str:

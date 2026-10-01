@@ -100,7 +100,7 @@ driver-clean:
   set -euo pipefail
   rm -rf "{{OUT}}/driver-build" "{{OUT}}/driver"
 
-[doc("generate the active exercise's userspace API artifacts: make -C /work/exercises/EXERCISE/userspace/api_def with exercises/gen.mk, which runs vdev/api_gen for every *.adef.toml newer than its outputs under OUT/userspace-build/EXERCISE/generated/; outputs land under generated/include/EXERCISE/ (the C header and the header-only C++ wrapper), generated/binding/ (the Lua module) and generated/stub/ (the implementation stub, never staged); no-op with a note when the exercise has no api_def/Makefile")]
+[doc("generate the active exercise's userspace API artifacts: make -C /work/exercises/EXERCISE/userspace/api_def with exercises/gen.mk, which runs vdev/api_gen for the exercise's one *.adef.toml when it is newer than its outputs under OUT/userspace-build/EXERCISE/generated/; outputs land under generated/include/EXERCISE/ (the C header and the header-only C++ wrapper), generated/binding/ (the Lua module), generated/rust/ (the Rust binding and ABI relay, compile-time inputs a crate reaches through API_GEN_RUST_DIR, never staged) and generated/stub/ (the implementation stubs, never staged); no-op with a note when the exercise has no api_def/Makefile")]
 generate: exercise-check
   #!/usr/bin/env bash
   set -euo pipefail
@@ -118,36 +118,99 @@ api-gen-test:
   set -euo pipefail
   PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s /work/vdev/api_gen/tests -t /work/vdev
 
-[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ (lib/ then app/) with clang; intermediates go to OUT/userspace-build/EXERCISE/, the product OUT/userspace-build/EXERCISE/EXERCISE and every lib*.so* there, plus the whole /work/exercises/EXERCISE/userspace/script/ tree as-is, subdirectories included, are copied to OUT/userspace/ (cleared first); the generated include/ and binding/ subtrees are staged whole onto OUT/userspace/; lib/*.h are the implementation's own and are not staged")]
+[doc("build the active exercise's /work/exercises/EXERCISE/userspace/ after generate: lib/ (a Makefile or a Cargo.toml, never both), then app_cpp/ (Makefile), then app_rs/ if present (Cargo.toml); make builds use clang, cargo builds use --offline --locked (the repository is read-only, so a stale Cargo.lock must fail rather than be rewritten) with CARGO_HOME=OUT/cargo-home so nothing is written into the container layer; intermediates go to OUT/userspace-build/EXERCISE/, and each product is verified after its build (libEXERCISE.so by file name and a SONAME equal to it, app_cpp and app_rs executable) and copied to OUT/userspace/ (cleared first), together with app_lua/ (each top-level *.lua under its stem, so app_lua.lua ships as app_lua; subdirectories whole; any other top-level file is refused) and the generated include/ and binding/ subtrees, staged whole; lib/*.h are the implementation's own and are not staged; the cargo crates' environment is CONVENTIONS.md \"Exercise userspace\"")]
 userspace: exercise-check generate
   #!/usr/bin/env bash
   set -euo pipefail
-  shopt -s nullglob
   dir="{{EXERCISE_DIR}}/userspace"
-  [[ -f "${dir}/lib/Makefile" && -f "${dir}/app/Makefile" ]] || { printf '%s needs lib/Makefile and app/Makefile\n' "${dir}" >&2; exit 1; }
-  rm -rf "{{OUT}}/userspace"
-  mkdir -p "{{OUT}}/userspace"
   build="{{OUT}}/userspace-build/{{EXERCISE}}"
-  mkdir -p "${build}"
-  make -C "${dir}/lib" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/exercises
-  make -C "${dir}/app" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/exercises
-  [[ -x "${build}/{{EXERCISE}}" ]] || { printf '%s/app/Makefile did not produce %s\n' "${dir}" "${build}/{{EXERCISE}}" >&2; exit 1; }
-  cp "${build}/{{EXERCISE}}" "{{OUT}}/userspace/"
-  for lib in "${build}"/lib*.so*; do
-    cp "${lib}" "{{OUT}}/userspace/"
-  done
-  if [[ -d "${dir}/script" ]]; then
-    cp -r "${dir}/script/." "{{OUT}}/userspace/"
-  fi
-  # generated artifacts: generated/ mirrors OUT/userspace/, so each subtree is staged whole;
-  # lib/*.h are the implementation's own and are not staged
-  for sub in include binding; do
-    if [[ -d "${build}/generated/${sub}" ]]; then
-      mkdir -p "{{OUT}}/userspace/${sub}"
-      cp -r "${build}/generated/${sub}/." "{{OUT}}/userspace/${sub}/"
+  out="{{OUT}}/userspace"
+  libso="${build}/lib{{EXERCISE}}.so"
+  function die() {
+    printf '%s\n' "${*}" >&2
+    exit 1
+  }
+  # cargo_build <manifest> <target-dir> [VAR=value...]
+  function cargo_build() {
+    local manifest="${1}" target="${2}"
+    shift 2
+    env CARGO_HOME="{{OUT}}/cargo-home" CARGO_TARGET_DIR="${target}" "${@}" \
+      cargo build --offline --locked --manifest-path "${manifest}"
+  }
+  function check_layout() {
+    local lib_make="${dir}/lib/Makefile" lib_cargo="${dir}/lib/Cargo.toml"
+    if [[ -f "${lib_make}" && -f "${lib_cargo}" ]]; then
+      die "${dir}/lib holds both Makefile and Cargo.toml; keep one"
     fi
-  done
-  printf 'built %s/userspace: %s\n' "{{OUT}}" "{{EXERCISE}}" >&2
+    [[ -f "${lib_make}" || -f "${lib_cargo}" ]] || die "${dir}/lib needs Makefile or Cargo.toml"
+    [[ -f "${dir}/app_cpp/Makefile" ]] || die "${dir}/app_cpp needs Makefile"
+    if [[ -d "${dir}/app_rs" && ! -f "${dir}/app_rs/Cargo.toml" ]]; then
+      die "${dir}/app_rs needs Cargo.toml"
+    fi
+  }
+  function build_lib() {
+    if [[ -f "${dir}/lib/Cargo.toml" ]]; then
+      local cargo_so="${build}/cargo/lib/debug/lib{{EXERCISE}}.so"
+      cargo_build "${dir}/lib/Cargo.toml" "${build}/cargo/lib" API_GEN_RUST_DIR="${build}/generated/rust" DRIVER_INCLUDE=/work/exercises
+      [[ -f "${cargo_so}" ]] || die "${dir}/lib/Cargo.toml did not produce ${cargo_so}"
+      cp "${cargo_so}" "${libso}"
+    else
+      make -C "${dir}/lib" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/exercises
+      [[ -f "${libso}" ]] || die "${dir}/lib/Makefile did not produce ${libso}"
+    fi
+    local soname
+    soname="$(readelf -d "${libso}" | sed -n 's/.*Library soname: \[\(.*\)\]/\1/p')"
+    [[ "${soname}" == "${libso##*/}" ]] || die "${libso} has SONAME '${soname}', expected '${libso##*/}'"
+    cp "${libso}" "${out}/"
+  }
+  function build_app_cpp() {
+    make -C "${dir}/app_cpp" CC=clang CXX=clang++ OUT="${build}" DRIVER_INCLUDE=/work/exercises
+    [[ -x "${build}/app_cpp" ]] || die "${dir}/app_cpp/Makefile did not produce ${build}/app_cpp"
+    cp "${build}/app_cpp" "${out}/"
+  }
+  function build_app_rs() {
+    [[ -d "${dir}/app_rs" ]] || return 0
+    local bin="${build}/cargo/app_rs/debug/app_rs"
+    cargo_build "${dir}/app_rs/Cargo.toml" "${build}/cargo/app_rs" API_GEN_RUST_DIR="${build}/generated/rust" API_LIB_DIR="${build}"
+    [[ -x "${bin}" ]] || die "${dir}/app_rs/Cargo.toml did not produce ${bin}"
+    cp "${bin}" "${out}/"
+  }
+  # no build step: a top-level *.lua ships under its stem (app_lua.lua -> /usr/bin/app_lua, a test);
+  # the source keeps its extension for the editor's language services; subdirectories ship whole
+  function stage_lua() {
+    [[ -d "${dir}/app_lua" ]] || return 0
+    shopt -s nullglob
+    local entry
+    for entry in "${dir}/app_lua"/*; do
+      if [[ -d "${entry}" ]]; then
+        cp -r "${entry}" "${out}/"
+      elif [[ "${entry}" == *.lua ]]; then
+        cp "${entry}" "${out}/$(basename "${entry%.lua}")"
+      else
+        die "${entry}: app_lua/ ships only top-level *.lua and subdirectories; any other file would run as a test"
+      fi
+    done
+  }
+  # include/ and binding/ mirror OUT/userspace/, so each is staged whole;
+  # rust/ and stub/ are compile-time inputs and copy-once stubs, never staged
+  function stage_generated() {
+    local sub
+    for sub in include binding; do
+      if [[ -d "${build}/generated/${sub}" ]]; then
+        mkdir -p "${out}/${sub}"
+        cp -r "${build}/generated/${sub}/." "${out}/${sub}/"
+      fi
+    done
+  }
+  check_layout
+  rm -rf "${out}"
+  mkdir -p "${out}" "${build}"
+  stage_lua
+  build_lib
+  build_app_cpp
+  build_app_rs
+  stage_generated
+  printf 'built %s: %s\n' "${out}" "{{EXERCISE}}" >&2
 
 [doc("remove OUT/userspace-build/ (the intermediate trees) and OUT/userspace/ for every exercise, not only the active one")]
 userspace-clean:
@@ -163,8 +226,8 @@ compile-commands: exercise-check
   [[ -d "${mo}" ]] || { printf "%s missing: run 'driver' first\n" "${mo}" >&2; exit 1; }
   build="{{OUT}}/userspace-build/{{EXERCISE}}"
   shopt -s nullglob
-  frags=("${build}"/*/*.o.json)
-  (( ${#frags[@]} > 0 )) || { printf "%s has no */*.o.json fragments: run 'userspace' first\n" "${build}" >&2; exit 1; }
+  frags=("${build}"/obj/*/*.o.json)
+  (( ${#frags[@]} > 0 )) || { printf "%s has no obj/*/*.o.json fragments: run 'userspace' first\n" "${build}" >&2; exit 1; }
   tmp="$(mktemp -d)"
   trap 'rm -rf "${tmp}"' EXIT
   python3 "{{KERNEL_SRC}}/scripts/clang-tools/gen_compile_commands.py" -d "${mo}" -o "${tmp}/kernel.json"
@@ -176,7 +239,7 @@ compile-commands: exercise-check
   kernel_json, build, out_path = sys.argv[1:4]
   with open(kernel_json) as f:
       entries = json.load(f)
-  for frag in sorted(glob.glob(f"{build}/*/*.o.json")):
+  for frag in sorted(glob.glob(f"{build}/obj/*/*.o.json")):
       with open(frag) as f:
           text = f.read().rstrip()
       if text.endswith(','):
@@ -305,13 +368,11 @@ export-clang-format:
   [[ -f "{{KERNEL_SRC}}/.clang-format" ]] || { printf "%s/.clang-format missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
   cp -v "{{KERNEL_SRC}}/.clang-format" "{{OUT}}/clang-format"
 
-[doc("run the kernel tree's checkpatch.pl over every *.c and *.h under the active exercise's /work/exercises/EXERCISE/driver/; nonzero on any error or warning")]
-checkpatch: exercise-check
+[doc("run the kernel tree's checkpatch.pl over every *.c and *.h under every exercise's /work/exercises/*/driver/; nonzero on any error or warning")]
+checkpatch:
   #!/usr/bin/env bash
   set -euo pipefail
   [[ -f "{{KERNEL_SRC}}/scripts/checkpatch.pl" ]] || { printf "%s/scripts/checkpatch.pl missing: run 'kernel-fetch' first\n" "{{KERNEL_SRC}}" >&2; exit 1; }
-  driver="{{EXERCISE_DIR}}/driver"
-  [[ -d "${driver}" ]] || { printf '%s: no such directory\n' "${driver}" >&2; exit 1; }
-  find "${driver}" -type f \( -name '*.c' -o -name '*.h' \) -print0 \
+  find /work/exercises/*/driver -type f \( -name '*.c' -o -name '*.h' \) -print0 \
     | xargs -0 "{{KERNEL_SRC}}/scripts/checkpatch.pl" --no-tree --terse -f
   printf 'checkpatch: clean\n' >&2

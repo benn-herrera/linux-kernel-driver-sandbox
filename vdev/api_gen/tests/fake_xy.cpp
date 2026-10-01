@@ -113,6 +113,9 @@ XY_API xy_status xy_reset(void) {
 
 XY_API xy_status xy_seek(xy_port hport, uint64_t offset) {
   (void)hport;
+  if (offset == 12345) {
+    return static_cast<xy_status>(12345);  // a result xy_status does not name, for the Rust binding's panic
+  }
   return offset == 1ULL << 40 ? XY_OK : XY_ERR_BUSY;
 }
 

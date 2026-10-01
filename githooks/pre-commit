@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# pre-commit hook - formats staged driver sources against kernel style and
-# blocks the commit if that changes anything, or if checkpatch then finds a
-# violation format cannot fix.
+# pre-commit hook - when any exercise's driver file is staged, formats the
+# driver sources of every exercise against kernel style and blocks the commit
+# if that changes anything, or if checkpatch then finds a violation format
+# cannot fix. A reformat of a file the commit does not touch means an earlier
+# commit got past the policy.
 #
 # Tracked and inert: this file takes effect once `just install-hooks` copies
 # it into .git/hooks/ (`just uninstall-hooks` removes it). `just verify`
@@ -35,10 +37,12 @@ driver_files=()
 # under set -u; ${arr[@]+"${arr[@]}"} is the guard (also used in justfile).
 for f in ${staged[@]+"${staged[@]}"}; do
   case "${f}" in
-    exercises/*/driver/*.c|exercises/*/driver/*.h) driver_files+=("${f}") ;;
+    exercises/*/driver/*.c|exercises/*/driver/*.h)
+      driver_files+=("${f}")
+      ;;
   esac
 done
-(( ${#driver_files[@]} > 0 )) || exit 0
+(( ${#driver_files[@]} > 0 )) || { printf 'pre-commit: no driver files staged; nothing to check\n' >&2; exit 0; }
 
 unstaged=()
 while IFS= read -r f; do
@@ -67,6 +71,20 @@ changed=()
 while IFS= read -r f; do
   changed+=("${f}")
 done < <(git diff --name-only -- "${driver_files[@]}")
+# format covers every exercise: a rewrite outside the staged set is a file an earlier commit
+# got past the policy, worth seeing but not this commit's to refuse
+outside=()
+while IFS= read -r f; do
+  seen=0
+  for u in ${unstaged[@]+"${unstaged[@]}"} "${driver_files[@]}"; do
+    [[ "${f}" == "${u}" ]] && { seen=1; break; }
+  done
+  (( seen )) || outside+=("${f}")
+done < <(git diff --name-only -- 'exercises/*/driver')
+if (( ${#outside[@]} > 0 )); then
+  printf 'pre-commit: note: format also rewrote %s, outside this commit\n' "${outside[*]}" >&2
+fi
+
 if (( ${#changed[@]} > 0 )); then
   printf 'pre-commit: reformatted: %s; review, git add, and commit again\n' "${changed[*]}" >&2
   exit 1

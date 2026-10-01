@@ -19,7 +19,7 @@ local function checks()
         end
     end
 
-    assert(M.status_to_string(9) == "ERR_AGAIN")
+    assert(M.status_to_string(9) == "ERR_BUSY")
     assert(M.status_to_string(12345) == "UNKNOWN_STATUS")
     assert(M.mode_to_string(1) == "SLOW")
     assert(M.access_to_string(3) == "ACC_A|ACC_B")

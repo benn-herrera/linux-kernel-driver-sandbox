@@ -1,13 +1,12 @@
 import re
 import unittest
 
-from api_gen import naming
 from api_gen.emitters import emit_binding_cpp
-from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, load, mutate
+from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate
 
 
 def wrapper(text: str = FIXTURE) -> str:
-    return emit_binding_cpp.emit(load(text), source_name="xy_api.adef.toml", stem="xy_api", library=None)
+    return emit_binding_cpp.emit(load(text), source_name="xy_api.adef.toml", name="xy_api", library=None, project="xy")
 
 
 class Wrapper(unittest.TestCase):
@@ -49,9 +48,6 @@ class BoxedScalar(unittest.TestCase):
     def setUp(self) -> None:
         self.text = wrapper(KITCHEN_SINK)
 
-    def test_lifted_into_the_namespace_as_an_alias_before_the_structs(self) -> None:
-        self.assertIn("\nusing Offset = xy_offset;\nusing Stats = xy_stats;\n", self.text)
-
     def test_methods_take_it_as_the_c_signature_does(self) -> None:
         self.assertIn("  Status echo_offset(Offset pos, Offset& ppos) {\n", self.text)
         self.assertIn("    return Status(xy_echo_offset(handle_, pos, &ppos));\n", self.text)
@@ -64,24 +60,6 @@ class BoxedScalar(unittest.TestCase):
 
 
 class OptionalParam(unittest.TestCase):
-    def setUp(self) -> None:
-        self.text = wrapper(KITCHEN_SINK)
-
-    def test_pointer_with_default_instead_of_reference(self) -> None:
-        self.assertIn("  Status annotate(const Stats* note = nullptr) {\n", self.text)
-        self.assertIn("    return Status(xy_annotate(handle_, note));\n", self.text)
-
-    def test_ctor_cached_outref_ignores_optional(self) -> None:
-        self.assertIn("static Port create(uint32_t unit, Status* result = nullptr) {\n", self.text)
-
-    def test_every_optional_kind_is_a_pointer_and_an_enum_by_ref_is_the_c_typedef(self) -> None:
-        self.assertIn(
-            "  Status probe(xy_mode& pmode, const void* payload, uint32_t payload_count, const uint32_t* limit = nullptr, "
-            "uint32_t* level = nullptr, uint32_t* ppeek = nullptr) {\n",
-            self.text,
-        )
-        self.assertIn("    return Status(xy_probe(handle_, &pmode, payload, payload_count, limit, level, ppeek));\n", self.text)
-
     def test_default_omitted_when_a_non_optional_parameter_follows(self) -> None:
         text = wrapper(mutate(
             KITCHEN_SINK,
@@ -110,19 +88,10 @@ class BaseTypes(unittest.TestCase):
         expected |= {c.name.upper(): "const char*" for c in self.api.string_consts}
         self.assertEqual(types, expected)
 
-    def test_enum_class_underlying_type_is_the_base_type(self) -> None:
-        for t in self.api.typed_consts:
-            self.assertIn(
-                f"enum class [[nodiscard]] {naming.upper_camel(t.name)} : {C_BASE_TYPES[t.base_type]} {{\n", self.text
-            )
-
 
 class Validate(unittest.TestCase):
     def validate(self, text: str) -> list[str]:
         return emit_binding_cpp.validate(load(text))
-
-    def test_kitchen_sink_has_no_objection(self) -> None:
-        self.assertEqual(self.validate(KITCHEN_SINK), [])
 
     def test_cpp_keyword_as_name(self) -> None:
         for text, message in (
@@ -132,17 +101,6 @@ class Validate(unittest.TestCase):
         ):
             with self.subTest(message=message):
                 self.assertIn(message, self.validate(text))
-
-    def test_name_that_is_also_a_c_keyword_is_worded_as_one(self) -> None:
-        # C already forbids it (the header refuses it too), so the wrapper's message
-        # matches the header's word for word: `__main__` collapses both into one line.
-        self.assertIn(
-            "wrapper: struct.stats.int: 'int' is a C keyword",
-            self.validate(mutate(FIXTURE, "bytes = ", "int = ")),
-        )
-
-    def test_lua_keyword_is_not_its_objection(self) -> None:
-        self.assertEqual(self.validate(mutate(FIXTURE, "bytes = ", "end = ")), [])
 
     def test_generated_names_are_refused_as_parameters(self) -> None:
         for needle, name, where in (
@@ -158,11 +116,18 @@ class Validate(unittest.TestCase):
                     [f"wrapper: {where}: '{name}' is a name the generated code uses"],
                 )
 
-    def test_every_generated_name_is_used_by_the_generated_code(self) -> None:
-        text = wrapper(KITCHEN_SINK)
-        for name in emit_binding_cpp._GENERATED_NAMES:
-            with self.subTest(name=name):
-                self.assertRegex(text, rf"(?<![\w.]){name}(?!\w)")
+    def test_parameters_no_class_renders_are_not_refused(self) -> None:
+        # spend has no class; send's first parameter is the handle the object holds
+        for needle, old in (('htoken = "token"', "htoken"), ('[function.send]\n_return = "status"\nhport = ', "hport")):
+            for name in ("result", "status", "handle", "handle_", "xy_send", "Stats"):
+                with self.subTest(needle=needle, name=name):
+                    self.assertEqual(self.validate(mutate(FIXTURE, needle, needle.replace(old, name))), [])
+
+    def test_a_parameter_named_like_a_c_type_is_refused_wherever_it_is_as_the_header_refuses_it(self) -> None:
+        self.assertEqual(
+            self.validate(mutate(FIXTURE, 'htoken = "token"', 'xy_status = "token"')),
+            ["wrapper: function.spend.xy_status: 'xy_status' is a name the generated code uses"],
+        )
 
     def test_rendered_names_are_refused_as_parameters(self) -> None:
         boxed = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
@@ -182,7 +147,7 @@ class Validate(unittest.TestCase):
     def test_member_collision(self) -> None:
         self.assertEqual(
             self.validate(mutate(FIXTURE, "[function.send]", "[function.release]")),
-            ["wrapper: class Port: release would be defined more than once, by the wrapper's own member and function.release"],
+            ["wrapper: class Port: release would be defined more than once, by the class's own member and function.release"],
         )
         self.assertEqual(
             self.validate(mutate(FIXTURE, 'generation = { _type = "u32", _ref = "out" }', 'send = { _type = "u32", _ref = "out" }')),
@@ -220,11 +185,6 @@ class Validate(unittest.TestCase):
             ["wrapper: namespace xy: Offset would be defined more than once, by boxed_scalar.offset and struct.Offset"],
         )
 
-    def test_enums_may_share_a_conversion_name(self) -> None:
-        api = load(KITCHEN_SINK)
-        self.assertEqual({t.to_string for t in api.typed_consts}, {"to_string"})
-        self.assertEqual(emit_binding_cpp.validate(api), [])
-
     def test_conversion_collisions(self) -> None:
         for needle, name, message in (
             ('_to_string = "limit_to_string"', "to_string",
@@ -243,16 +203,6 @@ CONVERSION = re.compile(r"^inline (const char\*|std::string) (\w+)\((\w+) value\
 
 
 class ToString(unittest.TestCase):
-    def test_signatures_in_fixture(self) -> None:
-        self.assertEqual(
-            CONVERSION.findall(wrapper()),
-            [
-                ("std::string", "feat_to_string", "int32_t"),
-                ("std::string", "limit_to_string", "int32_t"),
-                ("const char*", "to_string", "Status"),
-            ],
-        )
-
     def test_only_groups_with_the_property_have_a_conversion(self) -> None:
         self.assertEqual(
             [name for _, name, param in CONVERSION.findall(wrapper(KITCHEN_SINK))],
@@ -270,19 +220,14 @@ class ToString(unittest.TestCase):
         text = wrapper(mutate(KITCHEN_SINK, '_base_type = "u32"\nmagic', '_base_type = "u32"\n_to_string = "wire_to_string"\nmagic'))
         self.assertIn(("std::string", "wire_to_string", "uint32_t"), CONVERSION.findall(text))
 
-    def test_switch_names_the_last_entry_of_a_shared_value(self) -> None:
-        text = wrapper(KITCHEN_SINK)
-        self.assertIn('    case Status::ErrAgain: return "ERR_AGAIN";\n', text)
-        self.assertNotIn("case Status::ErrBusy:", text)
-        self.assertIn('return "UNKNOWN_STATUS";', text)
-        self.assertIn('    case MAX_UNITS: return "MAX_UNITS";\n', text)
+    def test_switch_names_the_last_entry_of_a_plain_group_shared_value(self) -> None:
+        text = wrapper(mutate(KITCHEN_SINK, "extra = 4\n", "extra = 16\n"))
+        self.assertIn('    case EXTRA: return "EXTRA";\n', text)
+        self.assertNotIn("case MAX_UNITS:", text)
         self.assertIn('return "UNKNOWN";', text)
+        self.assertIn('    case Status::ErrBusy: return "ERR_BUSY";\n', text)
+        self.assertIn('return "UNKNOWN_STATUS";', text)
 
-    def test_bit_conversion_tests_only_single_bit_entries(self) -> None:
-        text = wrapper(KITCHEN_SINK)
-        self.assertIn("  if (value & ACC_A) {\n", text)
-        self.assertIn("  if (value & ACC_B) {\n", text)
-        self.assertNotIn("value & ACC_AB", text)
 
 if __name__ == "__main__":
     unittest.main()

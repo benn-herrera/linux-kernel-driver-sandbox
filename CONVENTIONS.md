@@ -19,7 +19,7 @@ Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 - A recipe runs where its justfile is mounted: the root `justfile` on the macOS host, `vdev/justfile` in the build container.
 - The root `justfile` knows the container's layout only through its mount targets: `MOUNTS`, the `VDEV_JUST` runner path, and the path mapping `clangd-vdev` passes. `vdev/justfile` names no host path or host tool.
 - The root composes workflows from host recipes and `run-vdev`; `vdev/justfile` does the work.
-- The active exercise is `EXERCISE` in `active_exercise.just`; every build, stage, test and style recipe acts on it alone, and the `*-clean-vdev` recipes remove every exercise's tree. `just EXERCISE=<name> <recipe>` overrides it for one run.
+- The active exercise is `EXERCISE` in `active_exercise.just`; every build, stage and test recipe acts on it alone; `format`, `format-check` and `checkpatch-vdev` (and the pre-commit hook) cover every exercise's `driver/`; and the `*-clean-vdev` recipes remove every exercise's tree. `just EXERCISE=<name> <recipe>` overrides it for one run.
 - One exercise per boot, until device-to-driver assignment exists.
 - Overrides do not reach a nested `just`: a root recipe that invokes `just` passes every overridable variable it depends on as `VAR=value`, as `VTARGET_QEMU` does.
 - Options precede overrides on the command line: `just --dry-run VAR=value recipe`.
@@ -38,22 +38,26 @@ Rules only. Detail lives in ARCHITECTURE.md; a quoted section name refers to it.
 ## Exercise userspace ("Userspace programs")
 
 - Makefiles under `exercises/<name>/userspace/` are plain GNU make, not kbuild; they write only under `OUT` and name no container or repository path.
-- `lib/` and `app/` include `exercises/cpp.mk` and take `CC`, `CXX`, `OUT`, `DRIVER_INCLUDE`; `api_def/` includes `exercises/gen.mk` and takes `OUT`, `API_GEN`.
+- `lib/` and `app_cpp/` include `exercises/cpp.mk` and take `CC`, `CXX`, `OUT`, `DRIVER_INCLUDE`; `api_def/` includes `exercises/gen.mk` and takes `OUT`, `API_GEN`.
+- Test programs live in `app_<language>/` (`app_cpp/`, `app_rs/`, `app_lua/`), one directory per language, so a future language gets its own directory rather than a shared generic name.
+- A `lib/` or `app_rs/` may instead be a cargo crate (`Cargo.toml`); both take `API_GEN_RUST_DIR` and `CARGO_TARGET_DIR`, `lib/` also takes `DRIVER_INCLUDE` (for bindgen) and `app_rs/` also takes `API_LIB_DIR`. `lib/` never holds both a Makefile and a `Cargo.toml`; `app_rs/` is always a cargo crate, so one without a `Cargo.toml` fails the build.
+- A cargo crate carries its `Cargo.lock`: the container mounts the repository read-only, so cargo builds `--locked` and cannot write one on the fly.
 - UAPI headers are included as `<name>/driver/*.h` (`DRIVER_INCLUDE` is `exercises/`).
-- Products: executable `$(OUT)/<name>`; optionally `$(OUT)/lib<name>*.so`, each with a `SONAME` equal to its file name. Anything else under `OUT` is intermediate.
+- Products: a test program is named after its directory, `$(OUT)/app_cpp` from `app_cpp/` and `$(OUT)/app_rs` from `app_rs/`, since one exercise is staged per boot and only the library carries the exercise name: `$(OUT)/lib<name>*.so`, each with a `SONAME` equal to its file name, from a make-built or a cargo `lib/`. Anything else under `OUT` is intermediate.
 - The executable links a library by `SONAME`, never by path; static linking is not required.
 - The library's public header is the generated one, shipped to `/usr/include/<name>/`; `lib/*.h` are the implementation's own and are not shipped.
-- Top-level files in `script/` ship as-is to `/usr/bin/` and run as tests; each starts with a `#!` line naming its interpreter (the guest provides `/usr/bin/luajit`).
-- Subdirectories of `script/` are support, shipped whole under `/usr/bin/` and never run; Lua modules there are reached by `require` from any cwd.
+- `app_lua/` has no build step: its entry point is `app_lua/app_lua.lua`, a `#!` script naming its interpreter (the guest provides `/usr/bin/luajit`); a top-level `*.lua` ships under its stem, so it lands at `/usr/bin/app_lua` and runs as the test while the source keeps the extension the editor's language services need. Any other top-level file there would run as a test too, so none exists and the build refuses one.
+- Its subdirectory `app_lua/lib_lua/` holds the Lua sources the entry point requires, shipped whole to `/usr/bin/lib_lua/` and never run; the guest's `LUA_PATH` resolves `require("lib_lua.<file>")` from any cwd, as it does `binding.<stem>` for the generated module.
 
 ## API generation ("API generation")
 
 - `vdev/api_gen/` is framework code.
+- The generator and its tests run only in the container (`just generate-vdev`, `just api-gen-test-vdev`); never run `python3` on the host against `vdev/api_gen/`. A host run proves nothing about the pinned toolchain the outputs are built and formatted with.
 - One `.adef.toml` per exercise: one definition, one `gendeps` call, one set of outputs. `gen.mk` refuses `api_def/` with more or none.
 - After changing the generator or `cpp.mk` flags, run `userspace-clean-vdev`.
 - Generated files are build products under `out/`, never written into the source tree.
 - The ioctl header under `driver/` is hand-written UAPI; never generate it.
-- Pin every constant the library relays from the driver in `[_driver_data.const_pins]`; a relayed constant without a pin is a review finding.
+- Pin every constant the library relays from the driver as a member of `[_wrapped_api]`; a relayed constant without a pin is a review finding.
 
 ## Style and editor
 

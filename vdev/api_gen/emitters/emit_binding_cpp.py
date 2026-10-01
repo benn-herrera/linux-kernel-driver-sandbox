@@ -6,7 +6,10 @@ from pathlib import Path
 
 from api_gen import naming
 from api_gen.emitters import c, cpp
-from api_gen.model import Api, BitConst, ClassShape, EnumEntry, Function, Group, Param, TypedConst, duplicates, single_bit_entries
+from api_gen.model import (
+    Api, BitConst, ClassShape, EnumEntry, Function, Group, Param, TypedConst, duplicate_objections,
+    generated_name_objections, named_values, single_bit_entries,
+)
 
 _HANDLE_MEMBER = "handle_"
 _GENERATED_NAMES = ("result", "status", "handle", _HANDLE_MEMBER)
@@ -34,34 +37,30 @@ def _rendered_names(api: Api) -> set[str]:
 
 def validate(api: Api) -> list[str]:
     """Every objection the wrapper has to `api`: a name that is a C++ keyword, a parameter
-    named like one of `_GENERATED_NAMES` or `_rendered_names()`, a method named like one of
-    the latter, and a name the wrapper would define twice in the namespace, an enum class
-    or a class. Enums' conversions may share a name, since each overloads on its own enum
-    class."""
-    problems = cpp.cpp_keyword_objections(api)
-    rendered = _rendered_names(api)
-    problems += [
-        f"function.{fn.name}.{p.name}: '{p.name}' is a name the generated code uses"
-        for fn in api.functions
-        for p in fn.params
-        if p.name in _GENERATED_NAMES or p.name in rendered
-    ]
+    named like a type the header's declarations spell, a parameter a class renders named
+    like one of `_GENERATED_NAMES` or `_rendered_names()`, a method named like one of the
+    latter, and a name the wrapper would define twice in the namespace, an enum class or a
+    class. Enums' conversions may share a name, since each overloads on its own enum class."""
+    objections = cpp.cpp_keyword_objections(api) + c.parameter_type_objections(api)
     classes = api.classes()
-    problems += [
-        f"function.{fn.name}: '{fn.name}' is a name the generated code uses"
+    rendered_names = _rendered_names(api)
+    params = [
+        (f"function.{fn.name}.{p.name}", p.name)
         for shape in classes
-        for fn in shape.methods
-        if fn.name in rendered
+        for fn, rendered, _ in shape.class_params()
+        for p in rendered
     ]
+    objections += generated_name_objections(params, {*_GENERATED_NAMES, *(rendered_names - c.type_names(api))})
+    methods = [(f"function.{fn.name}", fn.name) for shape in classes for fn in shape.methods]
+    objections += generated_name_objections(methods, rendered_names)
     const = naming.unprefixed_const_name
-    namespace = [(const(naming.VERSION_KEY), "the API version constant")]
-    namespace += [(const(name), where) for where, name in api.constant_names(enum_entries=False)]
-    namespace += [(naming.upper_camel(t.name), f"typed_const.{t.name}") for t in api.typed_consts]
-    namespace += [(naming.upper_camel(b.name), f"boxed_scalar.{b.name}") for b in api.boxed_scalars]
-    namespace += [(naming.upper_camel(s.name), f"struct.{s.name}") for s in api.structs]
-    namespace += [(naming.upper_camel(shape.opaque.class_name), f"opaque_ref.{shape.opaque.name}._class") for shape in classes]
+    namespace = [(where, const(name)) for where, name in api.constant_names(enum_entries=False, version=True)]
+    namespace += [(f"typed_const.{t.name}", naming.upper_camel(t.name)) for t in api.typed_consts]
+    namespace += [(f"boxed_scalar.{b.name}", naming.upper_camel(b.name)) for b in api.boxed_scalars]
+    namespace += [(f"struct.{s.name}", naming.upper_camel(s.name)) for s in api.structs]
+    namespace += [(f"opaque_ref.{s.opaque.name}._class", naming.upper_camel(s.opaque.class_name)) for s in classes]
     namespace += [
-        (g.to_string, f"{g.name}._to_string")
+        (f"{g.name}._to_string", g.to_string)
         for g in (*api.bit_const_groups, *api.const_groups)
         if g.to_string is not None
     ]
@@ -69,28 +68,25 @@ def validate(api: Api) -> list[str]:
     for t in api.typed_consts:
         if t.to_string is not None:
             overloads.setdefault(t.to_string, f"typed_const.{t.name}._to_string")
-    namespace += overloads.items()
-    problems += _duplicates(namespace, f"namespace {api.namespace}")
+    namespace += [(where, name) for name, where in overloads.items()]
+    objections += duplicate_objections(namespace, f"namespace {api.namespace}")
     for t in api.typed_consts:
-        problems += _duplicates(
-            [(naming.upper_camel(e.name), f"typed_const.{t.name}.{e.name}") for e in t.entries],
+        objections += duplicate_objections(
+            [(f"typed_const.{t.name}.{e.name}", naming.upper_camel(e.name)) for e in t.entries],
             f"enum class {naming.upper_camel(t.name)}",
         )
     for shape in classes:
         cls = naming.upper_camel(shape.opaque.class_name)
         own = [cls, "create", "handle", _HANDLE_MEMBER, *(["release"] if shape.dtor is not None else [])]
-        members = [(m, "the wrapper's own member") for m in own]
-        members += [(f.name, f"function.{f.name}") for f in shape.methods]
-        members += [(p.name, f"function.{shape.ctor.name}.{p.name}") for p in shape.cached]
-        problems += _duplicates(members, f"class {cls}")
-    return [f"{LABEL}: {p}" for p in problems]
+        objections += duplicate_objections(shape.members(own), f"class {cls}")
+    return [f"{LABEL}: {o}" for o in objections]
 
 
-def output_path(*, stem: str, exercise: str) -> Path:
-    return Path("include") / exercise / f"{stem}.hpp"
+def output_path(*, name: str, project: str) -> Path:
+    return Path("include") / project / f"{name}.hpp"
 
 
-def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
+def emit(api: Api, *, source_name: str, name: str, library: str | None, project: str) -> str:
     """The header-only C++ wrapper."""
     ns = api.namespace
     std_headers = {"utility"}
@@ -101,7 +97,7 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
     out = [
         f"// GENERATED by vdev/api_gen from {source_name}; do not edit.\n",
         "#pragma once\n\n",
-        f'#include "{stem}.h"\n\n',
+        f'#include "{name}.h"\n\n',
         "".join(f"#include <{h}>\n" for h in sorted(std_headers)) + "\n",
         f"namespace {ns} {{\n",
     ]
@@ -135,12 +131,6 @@ def emit(api: Api, *, source_name: str, stem: str, library: str | None) -> str:
     return "".join(out)
 
 
-def _duplicates(names: list[tuple[str, str]], where: str) -> list[str]:
-    """One objection per name that `names`, (name, what defines it) pairs, holds more than
-    once, naming everything that defines it."""
-    return [f"{where}: {n} would be defined more than once, by {' and '.join(s)}" for n, s in duplicates(names).items()]
-
-
 def _enum(api: Api, typed: TypedConst) -> str:
     cls = naming.upper_camel(typed.name)
     entries = "".join(
@@ -161,18 +151,15 @@ def _plain_to_string(group: Group[EnumEntry]) -> str:
         return ""
     return _switch(
         group.to_string, returns="std::string", param=naming.BASE_C_TYPES[group.base_type].c_type,
-        cases=[(naming.unprefixed_const_name(e.name), e) for e in group.entries],
+        cases=[(naming.unprefixed_const_name(e.name), e) for e in named_values(group)],
         unknown=naming.unknown_value_name(None),
     )
 
 
 def _switch(name: str, *, returns: str, param: str, cases: list[tuple[str, EnumEntry]], unknown: str) -> str:
-    """A value-to-name conversion from (case label, entry) pairs: one case per value, named
-    by its last entry, since duplicate case labels do not compile."""
-    by_value = {e.value: (label, e) for label, e in cases}
-    body = "".join(
-        f'    case {label}: return "{naming.unprefixed_const_name(e.name)}";\n' for label, e in by_value.values()
-    )
+    """A value-to-name conversion from (case label, entry) pairs, one per value: duplicate
+    case labels do not compile, so a plain group's come from `named_values()`."""
+    body = "".join(f'    case {label}: return "{naming.unprefixed_const_name(e.name)}";\n' for label, e in cases)
     return (
         f"\ninline {returns} {name}({param} value) {{\n  switch (value) {{\n{body}"
         f'  }}\n  return "{unknown}";\n}}\n'
@@ -260,7 +247,7 @@ def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -
 
 
 def _doc(fn: Function) -> str:
-    return "".join(f"  // {line}\n" for doc in fn.docs() for line in doc.splitlines())
+    return "".join(f"  // {doc}\n" for doc in fn.docs())
 
 
 def _c_call(api: Api, fn: Function, args: list[str]) -> str:
@@ -343,4 +330,4 @@ def _class(api: Api, shape: ClassShape) -> str:
 
 
 def _comment(doc: str | None) -> str:
-    return "".join(f"// {line}\n" for line in doc.splitlines()) if doc else ""
+    return f"// {doc}\n" if doc else ""

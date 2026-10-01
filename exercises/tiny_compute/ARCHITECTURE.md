@@ -16,21 +16,24 @@
 
 ### Userspace – exercises/tiny_compute/userspace
 
-The API definition, then three consumers of the driver, each one layer up from the last:
+The API definition, then four consumers of the driver, each one layer up from the last:
 
 - api_def/: the userspace API defined once, generated into every consumer
   - tcdl_api.adef.toml: types, constants, functions and docstrings of the `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`
+  - Makefile: `OUTPUTS` selects the C++ implementation's stub (`stub_cpp`) and every consumer (`h`, `hpp`, `lua`, `rs`)
 - lib/: `libtiny_compute.so`, the C wrapper library over the ioctl ABI
   - tcdl_api.cpp: implementation of the generated `tcdl_api.h` (namespace `tcdl_`/`TCDL_`, the foreign-function surface); the opaque handle wraps the device fd
   - util.h: internal helpers
   - Makefile: `LINK_TYPE := SO` plus `../../../cpp.mk`
-- app/: `tiny_compute`, the C++ test program, linked against the library
+- app_cpp/: `app_cpp`, the C++ test program, linked against the library
   - common.h: utility definitions and function prototypes
   - main.cpp: entry point
   - tests.cpp: functionality tests through the generated C++ wrapper `tcdl_api.hpp`
   - Makefile: `LINK_TYPE := EXE` plus `../../../cpp.mk`
-- script/: LuaJIT scripts, staged as-is and run as tests
-  - test_tcdl.lua: the tests, written against the generated module `binding/tcdl_api.lua`, which is staged beside the scripts and binds `libtiny_compute.so` through the FFI
+- app_rs/: `app_rs`, the Rust test program, a cargo bin crate; `src/main.rs` includes the generated binding `tcdl_api.rs` as `mod tcdl_api` and mirrors `app_cpp/tests.cpp` through `tcdl_api::Device`; `build.rs` points the linker at the library. `tiny_compute_rs` carries an identical copy of this program, which runs against that exercise's Rust library
+- app_lua/: LuaJIT scripts, staged as-is and run as tests
+  - app_lua.lua: the entry point, a `#!/usr/bin/luajit` script shipped as `/usr/bin/app_lua` (the extension is dropped on copy); the tests, written against the generated module `binding/tcdl_api.lua`, which is staged beside it and binds `libtiny_compute.so` through the FFI
+  - lib_lua/: the Lua sources the entry point requires (`util.lua`: `printf`, `dev_info_to_string`), shipped whole to `/usr/bin/lib_lua/` and reached as `require("lib_lua.util")`
 
 ## Project Design
 
@@ -64,7 +67,7 @@ The API definition, then three consumers of the driver, each one layer up from t
 - the header is for C and C++ consumers; the Lua module does not read it. The module gets its FFI declarations from the generator's cdef rendering of the structs and functions and its constants from the definition's model, so the header's untyped constants are macros typed by their group's `_base_type` (`UINT32_C` for the capability flags) and its enums are the typed groups (`tcdl_result`)
 - the handle is the device fd xored with a constant cast to a pointer, so the library carries no state of its own and a handle costs nothing to copy
 - error mapping is one direction: errno from the ioctl to a `tcdl_result`; the caller never sees errno. `-EOPNOTSUPP` from a capability gate maps to `TCDL_ERR_UNSUPPORTED`
-- the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once; the C header (with the ABI pins in its implementation-only block), the header-only C++ wrapper, the Lua module and the implementation stub are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). `lib/tcdl_api.cpp` is the one hand-written piece and follows the generated header
+- the definition is the source of truth. `api_def/tcdl_api.adef.toml` states the API once; the C header (with the ABI pins in its implementation-only block), the header-only C++ wrapper, the Lua module, the Rust binding and the implementation stub are generated from it by the framework's `vdev/api_gen/` (root ARCHITECTURE.md "API generation"). `lib/tcdl_api.cpp` is the one hand-written piece and follows the generated header
 - device capabilities live in the driver's per-device state and gate the operations; `tcdl_info.device_caps` reports them, and the composed masks (`TCDL_CAP_DMA_READ_WRITE`, `TCDL_CAP_ALL`) exist only on the library side, since convenience is not the ABI header's job
 
 ### Driver Test

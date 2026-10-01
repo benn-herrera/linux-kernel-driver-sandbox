@@ -8,6 +8,7 @@ RUN apt-get update \
     build-essential \
     busybox-static \
     ca-certificates \
+    cargo \
     clang \
     clang-format \
     clangd \

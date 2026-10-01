@@ -1,8 +1,9 @@
 """Target-language names derived from an API namespace and definition names."""
 
+import re
 from dataclasses import dataclass
 
-# Every builtin scalar type and its C spelling, which the C++ wrapper and the Lua FFI share.
+# Every builtin scalar type and its C spelling: the one map the model and every emitter read.
 BUILTIN_C_TYPES = {
     "i8": "int8_t", "u8": "uint8_t", "i16": "int16_t", "u16": "uint16_t",
     "i32": "int32_t", "u32": "uint32_t", "i64": "int64_t", "u64": "uint64_t",
@@ -24,6 +25,7 @@ BASE_C_TYPES = {
     "u32": BaseCType("uint32_t", "UINT32_C", 0, 2**32 - 1),
 }
 VERSION_KEY = "api_version"
+_RUST_LINKABLE = re.compile(r"lib([^/\s]+)\.so")
 
 
 def type_name(namespace: str, name: str) -> str:
@@ -32,6 +34,7 @@ def type_name(namespace: str, name: str) -> str:
 
 
 def function_name(namespace: str, name: str) -> str:
+    """C name of a function: `tcdl_create_device`."""
     return f"{namespace}_{name}"
 
 
@@ -70,6 +73,26 @@ def cpp_member(name: str) -> str:
     return f"{name}_"
 
 
+def rust_raw_local(name: str) -> str:
+    """The Rust binding's local holding an enum parameter `name` as its base integer for
+    the C call: `mode_raw`."""
+    return f"{name}_raw"
+
+
+def rust_local(name: str) -> str:
+    """The Rust relay's local holding what a pointer parameter `name` reaches the
+    implementation through: `pstats_local`."""
+    return f"{name}_local"
+
+
+def rust_link_name(library: str) -> str | None:
+    """The name `#[link(name = ...)]` gives the Rust binding's library, `libxy.so` -> `xy`,
+    since the linker searches for `lib<name>.so`; `None` for a file name not of that form,
+    a `/` or whitespace in `<name>` included."""
+    match = _RUST_LINKABLE.fullmatch(library)
+    return None if match is None else match.group(1)
+
+
 def unknown_value_name(typename: str | None) -> str:
     """What a conversion returns for a value no entry has: `UNKNOWN_RESULT` for an enum,
     `UNKNOWN` for a nameless group."""
@@ -81,6 +104,7 @@ NO_FLAGS = "NONE"
 
 
 def version_const(namespace: str) -> str:
+    """C name of the version constant: `TCDL_API_VERSION`."""
     return const_name(namespace, VERSION_KEY)
 
 
@@ -90,14 +114,17 @@ def opaque_struct(namespace: str, name: str) -> str:
 
 
 def c_api_macro(namespace: str) -> str:
+    """The header's linkage macro, `extern "C"` under C++: `TCDL_C_API`."""
     return f"{namespace.upper()}_C_API"
 
 
 def api_macro(namespace: str) -> str:
+    """The macro before each function declaration, adding visibility for the implementation: `TCDL_API`."""
     return f"{namespace.upper()}_API"
 
 
 def impl_macro(namespace: str) -> str:
+    """The macro the implementation defines before including the header: `TCDL_IMPL`."""
     return f"{namespace.upper()}_IMPL"
 
 

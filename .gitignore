@@ -21,3 +21,6 @@ out/
 mad-design/
 mad-review/
 guest-session/
+
+# cargo output written by a host editor (rust-analyzer); the recipes build under out/
+target/

@@ -23,7 +23,7 @@ This project is set up for macOS on Apple Silicon and makes no pretensions to po
 
 **The framework** is the runner and everything it drives: the root `justfile` (host recipes), `vdev/justfile` (kernel and driver recipes, run inside the build container), the `Containerfile`, the Podman dev box, the kernel build, the initramfs, and the QEMU boot. It is owned by the project documents at the repo root — THESIS.md, ARCHITECTURE.md, CONVENTIONS.md — which describe it in full.
 
-**The exercises** are the driver work itself. Each exercise is one tree, `exercises/<name>/`: its own SPEC.md and ARCHITECTURE.md, `driver/` (the kernel module and its kbuild Makefile) and `userspace/` (`api_def/`, the API definition the consumer artifacts are generated from; `lib/` and `app/`, the library and test program, each with a plain Makefile; and optional `script/` files). The recipes build and test one exercise at a time, the one named in `active_exercise.just`.
+**The exercises** are the driver work itself. Each exercise is one tree, `exercises/<name>/`: its own SPEC.md and ARCHITECTURE.md, `driver/` (the kernel module and its kbuild Makefile) and `userspace/` (`api_def/`, the API definition the consumer artifacts are generated from; `lib/` and `app_cpp/`, the library and test program, each with a plain Makefile; and optional `app_lua/` files). The recipes build and test one exercise at a time, the one named in `active_exercise.just`.
 
 ## Getting started
 
@@ -32,6 +32,8 @@ This project is set up for macOS on Apple Silicon and makes no pretensions to po
 ```
 brew install just podman qemu clang-format
 ```
+
+The API generator's tests need Python 3.11 or newer, because its TOML definitions are read with `tomllib` from the standard library. `just api-gen-test-vdev` runs the full suite in the container, which supplies Python and the compilers the compiled-output tests need.
 
 ### From a fresh clone
 

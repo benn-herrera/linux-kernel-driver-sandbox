@@ -2,12 +2,13 @@
 # usage: `include ../../../gen.mk`
 # <exercise> is the name of the directory two levels above this Makefile's
 # directory: exercises/<exercise>/userspace/api_def/Makefile.
-# OUTPUTS selects the outputs, a comma-separated subset of h,hpp,lua,stub_cpp;
-# an exercise sets `OUTPUTS := ...` before its include to narrow it, and `make
-# OUTPUTS=...` overrides both. Otherwise all four are made: an OUTPUTS variable
-# in the environment is ignored. Changing OUTPUTS needs `userspace-clean-vdev`:
-# $(ADEF_MK) is remade only when the definition changes, and a dropped output's
-# file would stay under $(GEN) and be staged.
+# OUTPUTS selects the outputs, a comma-separated subset of
+# h,hpp,lua,stub_cpp,rs,abi_rs,stub_rs; an exercise sets `OUTPUTS := ...` before
+# its include to choose, and `make OUTPUTS=...` overrides both. Otherwise the
+# four below are made, the Rust ones being opt-in until an exercise wants them: an
+# OUTPUTS variable in the environment is ignored. Changing OUTPUTS needs
+# `userspace-clean-vdev`: $(ADEF_MK) is remade only when the definition
+# changes, and a dropped output's file would stay under $(GEN) and be staged.
 ifeq ($(strip $(OUT)),)
 $(error OUT is not set: make OUT=<out_dir> API_GEN=<api_gen_dir>)
 endif
@@ -31,7 +32,7 @@ endif
 ADEF_MK := $(GEN)/adef.mk
 
 .DEFAULT_GOAL := all
-.PHONY: all clean
+.PHONY: all
 
 # Make remakes an out-of-date included makefile and restarts before reading
 # the rest of this file, so a new or changed definition regenerates
@@ -48,6 +49,3 @@ all: $(GENERATED)
 $(ADEF_MK): $(DEF)
 	@mkdir -p $(GEN)
 	PYTHONPATH=$(API_GEN) PYTHONDONTWRITEBYTECODE=1 python3 -m api_gen gendeps --outputs=$(OUTPUTS) $(DEF) > $@.tmp && mv $@.tmp $@
-
-clean:
-	rm -rf $(GEN)

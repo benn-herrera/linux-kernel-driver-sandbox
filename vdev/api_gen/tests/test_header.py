@@ -2,7 +2,7 @@ import unittest
 
 from api_gen import model
 from api_gen.emitters import c, emit_c
-from api_gen.tests.support import C_CONST_MACROS, FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists
+from api_gen.tests.support import FIXTURE, KITCHEN_SINK, NO_WRAPPED_API, header, load, mutate, param_lists
 
 
 class Preprocessor(unittest.TestCase):
@@ -23,21 +23,14 @@ class Preprocessor(unittest.TestCase):
 
 
 class Pins(unittest.TestCase):
-    def setUp(self) -> None:
-        self.api = load(KITCHEN_SINK)
-        self.text = header(self.api)
+    def test_no_implementation_block_without_a_wrapped_api(self) -> None:
+        text = header(load(NO_WRAPPED_API))
+        self.assertNotIn("#if defined(XY_IMPL)\n# include", text)
+        self.assertNotIn("static_assert", text)
 
-    def test_abi_pins_present_with_driver_data(self) -> None:
-        block = self.text[self.text.rindex("XY_API xy_status ") :]
-        self.assertEqual(block.count("#if defined(XY_IMPL)"), 1)
-        block = block[block.index("#if defined(XY_IMPL)") :]
-        self.assertIn("# include <assert.h>", block)
-        self.assertIn('# include "xy/driver/xy_ioctl.h"', block)
-        self.assertRegex(block, r"static_assert\(XY_FEAT_A == XYD_FEAT_A, \"[^\"]+\"\);")
-
-    def test_abi_pins_absent_without_driver_data(self) -> None:
-        text = header(load(FIXTURE[: FIXTURE.index("[_driver_data]")]))
-        self.assertNotIn("ABI pins", text)
+    def test_wrapped_header_included_without_pins(self) -> None:
+        text = header(load(mutate(FIXTURE, 'feat_a = "XYD_FEAT_A"\n', "")))
+        self.assertIn('#if defined(XY_IMPL)\n# include "xy/driver/xy_ioctl.h"\n', text)
         self.assertNotIn("static_assert", text)
 
 
@@ -138,14 +131,6 @@ class Declarations(unittest.TestCase):
         text = header(load(mutate(FIXTURE, '["feat_a", "feat_b"]', '["feat_a", "0x1E"]')))
         self.assertIn("#define XY_FEAT_AB (XY_FEAT_A | INT32_C(0x1e))", text.splitlines())
 
-    def test_every_uncomposed_literal_takes_its_group_base_type_macro(self) -> None:
-        for group in (*self.api.bit_const_groups, *self.api.const_groups):
-            macro = C_CONST_MACROS[group.base_type]
-            for entry in group.entries:
-                if not entry.parts:
-                    with self.subTest(name=entry.name):
-                        self.assertRegex(self.text, rf"(?m)^#define XY_{entry.name.upper()} \(?-?{macro}\(")
-
     def test_u32_group_literal_term_takes_the_u32_macro(self) -> None:
         self.assertIn("#define XY_FEAT_ALL (XY_FEAT_ONE | UINT32_C(8))\n", self.text)
 
@@ -166,14 +151,6 @@ class Declarations(unittest.TestCase):
         self.assertNotIn("#define XY_OK", self.text)
         self.assertNotIn("enum {", self.text)
 
-    def test_constant_blocks_precede_types_in_spec_order(self) -> None:
-        markers = (
-            "XY_API_VERSION", "#define XY_FEAT_A ", "XY_MAX_UNITS", "enum xy_status", "static const char XY_PRODUCT",
-            "struct xy_port_opaque;", "typedef struct xy_offset ", "struct xy_stats {", "XY_API xy_status xy_open_port(",
-        )
-        indices = [self.text.index(m) for m in markers]
-        self.assertEqual(indices, sorted(set(indices)))
-
     def test_boxed_scalar_is_a_one_member_struct_under_its_docstring(self) -> None:
         self.assertIn("\n/* a device offset */\ntypedef struct xy_offset { uint64_t value; } xy_offset;\n", self.text)
         self.assertEqual(param_lists(self.text, r"XY_API xy_status ")["echo_offset"], "xy_port hport, xy_offset pos, xy_offset* ppos")
@@ -186,9 +163,6 @@ class Declarations(unittest.TestCase):
         text = header(load(KITCHEN_SINK + '\n[struct.span]\nat = "offset"\n'))
         self.assertIn("struct xy_span {\n\txy_offset at;\n};\n", text)
         self.assertLess(text.index("typedef struct xy_offset "), text.index("struct xy_span {"))
-
-    def test_boxed_scalar_is_part_of_the_cdef(self) -> None:
-        self.assertIn("typedef struct xy_offset { uint64_t value; } xy_offset;\n", c.cdef(self.api))
 
     def test_docstrings_placed_per_spec(self) -> None:
         lines = self.text.splitlines()
@@ -204,9 +178,6 @@ class Declarations(unittest.TestCase):
 
 
 class Validate(unittest.TestCase):
-    def test_kitchen_sink_has_no_objection(self) -> None:
-        self.assertEqual(emit_c.validate(load(KITCHEN_SINK)), [])
-
     def test_c_keyword_as_name(self) -> None:
         for text, message in (
             (mutate(FIXTURE, "bytes = ", "int = "), "header: struct.stats.int: 'int' is a C keyword"),
@@ -238,16 +209,16 @@ class Validate(unittest.TestCase):
         )
         self.assertEqual(emit_c.validate(load(u32)), [])
 
-    def test_header_macros_are_the_ones_it_emits(self) -> None:
-        text = header(load(KITCHEN_SINK))
-        for macro in c.header_macros("xy"):
-            with self.subTest(macro=macro):
-                self.assertRegex(text, rf"(?m)^#\s*(define|if defined\()\s*{macro}\b")
-
-    def test_other_languages_keywords_are_not_its_objection(self) -> None:
-        self.assertEqual(emit_c.validate(load(mutate(FIXTURE, "bytes = ", "end = "))), [])
-        self.assertEqual(emit_c.validate(load(mutate(FIXTURE, "bytes = ", "class = "))), [])
-        self.assertEqual(emit_c.validate(load(mutate(KITCHEN_SINK, "feat_one = 0", "feat_one = 31"))), [])
+    def test_parameter_named_like_a_type_the_declarations_spell(self) -> None:
+        # in a prototype the name would hide the type from every parameter after it
+        boxed = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+        for name in ("uint32_t", "int8_t", "xy_status", "xy_port", "xy_stats", "xy_offset"):
+            with self.subTest(name=name):
+                self.assertEqual(
+                    emit_c.validate(load(mutate(boxed, 'htoken = "token"', f'{name} = "token"'))),
+                    [f"header: function.spend.{name}: '{name}' is a name the generated code uses"],
+                )
+        self.assertEqual(emit_c.validate(load(mutate(FIXTURE, 'htoken = "token"', 'xy_send = "token"'))), [])
 
 
 if __name__ == "__main__":

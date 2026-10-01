@@ -38,7 +38,7 @@ int h2fd(tcdl_handle h) {
   return int(intptr_t(h) ^ kHandleObfusc);
 }
 
-auto errno_to_result(tcdl_result unknown=TCDL_ERR_COMM_FAILED) {
+auto errno_to_result(tcdl_op_result unknown=TCDL_ERR_COMM_FAILED) {
   switch(errno) {
     case ETIMEDOUT: return TCDL_ERR_TIMEDOUT;
     case EOPNOTSUPP: return TCDL_ERR_UNSUPPORTED;
@@ -50,7 +50,7 @@ auto errno_to_result(tcdl_result unknown=TCDL_ERR_COMM_FAILED) {
 
 } // namespace
 
-tcdl_result tcdl_create_device(uint32_t index, tcdl_handle* phtcd, tcdl_info* pinfo) {
+tcdl_op_result tcdl_create_device(uint32_t index, tcdl_handle* phtcd, tcdl_info* pinfo) {
   // pin to tcd_ioctl values
   static_assert(TCDL_CAP_COMPUTE == TCD_DEVICE_CAP_COMPUTE);
   static_assert(TCDL_CAP_DMA_READ == TCD_DEVICE_CAP_DMA_READ);
@@ -84,21 +84,19 @@ tcdl_result tcdl_create_device(uint32_t index, tcdl_handle* phtcd, tcdl_info* pi
   return TCDL_OK;
 }
 
-tcdl_result tcdl_check_alive(tcdl_handle htcd) {
+tcdl_op_result tcdl_check_alive(tcdl_handle htcd) {
   if (!htcd) {
     return TCDL_ERR_INVALID_HANDLE;
   }
   const auto fd = h2fd(htcd);
-  static constexpr uint32_t kLiveCheck = 0x80800101;
-  uint32_t alive = kLiveCheck;
 
-  if (ioctl(fd, TCD_IOC_LIVENESS, IOC_PARAM(alive))) {
-    return errno_to_result();
+  if (ioctl(fd, TCD_IOC_LIVENESS, nullptr)) {
+    return TCDL_ERR_DEVICE_DEAD;
   }
-  return alive == ~kLiveCheck ? TCDL_OK : TCDL_ERR_DEVICE_DEAD;
+  return TCDL_OK;
 }
 
-tcdl_result tcdl_compute_factorial(tcdl_handle htcd, uint32_t arg, uint32_t* pfact) {
+tcdl_op_result tcdl_compute_factorial(tcdl_handle htcd, uint32_t arg, uint32_t* pfact) {
   if (!htcd) {
     return TCDL_ERR_INVALID_HANDLE;
   }
@@ -113,7 +111,7 @@ tcdl_result tcdl_compute_factorial(tcdl_handle htcd, uint32_t arg, uint32_t* pfa
   return TCDL_OK;
 }
 
-tcdl_result tcdl_dma_to_device(tcdl_handle htcd, tcdl_dma_offset dst_dma_offset, const void* psrc, uint64_t count) {
+tcdl_op_result tcdl_dma_to_device(tcdl_handle htcd, tcdl_dma_offset dst_dma_offset, const void* psrc, uint64_t count) {
   if (!htcd) {
     return TCDL_ERR_INVALID_HANDLE;
   }
@@ -130,7 +128,7 @@ tcdl_result tcdl_dma_to_device(tcdl_handle htcd, tcdl_dma_offset dst_dma_offset,
   return TCDL_OK;
 }
 
-tcdl_result tcdl_dma_from_device(tcdl_handle htcd, tcdl_dma_offset src_dma_offset,  void* pdst, uint64_t count) {
+tcdl_op_result tcdl_dma_from_device(tcdl_handle htcd, tcdl_dma_offset src_dma_offset,  void* pdst, uint64_t count) {
   if (!htcd) {
     return TCDL_ERR_INVALID_HANDLE;
   }
@@ -147,7 +145,7 @@ tcdl_result tcdl_dma_from_device(tcdl_handle htcd, tcdl_dma_offset src_dma_offse
   return TCDL_OK;
 }
 
-tcdl_result tcdl_destroy_device(tcdl_handle htcd) {
+tcdl_op_result tcdl_destroy_device(tcdl_handle htcd) {
   if (!htcd) {
     return TCDL_ERR_INVALID_HANDLE;
   }

@@ -1,6 +1,6 @@
 [_general]
-# the file stem (in this case tcdl_api) names every output.
-#
+# names every generated output (tcdl_api.h, tcdl_api.hpp, tcdl_api.lua, ...)
+_name = "tcdl_api"
 # for languages with namespace features, used as namespace
 # for those without used as prefix for functions, variables, etc. capitalized or upper-cased as  needed for idioms.
 _namespace = "tcdl"
@@ -23,7 +23,7 @@ cap_dma_read_write = ["cap_dma_read", "cap_dma_write"]
 cap_all = ["cap_compute", "cap_dma_read_write"]
 
 [typed_const]
-  [typed_const.result]
+  [typed_const.op_result]
     _docstring = "all api functions return a result."
     _base_type = "i32"
     _to_string = "to_string"
@@ -61,42 +61,41 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
 [function]
   [function.create_device]
     _docstring = "multiple devices and multiple access to single device supported. info out param is optional."
-    _return = "result"
+    _return = "op_result"
     index = "u32"
     # _ref value options are in, out, inout
     phtcd = { _type = "handle", _ref = "out" }
     info = { _type = "info", _ref = "out", _optional = true }
   [function.destroy_device]
     _docstring = "double destroy will return an error but won't crash."
-    _return = "result"
+    _return = "op_result"
     htcd = "handle"
   [function.check_alive]
     _docstring = "result is ok or device_dead"
-    _return = "result"
+    _return = "op_result"
     htcd = "handle"
   [function.compute_factorial]
-    _return = "result"
+    _return = "op_result"
     htcd = "handle"
     arg  = "u32"
     fact = { _type = "u32", _ref = "out" }
   [function.dma_to_device]
     _docstring = "be sure to check offset and size against dma_alignment"
-    _return = "result"
+    _return = "op_result"
     htcd = "handle"
     dst_dma_offset = "dma_offset"
     psrc = { _type = "memory", _ref = "in", _count = "u64" }
   [function.dma_from_device]
     _docstring = "be sure to check offset and size against dma_alignment"
-    _return = "result"
+    _return = "op_result"
     htcd = "handle"
     src_dma_offset = "dma_offset"
     pdst = { _type = "memory", _ref = "out", _count = "u64" }
 
-[_driver_data]
+[_wrapped_api]
   # ioctl API header provided by driver (consumed by gen targets, but never parsed by this system)
-  _header = "tiny_compute/driver/tcd_ioctl.h"
+  _header = "driver/tcd_ioctl.h"
   # values defined in this file that *must* agree with the driver ABI header
-  [_driver_data.const_pins]
-    cap_compute = "TCD_DEVICE_CAP_COMPUTE"
-    cap_dma_read = "TCD_DEVICE_CAP_DMA_READ"
-    cap_dma_write = "TCD_DEVICE_CAP_DMA_WRITE"
+  cap_compute = "TCD_DEVICE_CAP_COMPUTE"
+  cap_dma_read = "TCD_DEVICE_CAP_DMA_READ"
+  cap_dma_write = "TCD_DEVICE_CAP_DMA_WRITE"
