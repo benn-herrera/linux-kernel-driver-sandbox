@@ -8,7 +8,7 @@ from api_gen import naming
 from api_gen.emitters import c, cpp
 from api_gen.model import (
     Api, BitConst, ClassShape, EnumEntry, Function, Group, Param, TypedConst, duplicate_objections,
-    generated_name_objections, named_values, single_bit_entries,
+    generated_name_objections, headed, named_values, single_bit_entries,
 )
 
 _HANDLE_MEMBER = "handle_"
@@ -122,11 +122,15 @@ def emit(api: Api, *, source_name: str, name: str, library: str | None, project:
         for g in api.string_const_groups
     ]
     out += ["\n" + run for run in runs]
-    out += [_enum(api, t) for t in api.typed_consts]
-    aliased = (*api.boxed_scalars, *api.structs)
+    out += ["\n" + _comment(h) + _enum(api, t) for h, t in headed(api.typed_const_groups)]
+    aliased = [*headed(api.boxed_scalar_groups), *headed(api.struct_groups)]
     if aliased:
-        out.append("\n" + "".join(f"using {naming.upper_camel(t.name)} = {naming.type_name(ns, t.name)};\n" for t in aliased))
-    out += [_class(api, shape) for shape in api.classes()]
+        out.append("\n" + "".join(
+            f"{_comment(h)}using {naming.upper_camel(t.name)} = {naming.type_name(ns, t.name)};\n" for h, t in aliased
+        ))
+    classes = api.classes()
+    opaque_headings = {o.name: h for h, o in headed(api.opaque_ref_groups, (s.opaque for s in classes))}
+    out += [_class(api, shape, heading=opaque_headings[shape.opaque.name]) for shape in classes]
     out.append(f"\n}}  // namespace {ns}\n")
     return "".join(out)
 
@@ -136,7 +140,7 @@ def _enum(api: Api, typed: TypedConst) -> str:
     entries = "".join(
         f"  {naming.upper_camel(e.name)} = {naming.const_name(api.namespace, e.name)},\n" for e in typed.entries
     )
-    text = f"\nenum class [[nodiscard]] {cls} : {naming.BASE_C_TYPES[typed.base_type].c_type} {{\n{entries}}};\n"
+    text = f"enum class [[nodiscard]] {cls} : {naming.BASE_C_TYPES[typed.base_type].c_type} {{\n{entries}}};\n"
     if typed.to_string is not None:
         text += _switch(
             typed.to_string, returns="const char*", param=cls,
@@ -246,8 +250,9 @@ def _marshal(api: Api, params: tuple[Param, ...], *, outrefs_are_locals: bool) -
     return sig, [call for _, _, call in entries]
 
 
-def _doc(fn: Function) -> str:
-    return "".join(f"  // {doc}\n" for doc in fn.docs())
+def _doc(fn: Function, heading: str | None) -> str:
+    """`heading`, the docstring of the group `fn` is the first of in its class, then `fn`'s own."""
+    return "".join(_comment(doc, indent="  ") for doc in [heading, *fn.docs()])
 
 
 def _c_call(api: Api, fn: Function, args: list[str]) -> str:
@@ -255,10 +260,14 @@ def _c_call(api: Api, fn: Function, args: list[str]) -> str:
     return f"{ret}({naming.function_name(api.namespace, fn.name)}({', '.join(args)}))"
 
 
-def _class(api: Api, shape: ClassShape) -> str:
+def _class(api: Api, shape: ClassShape, *, heading: str | None) -> str:
+    """The class under `heading`, its opaque ref's group docstring where it is the first of
+    that group's classes, each of its functions under its own group's where it is the first
+    of that group's here."""
     opaque, ctor, dtor, cached = shape.opaque, shape.ctor, shape.dtor, shape.cached
     cls = naming.upper_camel(opaque.class_name)
     handle_type = naming.type_name(api.namespace, opaque.name)
+    headings = {fn.name: h for h, fn in headed(api.function_groups, shape.functions())}
 
     ret = naming.upper_camel(ctor.returns)
     zero = api.success_entry(ctor)
@@ -266,7 +275,7 @@ def _class(api: Api, shape: ClassShape) -> str:
     locals_ = "".join(f"    {_ref_type(api, p.type)} {p.name}{{}};\n" for p in ctor.params if p.ref == "out")
     failure = f"{cls}({', '.join(['nullptr', *('{}' for _ in cached)])})"
     create = (
-        f"{_doc(ctor)}"
+        f"{_doc(ctor, headings[ctor.name])}"
         f"  [[nodiscard]] static {cls} create({', '.join([*sig, f'{ret}* result = nullptr'])}) {{\n"
         f"{locals_}"
         f"    const {ret} status = {_c_call(api, ctor, call)};\n"
@@ -304,12 +313,12 @@ def _class(api: Api, shape: ClassShape) -> str:
     for fn in shape.methods:
         msig, mcall = _marshal(api, fn.params[1:], outrefs_are_locals=False)
         body.append(
-            f"\n{_doc(fn)}  {naming.upper_camel(fn.returns)} {fn.name}({', '.join(msig)}) {{\n"
+            f"\n{_doc(fn, headings[fn.name])}  {naming.upper_camel(fn.returns)} {fn.name}({', '.join(msig)}) {{\n"
             f"    return {_c_call(api, fn, [_HANDLE_MEMBER, *mcall])};\n  }}\n"
         )
     if dtor is not None:
         body.append(
-            f"\n{_doc(dtor)}  {naming.upper_camel(dtor.returns)} release() {{\n"
+            f"\n{_doc(dtor, headings[dtor.name])}  {naming.upper_camel(dtor.returns)} release() {{\n"
             f"    return {_c_call(api, dtor, [f'std::exchange({_HANDLE_MEMBER}, nullptr)'])};\n  }}\n"
         )
 
@@ -323,11 +332,11 @@ def _class(api: Api, shape: ClassShape) -> str:
     ctor_params = ", ".join([f"{handle_type} handle", *(f"const {_ref_type(api, p.type)}& {p.name}" for p in cached)])
     inits = ", ".join([*(f"{member(p.name)}({p.name})" for p in cached), f"{_HANDLE_MEMBER}(handle)"])
     return (
-        f"\n{_comment(opaque.docstring)}class {cls} {{\n public:\n{create}{lifetime}{''.join(body)}"
+        f"\n{_comment(heading)}{_comment(opaque.docstring)}class {cls} {{\n public:\n{create}{lifetime}{''.join(body)}"
         + (f"\n{accessors}" if accessors else "")
         + f"\n private:\n  {cls}({ctor_params}) : {inits} {{}}\n\n{private_members}  {handle_type} {_HANDLE_MEMBER};\n}};\n"
     )
 
 
-def _comment(doc: str | None) -> str:
-    return f"// {doc}\n" if doc else ""
+def _comment(doc: str | None, *, indent: str = "") -> str:
+    return f"{indent}// {doc}\n" if doc else ""

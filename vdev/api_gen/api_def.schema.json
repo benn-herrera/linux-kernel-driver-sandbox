@@ -1,0 +1,372 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "api_gen API definition (*.adef.toml)",
+  "description": "The shape of an api_gen definition, for editor completion, hover and key diagnostics. Shape only: the api_gen loader is the authority on everything else (name uniqueness, value ranges by base type, references between items, constructor and destructor shape, running sums), and the generator never reads this file.",
+  "type": "object",
+  "properties": {
+    "_general": {
+      "description": "Describes no item: the API's name, namespace, version and bound library. Required.",
+      "type": "object",
+      "properties": {
+        "_name": {
+          "description": "An identifier, required; names every output.",
+          "allOf": [{ "$ref": "#/definitions/identifier" }]
+        },
+        "_namespace": {
+          "description": "An identifier; the prefix for everything generated.",
+          "allOf": [{ "$ref": "#/definitions/identifier" }]
+        },
+        "_version": {
+          "description": "Four integers 0..255, encoded most-significant first into one 32-bit value.",
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "_bound_library": {
+          "description": "The shared object file name the Lua module loads and the Rust binding links; a plain file name as written.",
+          "type": "string"
+        }
+      },
+      "required": ["_name", "_namespace", "_version"],
+      "additionalProperties": false
+    },
+    "_wrapped_api": {
+      "description": "The wrapped API: its C headers, which the implementation includes, and the constants of this API pinned to those headers' macros.",
+      "type": "object",
+      "properties": {
+        "_headers": {
+          "description": "Required: a non-empty list of the wrapped API's header paths, each relative to the project directory.",
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "_pinned_value": {
+          "description": "Maps each untyped_bit_const key to the macro of the wrapped API's headers it must equal.",
+          "type": "object",
+          "patternProperties": {
+            "^[A-Za-z][A-Za-z0-9_]*$": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "required": ["_headers"],
+      "additionalProperties": false
+    },
+    "untyped_bit_const": {
+      "description": "Groups of constants that are bit flags: each entry a bit index or a sum of earlier entries and literals.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/integerConstantGroup" }
+    },
+    "untyped_const": {
+      "description": "Groups of plain integer constants: each entry an integer or a sum of earlier entries and literals.",
+      "type": "array",
+      "items": { "$ref": "#/definitions/integerConstantGroup" }
+    },
+    "string_const": {
+      "description": "Groups of string constants.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "_docstring": { "$ref": "#/definitions/docstring" }
+        },
+        "patternProperties": {
+          "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/stringConstant" }
+        },
+        "additionalProperties": false,
+        "not": { "$ref": "#/definitions/propertiesOnly" }
+      }
+    },
+    "typed_const": {
+      "description": "Groups of enumerations, each item an enum whose entries are integers.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "_docstring": { "$ref": "#/definitions/docstring" }
+        },
+        "patternProperties": {
+          "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/enum" }
+        },
+        "additionalProperties": false,
+        "not": { "$ref": "#/definitions/propertiesOnly" }
+      }
+    },
+    "opaque_ref": {
+      "description": "Groups of handle types, each item a handle whose representation is the implementation's secret.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "_docstring": { "$ref": "#/definitions/docstring" }
+        },
+        "patternProperties": {
+          "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/opaqueRef" }
+        },
+        "additionalProperties": false,
+        "not": { "$ref": "#/definitions/propertiesOnly" }
+      }
+    },
+    "boxed_scalar": {
+      "description": "Groups of boxed scalars, each item a distinct kind of integer.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "_docstring": { "$ref": "#/definitions/docstring" }
+        },
+        "patternProperties": {
+          "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/boxedScalar" }
+        },
+        "additionalProperties": false,
+        "not": { "$ref": "#/definitions/propertiesOnly" }
+      }
+    },
+    "struct": {
+      "description": "Groups of structs, each item's fields in document order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "_docstring": { "$ref": "#/definitions/docstring" }
+        },
+        "patternProperties": {
+          "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/struct" }
+        },
+        "additionalProperties": false,
+        "not": { "$ref": "#/definitions/propertiesOnly" }
+      }
+    },
+    "function": {
+      "description": "Groups of functions, each item's parameters in document order.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "_docstring": { "$ref": "#/definitions/docstring" }
+        },
+        "patternProperties": {
+          "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/function" }
+        },
+        "additionalProperties": false,
+        "not": { "$ref": "#/definitions/propertiesOnly" }
+      }
+    }
+  },
+  "required": ["_general"],
+  "additionalProperties": false,
+  "definitions": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z][A-Za-z0-9_]*$"
+    },
+    "propertiesOnly": {
+      "description": "A table whose every key is a property: a group, enum or struct with no members, which the loader refuses as having no entries.",
+      "propertyNames": { "pattern": "^_" }
+    },
+    "docstring": {
+      "description": "Documents the group, item or entry it is on; no line break, '*/' or ']]'.",
+      "type": "string"
+    },
+    "baseType": {
+      "description": "The fixed-width type of an enum or of a group's constants: \"i32\" (the default) or \"u32\".",
+      "enum": ["i32", "u32"]
+    },
+    "toString": {
+      "description": "Asks for a function converting a value to text, named by this identifier; absent, no conversion is generated.",
+      "allOf": [{ "$ref": "#/definitions/identifier" }]
+    },
+    "format": {
+      "description": "How the number is spelled where a literal is emitted: \"hex\" or \"dec\" (the default).",
+      "enum": ["dec", "hex"]
+    },
+    "typeName": {
+      "description": "A builtin type (i8, u8, i16, u16, i32, u32, i64, u64, f32, f64, memory) or a name from typed_const, opaque_ref, boxed_scalar or struct.",
+      "allOf": [{ "$ref": "#/definitions/identifier" }]
+    },
+    "sum": {
+      "description": "Terms summed into the value, in the order written: each an earlier entry's name or a literal integer written as a string (\"4\", \"-4\", \"0x1f\").",
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "integerConstant": {
+      "anyOf": [
+        { "type": "integer" },
+        { "$ref": "#/definitions/sum" },
+        {
+          "type": "object",
+          "properties": {
+            "_value": {
+              "description": "The constant's value: an integer (a bit index in untyped_bit_const) or a list of terms summed.",
+              "anyOf": [{ "type": "integer" }, { "$ref": "#/definitions/sum" }]
+            },
+            "_docstring": { "$ref": "#/definitions/docstring" },
+            "_format": { "$ref": "#/definitions/format" }
+          },
+          "required": ["_value"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "integerConstantGroup": {
+      "type": "object",
+      "properties": {
+        "_docstring": { "$ref": "#/definitions/docstring" },
+        "_base_type": { "$ref": "#/definitions/baseType" },
+        "_to_string": { "$ref": "#/definitions/toString" }
+      },
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/integerConstant" }
+      },
+      "additionalProperties": false,
+      "not": { "$ref": "#/definitions/propertiesOnly" }
+    },
+    "stringConstant": {
+      "anyOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "properties": {
+            "_value": {
+              "description": "The string; no '\"', '\\' or control character.",
+              "type": "string"
+            },
+            "_docstring": { "$ref": "#/definitions/docstring" }
+          },
+          "required": ["_value"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "enumEntry": {
+      "anyOf": [
+        { "type": "integer" },
+        {
+          "type": "object",
+          "properties": {
+            "_value": {
+              "description": "The entry's value, an integer fitting the enum's base type.",
+              "type": "integer"
+            },
+            "_docstring": { "$ref": "#/definitions/docstring" },
+            "_format": { "$ref": "#/definitions/format" }
+          },
+          "required": ["_value"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "enum": {
+      "type": "object",
+      "properties": {
+        "_docstring": { "$ref": "#/definitions/docstring" },
+        "_base_type": { "$ref": "#/definitions/baseType" },
+        "_to_string": { "$ref": "#/definitions/toString" }
+      },
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/enumEntry" }
+      },
+      "additionalProperties": false,
+      "not": { "$ref": "#/definitions/propertiesOnly" }
+    },
+    "opaqueRef": {
+      "type": "object",
+      "properties": {
+        "_docstring": { "$ref": "#/definitions/docstring" },
+        "_class": {
+          "description": "The object's name in bindings with object semantics, a lowercase identifier; default the ref's name.",
+          "allOf": [{ "$ref": "#/definitions/identifier" }]
+        },
+        "_ctor": {
+          "description": "The function that produces the handle: it has exactly one parameter of this type with _ref = \"out\".",
+          "allOf": [{ "$ref": "#/definitions/identifier" }]
+        },
+        "_dtor": {
+          "description": "The function that releases the handle: its only parameter is this type by value; requires _ctor.",
+          "allOf": [{ "$ref": "#/definitions/identifier" }]
+        }
+      },
+      "additionalProperties": false
+    },
+    "boxedScalar": {
+      "type": "object",
+      "properties": {
+        "_docstring": { "$ref": "#/definitions/docstring" },
+        "_base_type": {
+          "description": "Required: the type of the one value the box holds, any integer type i8 through u64.",
+          "enum": ["i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"]
+        }
+      },
+      "required": ["_base_type"],
+      "additionalProperties": false
+    },
+    "field": {
+      "anyOf": [
+        { "$ref": "#/definitions/typeName" },
+        {
+          "type": "object",
+          "properties": {
+            "_type": { "$ref": "#/definitions/typeName" },
+            "_docstring": { "$ref": "#/definitions/docstring" }
+          },
+          "required": ["_type"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "struct": {
+      "type": "object",
+      "properties": {
+        "_docstring": { "$ref": "#/definitions/docstring" }
+      },
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/field" }
+      },
+      "additionalProperties": false,
+      "not": { "$ref": "#/definitions/propertiesOnly" }
+    },
+    "parameter": {
+      "anyOf": [
+        { "$ref": "#/definitions/typeName" },
+        {
+          "type": "object",
+          "properties": {
+            "_type": { "$ref": "#/definitions/typeName" },
+            "_ref": {
+              "description": "How the callee reaches the parameter: \"in\" is read, \"out\" is written, \"inout\" is both; absent, by value. A memory parameter requires it.",
+              "enum": ["in", "out", "inout"]
+            },
+            "_count": {
+              "description": "The type of a memory parameter's byte count; required on a memory parameter and allowed nowhere else.",
+              "enum": ["u8", "u16", "u32", "u64"]
+            },
+            "_optional": {
+              "description": "true: the caller may pass null instead of a value; only with _ref, and on memory only with _ref = \"in\".",
+              "type": "boolean"
+            },
+            "_docstring": { "$ref": "#/definitions/docstring" }
+          },
+          "required": ["_type"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "function": {
+      "type": "object",
+      "properties": {
+        "_docstring": { "$ref": "#/definitions/docstring" },
+        "_return": {
+          "description": "Required: a typed_const enum name whose entries include the value 0.",
+          "allOf": [{ "$ref": "#/definitions/identifier" }]
+        }
+      },
+      "patternProperties": {
+        "^[A-Za-z][A-Za-z0-9_]*$": { "$ref": "#/definitions/parameter" }
+      },
+      "required": ["_return"],
+      "additionalProperties": false
+    }
+  }
+}

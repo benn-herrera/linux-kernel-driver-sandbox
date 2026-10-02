@@ -604,11 +604,11 @@ class RealDefinition(unittest.TestCase):
                 rust_stub, rust_binding = generated / "stub" / f"{api.name}.rs", generated / "rust" / f"{api.name}.rs"
                 rustfmt = run([*RUSTFMT_CHECK, generated / "rust" / f"{api.name}_abi.rs", rust_stub, rust_binding])
                 self.assertEqual(rustfmt.returncode, 0, rustfmt.stdout + rustfmt.stderr)
-                env = crate_env(
-                    rust_dir=generated / "rust",
-                    header=None if api.wrapped_api is None else api_def.parents[1] / api.wrapped_api.header,
-                    include=EXERCISES,
-                )
+                # the one header bindgen renders includes every one `_headers` names, as a build's wrapper would
+                wrapper = None if api.wrapped_api is None else write(Path(tmp) / "wrapped_api.h", "".join(
+                    f'#include "{api_def.parents[1] / header}"\n' for header in api.wrapped_api.headers
+                ))
+                env = crate_env(rust_dir=generated / "rust", header=wrapper, include=EXERCISES)
                 for edition in EDITIONS:
                     rust = run([*clippy_cdylib(edition), "-o", Path(tmp) / f"lib{api.name}_stub.so", rust_stub], env=env)
                     self.assertEqual(rust.returncode, 0, rust.stderr)

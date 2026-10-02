@@ -2,7 +2,9 @@ import unittest
 from pathlib import Path
 
 from api_gen.emitters import emit_stub_rs
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, assert_matches_expected, load, mutate
+from api_gen.tests.support import (
+    DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, assert_matches_expected, load, mutate,
+)
 
 EXPECTED = Path(__file__).resolve().parent / "expected_stub_xy.rs"
 
@@ -62,6 +64,17 @@ class Validate(unittest.TestCase):
         ):
             with self.subTest(replacement=replacement):
                 self.assertEqual(emit_stub_rs.validate(load(mutate(FIXTURE, needle, replacement))), [])
+
+
+
+class GroupDocstring(unittest.TestCase):
+    def test_a_function_groups_docstring_is_a_line_above_its_first_function(self) -> None:
+        text = emit_stub_rs.emit(
+            load(DOCUMENTED_FUNCTION_GROUPS), source_name="xy_api.adef.toml", name="xy_api", library=None, project="xy",
+        )
+        self.assertIn("\n// port lifecycle\npub fn open_port(", text)
+        self.assertIn("\n}\n\n/// release the port\npub fn destroy_port(", text)
+        self.assertIn("\n// traffic\n/// buf: bytes to send\npub fn send(", text)
 
 
 if __name__ == "__main__":

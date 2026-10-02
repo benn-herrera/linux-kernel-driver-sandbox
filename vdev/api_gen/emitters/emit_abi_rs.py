@@ -6,7 +6,7 @@ from pathlib import Path
 
 from api_gen import naming
 from api_gen.emitters import c, rust
-from api_gen.model import Api, Function, Param, WrappedApi, duplicate_objections, generated_name_objections
+from api_gen.model import Api, Function, Param, WrappedApi, duplicate_objections, generated_name_objections, headed
 
 LABEL = "rust_abi"
 
@@ -128,12 +128,12 @@ def output_path(*, name: str, project: str) -> Path:
 
 def emit(api: Api, *, source_name: str, name: str, library: str | None, project: str) -> str:
     """The relay, as rustfmt lays it out."""
-    blocks = [rust.enum_block(t) for t in api.typed_consts]
+    blocks = rust.enum_blocks(api)
     blocks.append(rust.reexports(api))
     refs = {p.ref for fn in api.functions for p in fn.params if p.type == "memory"}
     helpers = [text for ref, text in _HELPER_TEXT.items() if ref in refs]
     blocks += [_LEN_TEXT, *helpers] if helpers else []
-    blocks += [_relay(api, fn) for fn in api.functions]
+    blocks += [rust.group_comment(h) + _relay(api, fn) for h, fn in headed(api.function_groups)]
     if api.wrapped_api is not None:
         blocks.append(_pins(api.namespace, api.wrapped_api))
     return rust.rustfmt(
@@ -149,10 +149,11 @@ def _constants(api: Api) -> list[str]:
     ns = api.namespace
     blocks = [rust.version_constant(api, prefixed=True)]
     blocks += [rust.constant_group(api, g, prefixed=True) for g in (*api.bit_const_groups, *api.const_groups)]
-    for t in api.typed_consts:
+    for heading, t in headed(api.typed_const_groups):
         alias = naming.type_name(ns, t.name)
         blocks.append(
-            rust.enum_alias(api, t)
+            rust.group_comment(heading)
+            + rust.enum_alias(api, t)
             + "".join(
                 f"{rust.doc_comment(e.docstring)}pub const {naming.const_name(ns, e.name)}: {alias} = "
                 f"{c.int_literal(e.value, e.format)};\n"
@@ -213,9 +214,9 @@ def _relay(api: Api, fn: Function) -> str:
 
 
 def _pins(namespace: str, wrapped_api: WrappedApi) -> str:
-    """The `wrapped_api` module, `bindgen`'s rendering of the wrapped API's C header the build
-    writes into `OUT_DIR`, then one compile-time assertion per pin against it, both sides
-    widened to `i64` so a macro bindgen types wider cannot truncate into a false match."""
+    """The `wrapped_api` module, `bindgen`'s rendering of the wrapped API's C headers, those
+    `_headers` names, which the build writes into `OUT_DIR`, then one compile-time assertion
+    per pin against it, both sides widened to `i64` so a macro bindgen types wider cannot truncate into a false match."""
     asserts = "".join(
         f'const _: () = assert!(ffi::{name} as i64 == wrapped_api::{macro} as i64, "{name} must match {macro}");\n'
         for name, macro in ((naming.const_name(namespace, key), macro) for key, macro in wrapped_api.pins)

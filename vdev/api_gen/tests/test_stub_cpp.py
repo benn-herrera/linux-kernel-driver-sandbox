@@ -2,7 +2,7 @@ import re
 import unittest
 
 from api_gen.emitters import emit_stub_cpp
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate
+from api_gen.tests.support import DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, load, mutate
 
 
 def stub(text: str = FIXTURE) -> str:
@@ -52,6 +52,15 @@ class Validate(unittest.TestCase):
             emit_stub_cpp.validate(load(mutate(FIXTURE, 'htoken = "token"', 'uint32_t = "token"'))),
             ["stub: function.spend.uint32_t: 'uint32_t' is a name the generated code uses"],
         )
+
+
+
+class GroupDocstring(unittest.TestCase):
+    def test_a_function_groups_docstring_is_a_line_above_its_first_definition(self) -> None:
+        text = stub(DOCUMENTED_FUNCTION_GROUPS)
+        self.assertIn("\n// port lifecycle\nXY_API xy_status xy_open_port(", text)
+        self.assertIn("\n\nXY_API xy_status xy_destroy_port(", text)
+        self.assertIn("\n// traffic\nXY_API xy_status xy_send(", text)
 
 
 if __name__ == "__main__":

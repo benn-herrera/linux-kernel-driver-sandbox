@@ -7,7 +7,7 @@ from api_gen import naming
 from api_gen.emitters import c
 from api_gen.model import (
     Api, BitConst, ClassShape, EnumEntry, Function, Group, OpaqueRef, Param, duplicate_objections,
-    generated_name_objections, named_values, single_bit_entries,
+    generated_name_objections, headed, named_values, single_bit_entries,
 )
 
 _LUA_KEYWORDS = frozenset(
@@ -86,7 +86,7 @@ def emit(api: Api, *, source_name: str, name: str, library: str | None, project:
     ]
 
     for doc, literals in _constant_sections(api):
-        out += [f"-- {doc}\n"] if doc else []
+        out.append(_comment(doc))
         out += [f"M.{name} = {value}\n" for name, value in literals]
 
     out += [_bit_to_string(g) for g in api.bit_const_groups if g.to_string is not None]
@@ -101,10 +101,15 @@ def emit(api: Api, *, source_name: str, name: str, library: str | None, project:
         if t.to_string is not None
     ]
 
-    raw = "".join(f"    {f.name} = lib.{naming.function_name(ns, f.name)},\n" for f in api.functions)
+    raw = "".join(
+        f"{_comment(h, indent='    ')}    {f.name} = lib.{naming.function_name(ns, f.name)},\n"
+        for h, f in headed(api.function_groups)
+    )
     out.append(f"\nM.raw = {{\n{raw}}}\n")
 
-    out += [_class(api, shape) for shape in api.classes()]
+    classes = api.classes()
+    opaque_headings = {o.name: h for h, o in headed(api.opaque_ref_groups, (s.opaque for s in classes))}
+    out += [_class(api, shape, heading=opaque_headings[shape.opaque.name]) for shape in classes]
 
     out.append("\nreturn M\n")
     return "".join(out)
@@ -116,21 +121,20 @@ def _version_literal(api: Api) -> str:
 
 def _constant_sections(api: Api) -> list[tuple[str | None, list[tuple[str, str]]]]:
     """Every constant's (name, Lua literal), in the same order the C header defines them,
-    as (docstring, literals) sections: one per constant group, the rest undocumented.
-    Every value is the model's already-resolved one; a composed entry's sum was computed,
-    and a bit group's overlap-checked, once in model.py."""
+    as (docstring, literals) sections: one per constant group and one per enum group, its
+    entries' literals under the group's docstring, the version undocumented. Every value is
+    the model's already-resolved one; a composed entry's sum was computed, and a bit group's
+    overlap-checked, once in model.py."""
     name = naming.unprefixed_const_name
     sections = [(None, [(name(naming.VERSION_KEY), _version_literal(api))])]
     sections += [
         (g.docstring, [(name(entry.name), c.int_literal(entry.value, entry.format)) for entry in g.entries])
-        for g in api.bit_const_groups
+        for g in (*api.bit_const_groups, *api.const_groups)
     ]
     sections += [
-        (g.docstring, [(name(entry.name), c.int_literal(entry.value, entry.format)) for entry in g.entries])
-        for g in api.const_groups
+        (g.docstring, [(name(e.name), c.int_literal(e.value, e.format)) for t in g.entries for e in t.entries])
+        for g in api.typed_const_groups
     ]
-    rest = [(name(e.name), c.int_literal(e.value, e.format)) for t in api.typed_consts for e in t.entries]
-    sections.append((None, rest))
     sections += [
         (g.docstring, [(name(entry.name), f'"{entry.value}"') for entry in g.entries])
         for g in api.string_const_groups
@@ -194,15 +198,22 @@ def _cdef(api: Api) -> str:
     since the module carries constants as literals), then the header's opaque, boxed scalar,
     struct and function declarations with no visibility macro."""
     typedefs = [
-        f"typedef {naming.BASE_C_TYPES[t.base_type].c_type} {naming.type_name(api.namespace, t.name)};\n"
-        for t in api.typed_consts
+        c.comment_line(h)
+        + f"typedef {naming.BASE_C_TYPES[t.base_type].c_type} {naming.type_name(api.namespace, t.name)};\n"
+        for h, t in headed(api.typed_const_groups)
     ]
     text = "\n".join([*typedefs, c.declarations(api, function_prefix="", constants=False)])
     return f"ffi.cdef[[\n{text}]]\n"
 
 
-def _doc_lines(fn: Function) -> str:
-    return "".join(f"-- {doc}\n" for doc in fn.docs())
+def _comment(doc: str | None, *, indent: str = "") -> str:
+    """`doc` as a `--` comment line, nothing for none."""
+    return f"{indent}-- {doc}\n" if doc else ""
+
+
+def _doc_lines(fn: Function, heading: str | None) -> str:
+    """`heading`, the docstring of the group `fn` is the first of here, then `fn`'s own."""
+    return "".join(_comment(doc) for doc in [heading, *fn.docs()])
 
 
 def _unboxed(api: Api, type_name: str) -> str:
@@ -329,15 +340,22 @@ def _arg_asserts(api: Api, params: tuple[Param, ...], *, context: str) -> list[s
     return lines
 
 
-def _class(api: Api, shape: ClassShape) -> str:
+def _class(api: Api, shape: ClassShape, *, heading: str | None) -> str:
+    """The class under `heading`, its opaque ref's group docstring where it is the first of
+    that group's classes, each of its functions under its own group's where it is the first
+    of that group's here."""
     class_display = naming.upper_camel(shape.opaque.class_name)
     cls = f"M.{class_display}"
-    out = [f"\n{cls} = {{}}\n{cls}.__index = {cls}\n"]
-    out.append(_constructor(api, shape, cls=cls, class_display=class_display))
+    headings = {fn.name: h for h, fn in headed(api.function_groups, shape.functions())}
+    out = [f"\n{_comment(heading)}{cls} = {{}}\n{cls}.__index = {cls}\n"]
+    out.append(_constructor(api, shape, cls=cls, class_display=class_display, heading=headings[shape.ctor.name]))
     guard = _use_guard(shape.opaque)
-    out += [_method(api, fn, cls=cls, class_display=class_display, guard=guard) for fn in shape.methods]
+    out += [
+        _method(api, fn, cls=cls, class_display=class_display, guard=guard, heading=headings[fn.name])
+        for fn in shape.methods
+    ]
     if shape.dtor is not None:
-        out.append(_release(api, shape.dtor, cls=cls))
+        out.append(_release(api, shape.dtor, cls=cls, heading=headings[shape.dtor.name]))
     return "".join(out)
 
 
@@ -418,13 +436,13 @@ def _result_check(api: Api, fn: Function) -> str:
     return f"    if result ~= M.{ok} then\n        return nil, result\n    end\n"
 
 
-def _constructor(api: Api, shape: ClassShape, *, cls: str, class_display: str) -> str:
+def _constructor(api: Api, shape: ClassShape, *, cls: str, class_display: str, heading: str | None) -> str:
     """`new`, which caches every out parameter other than the handle on the object under
     its parameter name."""
     fn, opaque = shape.ctor, shape.opaque
     args, call, allocs, _ = _marshal(api, fn.params)
     out = [
-        _doc_lines(fn),
+        _doc_lines(fn, heading),
         f"function {cls}.new({', '.join(args)})\n",
         *_arg_asserts(api, fn.params, context=f"{class_display}.new"),
         *allocs,
@@ -440,11 +458,11 @@ def _constructor(api: Api, shape: ClassShape, *, cls: str, class_display: str) -
     return "\n" + "".join(out)
 
 
-def _method(api: Api, fn: Function, *, cls: str, class_display: str, guard: str) -> str:
+def _method(api: Api, fn: Function, *, cls: str, class_display: str, guard: str, heading: str | None) -> str:
     args, call, allocs, rets = _marshal(api, fn.params[1:])
     rets = rets or ["true"]
     return (
-        f"\n{_doc_lines(fn)}function {cls}.{fn.name}({', '.join(['self', *args])})\n"
+        f"\n{_doc_lines(fn, heading)}function {cls}.{fn.name}({', '.join(['self', *args])})\n"
         f"    {guard}\n"
         + "".join(_arg_asserts(api, fn.params[1:], context=f"{class_display}.{fn.name}"))
         + "".join(allocs)
@@ -453,14 +471,14 @@ def _method(api: Api, fn: Function, *, cls: str, class_display: str, guard: str)
     )
 
 
-def _release(api: Api, dtor: Function, *, cls: str) -> str:
+def _release(api: Api, dtor: Function, *, cls: str, heading: str | None) -> str:
     """The dtor as an explicit method: detaches the GC finalizer if one is attached,
     releases whatever _handle holds, or else a NULL handle of its own cdata type (the
     FFI call takes real cdata, never a bare Lua nil; the library answers a NULL handle
     the same as any other), and drops the handle whatever the result."""
     opaque_type = c.c_type(api, dtor.params[0].type)
     return (
-        f"\n{_doc_lines(dtor)}function {cls}.{dtor.name}(self)\n"
+        f"\n{_doc_lines(dtor, heading)}function {cls}.{dtor.name}(self)\n"
         f'    local handle = self._handle or ffi.new("{opaque_type}")\n'
         "    if self._handle ~= nil then\n"
         "        ffi.gc(self._handle, nil)\n"

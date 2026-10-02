@@ -13,7 +13,7 @@ from api_gen.tests.support import (
 STATUS_REFS = [f"function.{f}._return: unknown typed_const 'status'" for f in ("open_port", "destroy_port", "send", "spend")]
 PORT_REFS = [f"function.{p}: unknown type 'port'" for p in ("open_port.pport", "destroy_port.hport", "send.hport")]
 STATS_REFS = ["function.open_port.pstats: unknown type 'stats'"]
-FEAT_A_REFS = ["_wrapped_api.feat_a: pins undefined untyped_bit_const 'feat_a'"]
+FEAT_A_REFS = ["_wrapped_api._pinned_value.feat_a: pins undefined untyped_bit_const 'feat_a'"]
 I32 = "i32 (-2147483648..2147483647)"
 
 
@@ -68,13 +68,13 @@ class ModelErrors(unittest.TestCase):
             ('err_other = { _value = 0x7fffffff, _format = "hex" }',
              '[typed_const.status.err_other]\n_value = 0x7fffffff\n_format = "hex"'),
             ('[opaque_ref.port]\n_ctor = "open_port"\n_dtor = "destroy_port"',
-             '[opaque_ref]\nport = { _ctor = "open_port", _dtor = "destroy_port" }'),
+             'port = { _ctor = "open_port", _dtor = "destroy_port" }'),
         ):
             with self.subTest(needle=needle):
                 self.assertEqual(load(mutate(FIXTURE, needle, spelled_out)), api)
         self.assertEqual(
             load(mutate(KITCHEN_SINK, '[boxed_scalar.offset]\n_docstring = "a device offset"\n_base_type = "u64"',
-                        '[boxed_scalar]\noffset = { _docstring = "a device offset", _base_type = "u64" }')),
+                        'offset = { _docstring = "a device offset", _base_type = "u64" }')),
             load(KITCHEN_SINK),
         )
 
@@ -111,15 +111,15 @@ class ModelErrors(unittest.TestCase):
         )
 
     def test_quoted_library_rejected(self) -> None:
-        assert_objection(self, mutate(FIXTURE, '_library = "libxy.so"', '_library = "lib\\"xy.so"'),
-                         "_general._library must not contain '\"', '\\' or a control character")
-        assert_objection(self, mutate(FIXTURE, '_header = "driver/', '_header = "driver\\\\'),
-                         "_wrapped_api._header must not contain '\"', '\\' or a control character")
+        assert_objection(self, mutate(FIXTURE, '_bound_library = "libxy.so"', '_bound_library = "lib\\"xy.so"'),
+                         "_general._bound_library must not contain '\"', '\\' or a control character")
+        assert_objection(self, mutate(FIXTURE, '_headers = ["driver/', '_headers = ["driver\\\\'),
+                         "_wrapped_api._headers[0] must not contain '\"', '\\' or a control character")
 
     def test_library_and_header_refuse_control_characters(self) -> None:
         for needle, replacement, where in (
-            ('_library = "libxy.so"', '_library = "libxy.so\\n"', "_general._library"),
-            ('_header = "driver/', '_header = "driver\\r/', "_wrapped_api._header"),
+            ('_bound_library = "libxy.so"', '_bound_library = "libxy.so\\n"', "_general._bound_library"),
+            ('_headers = ["driver/', '_headers = ["driver\\r/', "_wrapped_api._headers[0]"),
         ):
             with self.subTest(where=where):
                 assert_objection(self, mutate(FIXTURE, needle, replacement),
@@ -193,26 +193,40 @@ class ModelErrors(unittest.TestCase):
 
     def test_wrapped_api_rules(self) -> None:
         for needle, replacement, message in (
-            ('_header = "driver/xy_ioctl.h"\n', "", "_wrapped_api._header must be a string"),
-            ('feat_a = "XYD_FEAT_A"', 'feat_a = "XYD-FEAT-A"', "_wrapped_api.feat_a: must be a macro name"),
+            ('_headers = ["driver/xy_ioctl.h"]\n', "", "_wrapped_api._headers must be a non-empty list of strings"),
+            ('feat_a = "XYD_FEAT_A"', 'feat_a = "XYD-FEAT-A"', "_wrapped_api._pinned_value.feat_a: must be a macro name"),
             ("[_wrapped_api]", "[_driver_data]", "unknown table(s) [_driver_data]"),
             ('feat_a = "XYD_FEAT_A"', '[_wrapped_api.const_pins]\nfeat_a = "XYD_FEAT_A"',
-             "_wrapped_api.const_pins: pins undefined untyped_bit_const 'const_pins'"),
+             "_wrapped_api: unknown key(s) const_pins"),
+            ('[_wrapped_api._pinned_value]\nfeat_a = "XYD_FEAT_A"', '_pinned_value = "x"', "_wrapped_api._pinned_value must be a table"),
+            ("[_wrapped_api._pinned_value]\n", "", "_wrapped_api: unknown key(s) feat_a"),
+            ('feat_a = "XYD_FEAT_A"', '_x = 1\nfeat_a = "XYD_FEAT_A"',
+             "_wrapped_api._pinned_value: unknown key(s) _x"),
+            ('_headers = ["driver/xy_ioctl.h"]', '_header = "driver/xy_ioctl.h"', "_wrapped_api: unknown key(s) _header"),
+            ('_headers = ["driver/xy_ioctl.h"]', '_headers = "driver/xy_ioctl.h"',
+             "_wrapped_api._headers must be a non-empty list of strings"),
+            ('_headers = ["driver/xy_ioctl.h"]', "_headers = []", "_wrapped_api._headers must be a non-empty list of strings"),
+            ('_headers = ["driver/xy_ioctl.h"]', '_headers = ["driver/xy_ioctl.h", 5]',
+             "_wrapped_api._headers must be a non-empty list of strings"),
+            ('_headers = ["driver/xy_ioctl.h"]', '_headers = ["driver/xy_ioctl.h", "driver/xy_ioctl.h"]',
+             "_wrapped_api._headers[1]: already listed"),
         ):
             with self.subTest(message=message):
                 assert_objection(self, mutate(FIXTURE, needle, replacement), message)
 
     def test_wrapped_api_without_pins_keeps_its_header(self) -> None:
         wrapped = load(mutate(FIXTURE, 'feat_a = "XYD_FEAT_A"\n', "")).wrapped_api
-        self.assertEqual((wrapped.header, wrapped.pins), ("driver/xy_ioctl.h", ()))
+        self.assertEqual((wrapped.headers, wrapped.pins), (("driver/xy_ioctl.h",), ()))
         self.assertIsNone(load(NO_WRAPPED_API).wrapped_api)
 
     def test_header_is_relative_to_the_project_directory(self) -> None:
-        message = "_wrapped_api._header must be relative to the project directory, not absolute or beginning with '../'"
+        message = "_wrapped_api._headers[0] must be relative to the project directory, not absolute or beginning with '../'"
         for header in ("/work/exercises/xy/driver/xy_ioctl.h", "../xy/driver/xy_ioctl.h"):
             with self.subTest(header=header):
                 assert_objection(self, mutate(FIXTURE, '"driver/xy_ioctl.h"', f'"{header}"'), message)
-        self.assertEqual(load(mutate(FIXTURE, '"driver/', '"./driver/')).wrapped_api.header, "./driver/xy_ioctl.h")
+        assert_objection(self, mutate(FIXTURE, '"driver/xy_ioctl.h"', '"driver/xy_ioctl.h", "../a.h"'),
+                         message.replace("_headers[0]", "_headers[1]"))
+        self.assertEqual(load(mutate(FIXTURE, '"driver/', '"./driver/')).wrapped_api.headers, ("./driver/xy_ioctl.h",))
 
     def test_typed_const_fits_its_base_type(self) -> None:
         self.assertEqual(objections(mutate(FIXTURE, "ok = 0", "ok = 0x80000000")),
@@ -391,7 +405,7 @@ class ModelErrors(unittest.TestCase):
         assert_objection(self, FIXTURE + "\n[opaque_ref.stats]\n", "struct.stats: type name already defined in opaque_ref")
 
     def test_pin_names_undefined_constant(self) -> None:
-        assert_objection(self, FIXTURE + 'feat_z = "XY_FEAT_Z"\n', "_wrapped_api.feat_z: pins undefined untyped_bit_const 'feat_z'")
+        assert_objection(self, FIXTURE + 'feat_z = "XY_FEAT_Z"\n', "_wrapped_api._pinned_value.feat_z: pins undefined untyped_bit_const 'feat_z'")
 
     def test_composed_constant_must_be_earlier(self) -> None:
         text = mutate(NO_WRAPPED_API, '["feat_a", "feat_b"]', '["feat_a", "feat_c"]')
@@ -457,7 +471,7 @@ class ModelErrors(unittest.TestCase):
         assert_objection(self, "[function]\n", "missing [_general] table")
 
     def test_unknown_format(self) -> None:
-        self.assertEqual(objections(mutate(FIXTURE, '_format = "hex" }\n\n[opaque', '_format = "oct" }\n\n[opaque')),
+        self.assertEqual(objections(mutate(FIXTURE, '_format = "hex" }\n\n[[opaque', '_format = "oct" }\n\n[[opaque')),
                          ["typed_const.status.err_other._format must be one of dec, hex", *STATUS_REFS])
 
     def test_ctor_needs_one_out_of_the_opaque(self) -> None:
@@ -534,7 +548,7 @@ class CollectedErrors(unittest.TestCase):
 
     def test_order_is_the_documents_not_the_loaders(self) -> None:
         # the loader reads typed_const before struct; the document writes struct first
-        text = MINIMAL + '\n[struct.s]\nx = "nope"\n\n[typed_const.e]\nok = "zero"\n'
+        text = MINIMAL + '\n[[struct]]\n[struct.s]\nx = "nope"\n\n[[typed_const]]\n[typed_const.e]\nok = "zero"\n'
         self.assertEqual(objections(text), [
             "struct.s.x: unknown type 'nope'",
             "typed_const.e.ok: value must be an integer",
@@ -549,7 +563,7 @@ class CollectedErrors(unittest.TestCase):
                 self.assertEqual(objections(text), [message])
 
 
-BOXED = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+BOXED = FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.offset]\n_base_type = "u64"\n'
 
 
 class BoxedScalar(unittest.TestCase):
@@ -593,6 +607,30 @@ class BoxedScalar(unittest.TestCase):
         assert_objection(self, mutate(BOXED, "[boxed_scalar.offset]", "[boxed_scalar.u64]"), "boxed_scalar.u64: shadows builtin type u64")
         assert_objection(self, BOXED + '\n[function.offset]\n_return = "status"\n',
                           "function.offset: C identifier xy_offset already defined by boxed_scalar.offset")
+
+
+class Groups(unittest.TestCase):
+    def test_a_named_kind_written_without_groups_is_refused(self) -> None:
+        for kind in ("typed_const", "opaque_ref", "boxed_scalar", "struct", "function"):
+            with self.subTest(kind=kind):
+                assert_objection(self, MINIMAL + f"\n[{kind}.x]\n", f"[{kind}] must be an array of tables, [[{kind}]]")
+
+    def test_a_group_without_members_is_refused_by_its_index(self) -> None:
+        assert_objection(self, FIXTURE + '\n[[function]]\n_docstring = "none"\n', "function[1]: has no entries")
+
+    def test_a_named_kinds_group_has_only_a_docstring(self) -> None:
+        assert_objection(self, mutate(FIXTURE, "[[struct]]\n", '[[struct]]\n_colour = "red"\n'), "struct[0]: unknown key(s) _colour")
+
+    def test_a_group_docstring_has_no_line_break(self) -> None:
+        assert_objection(self, FIXTURE + '\n[[function]]\n_docstring = "a\\nb"\n[function.reset]\n_return = "status"\n',
+                         "function[1]._docstring must not contain a line break")
+
+    def test_an_item_name_is_unique_across_its_kinds_groups(self) -> None:
+        assert_objection(self, FIXTURE + '\n[[function]]\n[function.spend]\n_return = "status"\n',
+                         "function.spend: already defined in function[0]")
+
+    def test_an_item_body_is_a_table(self) -> None:
+        assert_objection(self, mutate(FIXTURE, "[[function]]\n", "[[function]]\nreset = 5\n"), "function.reset must be a table")
 
 
 class Shape(unittest.TestCase):

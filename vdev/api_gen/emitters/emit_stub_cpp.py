@@ -4,7 +4,7 @@ from pathlib import Path
 
 from api_gen import naming
 from api_gen.emitters import c, cpp
-from api_gen.model import Api, Function
+from api_gen.model import Api, Function, headed
 
 LABEL = "stub"
 
@@ -31,7 +31,9 @@ def emit(api: Api, *, source_name: str, name: str, library: str | None, project:
 #include <cstdint>
 #include <cstring>
 """
-    return prelude + "".join("\n" + _definition(api, f) for f in api.functions)
+    return prelude + "".join(
+        "\n" + (f"// {h}\n" if h else "") + _definition(api, f) for h, f in headed(api.function_groups)
+    )
 
 
 def _definition(api: Api, fn: Function) -> str:

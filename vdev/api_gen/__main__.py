@@ -46,7 +46,7 @@ def _add_outputs_argument(parser: argparse.ArgumentParser) -> None:
 
 def _flag_objections(flag: str, value: str | None, *, names: str) -> list[str]:
     """The objections to a flag the outputs spell inside a string literal: held to
-    `_general._library`'s rule, and not empty, since an empty one names no `names`."""
+    `_general._bound_library`'s rule, and not empty, since an empty one names no `names`."""
     if value is None:
         return []
     if not value:
@@ -78,7 +78,7 @@ def _linkage_objections(outputs: tuple[str, ...], library: str | None) -> list[s
     objections = []
     loaders = [EMITTERS[token].LABEL for token in ("lua", "rs") if token in outputs]
     if loaders and library is None:
-        objections.append(f"{', '.join(loaders)}: no library named; set _general._library or --library")
+        objections.append(f"{', '.join(loaders)}: no library named; set _general._bound_library or --library")
     if "rs" in outputs and library is not None and naming.rust_link_name(library) is None:
         objections.append(
             f"{EMITTERS['rs'].LABEL}: library '{library}' is not of the form lib<name>.so, the one a Rust binding links"
@@ -101,11 +101,11 @@ def _generate_main(argv: list[str]) -> int:
     parser.add_argument("--generated", type=Path, required=True, help="output directory")
     parser.add_argument(
         "--project", required=True,
-        help="project name, its directory's: the include subdirectory and the base of _wrapped_api._header",
+        help="project name, its directory's: the include subdirectory and the base of each _wrapped_api._headers path",
     )
     parser.add_argument(
         "--library",
-        help="shared library file name the Lua module loads and the Rust binding links (default: _general._library)",
+        help="shared library file name the Lua module loads and the Rust binding links (default: _general._bound_library)",
     )
     _add_outputs_argument(parser)
     args = parser.parse_args(argv)
@@ -181,6 +181,9 @@ def _gendeps_main(argv: list[str]) -> int:
 
 
 def _gendeps_block(*, definition: str, name: str, outputs: tuple[str, ...]) -> str:
+    """The make fragment for `definition`'s selected outputs, the generator's only make-specific
+    text: another build system (ninja, gradle, ...) is another renderer of the same three inputs,
+    chosen by a `gendeps` flag, and nothing above this function changes."""
     paths = (EMITTERS[token].output_path(name=name, project="$(BASE)") for token in outputs)
     targets = " \\\n".join(f"  $(GEN)/{path}" for path in paths)
     recipe = (

@@ -175,9 +175,9 @@ class Generate(GenerationCase):
         self.assertFalse(generated.exists())
 
     def test_missing_library_exits_2_with_nothing_written(self) -> None:
-        code, stderr, generated, _ = self.generate(mutate(FIXTURE, '_library = "libxy.so"\n', ""))
+        code, stderr, generated, _ = self.generate(mutate(FIXTURE, '_bound_library = "libxy.so"\n', ""))
         self.assertEqual(code, 2)
-        self.assertIn(": lua, rust: no library named; set _general._library or --library\n", stderr)
+        self.assertIn(": lua, rust: no library named; set _general._bound_library or --library\n", stderr)
         self.assertFalse(generated.exists())
 
     def test_rust_outputs_need_rustfmt_and_without_it_nothing_is_written(self) -> None:
@@ -278,14 +278,14 @@ class Outputs(GenerationCase):
         self.assertIn(": header, stub: struct.stats.int: 'int' is a C keyword\n", stderr)
 
     def test_library_is_required_only_for_lua_and_the_rust_binding(self) -> None:
-        no_library = mutate(FIXTURE, '_library = "libxy.so"\n', "")
+        no_library = mutate(FIXTURE, '_bound_library = "libxy.so"\n', "")
         code, stderr, *_ = self.generate(no_library, "--outputs=h,hpp,stub_cpp,abi_rs,stub_rs")
         self.assertEqual(code, 0, stderr)
         for flag, labels in (("--outputs=lua", "lua"), ("--outputs=rs", "rust"), ("--outputs=lua,rs", "lua, rust")):
             with self.subTest(flag=flag):
                 code, stderr, generated, _ = self.generate(no_library, flag)
                 self.assertEqual(code, 2)
-                self.assertIn(f": {labels}: no library named; set _general._library or --library\n", stderr)
+                self.assertIn(f": {labels}: no library named; set _general._bound_library or --library\n", stderr)
                 self.assertFalse(generated.exists())
 
     def test_the_rust_binding_needs_a_library_it_can_link(self) -> None:

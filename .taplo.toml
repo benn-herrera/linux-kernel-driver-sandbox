@@ -1,0 +1,8 @@
+# Taplo (the TOML language server) configuration: editor completion, hover and
+# diagnostics for API definitions, from the generator's shape-only schema. The
+# generator never reads the schema; the loader remains the authority.
+[[rule]]
+include = ["**/*.adef.toml"]
+
+[rule.schema]
+path = "vdev/api_gen/api_def.schema.json"

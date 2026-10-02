@@ -4,7 +4,8 @@ from pathlib import Path
 
 from api_gen.emitters import emit_abi_rs, emit_binding_rs
 from api_gen.tests.support import (
-    FIXTURE, KITCHEN_SINK, NO_WRAPPED_API, UNSPELLED_PRELUDE_STRUCTS, assert_matches_expected, load, mutate,
+    DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, NO_WRAPPED_API, UNSPELLED_PRELUDE_STRUCTS,
+    assert_matches_expected, load, mutate,
 )
 
 EXPECTED = Path(__file__).resolve().parent / "expected_abi_xy.rs"
@@ -140,11 +141,11 @@ class Validate(unittest.TestCase):
             (FIXTURE + '\n[struct.option]\nv = "u32"\n', "Option would be defined more than once, by the Rust prelude and struct.option"),
             (FIXTURE + '\n[struct.result]\nv = "u32"\n', "Result would be defined more than once, by the Rust prelude and struct.result"),
             # a boxed scalar is a tuple struct, so its re-export takes the value namespace the patterns reach too
-            (FIXTURE + '\n[boxed_scalar.err]\n_base_type = "u32"\n',
+            (FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.err]\n_base_type = "u32"\n',
              "Err would be defined more than once, by the Rust prelude and boxed_scalar.err"),
-            (FIXTURE + '\n[boxed_scalar.ok]\n_base_type = "u32"\n',
+            (FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.ok]\n_base_type = "u32"\n',
              "Ok would be defined more than once, by the Rust prelude and boxed_scalar.ok"),
-            (FIXTURE + '\n[boxed_scalar.some]\n_base_type = "u32"\n',
+            (FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.some]\n_base_type = "u32"\n',
              "Some would be defined more than once, by the Rust prelude and boxed_scalar.some"),
             (mutate(mutate(FIXTURE, '_namespace = "xy"', '_namespace = "c"'), "[function.spend]", "[function.bytes]"),
              "c_bytes would be defined more than once, by the relay's buffer helper and function.bytes"),
@@ -165,6 +166,15 @@ class Validate(unittest.TestCase):
         )
         self.assertEqual(self.validate(text), [f"rust_abi: {message}"])
         self.assertEqual(emit_binding_rs.validate(load(text)), [f"rust: {message}"])
+
+
+
+class GroupDocstring(unittest.TestCase):
+    def test_a_function_groups_docstring_is_a_line_above_its_first_export(self) -> None:
+        text = relay(DOCUMENTED_FUNCTION_GROUPS)
+        self.assertIn("\n// port lifecycle\n/// pstats: may be null\n///\n" + SAFETY + "xy_open_port(", text)
+        self.assertIn("\n}\n\n/// release the port\n///\n" + SAFETY + "xy_destroy_port(", text)
+        self.assertIn("\n// traffic\n/// buf: bytes to send\n///\n" + SAFETY + "xy_send(", text)
 
 
 if __name__ == "__main__":

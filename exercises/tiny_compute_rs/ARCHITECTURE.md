@@ -21,7 +21,7 @@ A copy of `tiny_compute` whose library is implemented in Rust. The driver is the
 The API definition, then four consumers of the driver, each one layer up from the last:
 
 - api_def/: the userspace API defined once, generated into every consumer
-  - tcdl_api.adef.toml: types, constants, functions and docstrings of the `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`; `_library` names `libtiny_compute_rs.so`
+  - tcdl_api.adef.toml: types, constants, functions and docstrings of the `tcdl` API, plus the pins tying its constants to `tcd_ioctl.h`; `_bound_library` names `libtiny_compute_rs.so`
   - Makefile: `OUTPUTS` selects the Rust implementation pair (`abi_rs`, `stub_rs`) and every consumer (`h`, `hpp`, `lua`, `rs`)
 - lib/: `libtiny_compute_rs.so`, the Rust library over the ioctl ABI, a cargo `cdylib` crate
   - src/lib.rs: the implementation, started from the generated stub; it includes the generated relay `tcdl_api_abi.rs` (the C-ABI exports, the pins) as `mod abi` and writes the safe bodies the relay calls; the opaque handle wraps the device fd as the C++ one does

@@ -66,11 +66,11 @@ def emit(api: Api, *, source_name: str, name: str, library: str | None, project:
             f'"{naming.const_name(ns, key)} must match {macro}");\n'
             for key, macro in api.wrapped_api.pins
         )
+        includes = "".join(f'# include "{project}/{header}"\n' for header in api.wrapped_api.headers)
         text += f"""\
 
 #if defined({impl})
-# include "{project}/{api.wrapped_api.header}"
-/* Pins to the wrapped API: the implementation build fails if a pinned constant disagrees with its header */
+{includes}/* Pins to the wrapped API: the implementation build fails if a pinned constant disagrees with its header */
 # include <assert.h>
 {asserts}#endif
 """

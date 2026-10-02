@@ -13,6 +13,7 @@ from api_gen.emitters import c
 from api_gen.emitters.emitter import ToolError
 from api_gen.model import (
     Api, BitConst, EnumEntry, Function, Group, LiteralTerm, Param, StringConst, Term, TypedConst, duplicate_objections,
+    headed,
 )
 
 # Strict, reserved and weak keywords of editions 2021 and 2024 (`gen`, reserved from 2024):
@@ -127,9 +128,9 @@ def many_arguments_allow(count: int, *, indent: str = "") -> str:
     return f"{indent}#[allow(clippy::too_many_arguments)]\n" if count > _MAX_ARGUMENTS else ""
 
 
-def _group_comment(doc: str | None) -> str:
-    """A constant group's docstring as a `//` line: a group is no item to document."""
-    return f"// {doc}\n" if doc else ""
+def group_comment(doc: str | None, *, indent: str = "") -> str:
+    """A group's docstring as a `//` line: a group is no item to document."""
+    return f"{indent}// {doc}\n" if doc else ""
 
 
 def rust_type(api: Api, type_name: str, *, path: str = "") -> str:
@@ -213,12 +214,18 @@ def ffi_module(blocks: Iterable[str], *, tail: str = "") -> str:
 
 
 def reexports(api: Api) -> str:
-    """Each boxed scalar, then each struct, re-exported from `ffi` under its UpperCamel name;
-    empty where there is none."""
+    """Each boxed scalar, then each struct, re-exported from `ffi` under its UpperCamel name,
+    the first of a documented group's under its `group_comment()`; empty where there is none."""
     return "".join(
-        f"pub use ffi::{naming.type_name(api.namespace, t.name)} as {naming.upper_camel(t.name)};\n"
-        for t in (*api.boxed_scalars, *api.structs)
+        f"{group_comment(h)}pub use ffi::{naming.type_name(api.namespace, t.name)} as {naming.upper_camel(t.name)};\n"
+        for h, t in (*headed(api.boxed_scalar_groups), *headed(api.struct_groups))
     )
+
+
+def enum_blocks(api: Api) -> list[str]:
+    """`enum_block()` for each enum in document order, the first of a documented group's
+    under its `group_comment()`."""
+    return [group_comment(h) + enum_block(t) for h, t in headed(api.typed_const_groups)]
 
 
 def enum_block(typed: TypedConst) -> str:
@@ -330,12 +337,12 @@ def constant_group(api: Api, group: Group[BitConst] | Group[EnumEntry], *, prefi
             value = c.int_literal(e.value, e.format)
         name = _const_name(api, e.name, prefixed=prefixed)
         lines.append(f"{doc_comment(e.docstring)}pub const {name}: {group.base_type} = {value};\n")
-    return _group_comment(group.docstring) + "".join(lines)
+    return group_comment(group.docstring) + "".join(lines)
 
 
 def string_group(api: Api, group: Group[StringConst], *, prefixed: bool) -> str:
     """A string group as one `pub const ...: &str` per entry under its docstring."""
-    return _group_comment(group.docstring) + "".join(
+    return group_comment(group.docstring) + "".join(
         f'{doc_comment(s.docstring)}pub const {_const_name(api, s.name, prefixed=prefixed)}: &str = "{s.value}";\n'
         for s in group.entries
     )
@@ -343,29 +350,31 @@ def string_group(api: Api, group: Group[StringConst], *, prefixed: bool) -> str:
 
 def type_definitions(api: Api) -> list[str]:
     """One block per opaque ref (its pointer alias and the struct it points to), boxed
-    scalar (a transparent newtype) and struct, at the C header's ABI, in that order."""
+    scalar (a transparent newtype) and struct, at the C header's ABI, in that order, the first
+    of a documented group's under its `group_comment()`."""
     ns = api.namespace
     boxed_derive = "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]\n"
     struct_derive = "#[derive(Clone, Copy, Debug, Default, PartialEq)]\n"
     blocks = [
-        f"{doc_comment(o.docstring)}"
+        f"{group_comment(h)}{doc_comment(o.docstring)}"
         f"pub type {naming.type_name(ns, o.name)} = *mut {naming.opaque_struct(ns, o.name)};\n"
         f"#[repr(C)]\npub struct {naming.opaque_struct(ns, o.name)} {{\n    _private: [u8; 0],\n}}\n"
-        for o in api.opaque_refs
+        for h, o in headed(api.opaque_ref_groups)
     ]
     blocks += [
-        f"{doc_comment(b.docstring)}#[repr(transparent)]\n{boxed_derive}"
+        f"{group_comment(h)}{doc_comment(b.docstring)}#[repr(transparent)]\n{boxed_derive}"
         f"pub struct {naming.type_name(ns, b.name)}(pub {b.base_type});\n"
-        for b in api.boxed_scalars
+        for h, b in headed(api.boxed_scalar_groups)
     ]
     blocks += [
-        f"{doc_comment(s.docstring)}#[repr(C)]\n{struct_derive}pub struct {naming.type_name(ns, s.name)} {{\n"
+        f"{group_comment(h)}{doc_comment(s.docstring)}#[repr(C)]\n{struct_derive}"
+        f"pub struct {naming.type_name(ns, s.name)} {{\n"
         + "".join(
             f"{doc_comment(f.docstring, indent='    ')}    pub {f.name}: {rust_type(api, f.type)},\n"
             for f in s.fields
         )
         + "}\n"
-        for s in api.structs
+        for h, s in headed(api.struct_groups)
     ]
     return blocks
 

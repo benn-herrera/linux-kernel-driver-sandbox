@@ -3,7 +3,9 @@ import unittest
 
 from api_gen import model, naming
 from api_gen.emitters import emit_binding_lua
-from api_gen.tests.support import C_BASE_TYPES, FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists
+from api_gen.tests.support import (
+    C_BASE_TYPES, DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, header, load, mutate, param_lists,
+)
 
 
 class Cdef(unittest.TestCase):
@@ -255,6 +257,26 @@ class Validate(unittest.TestCase):
             with self.subTest(name=name):
                 text = mutate(FIXTURE, '_to_string = "limit_to_string"', f'_to_string = "{name}"')
                 self.assertEqual(self.validate(text), [f"lua: module M: {message}"])
+
+
+
+class GroupDocstring(unittest.TestCase):
+    def test_a_function_groups_docstring_heads_its_first_function_in_cdef_raw_and_a_class(self) -> None:
+        text = emit_binding_lua.emit(
+            load(DOCUMENTED_FUNCTION_GROUPS),
+            source_name="xy_api.adef.toml", name="xy_api", library="libxy.so", project="xy",
+        )
+        for expected in (
+            "\n/* port lifecycle */\nxy_status xy_open_port(",
+            "\n/* traffic */\n/* buf: bytes to send */\nxy_status xy_send(",
+            "\n    -- port lifecycle\n    open_port = lib.xy_open_port,\n    destroy_port = lib.xy_destroy_port,\n"
+            "    -- traffic\n    send = lib.xy_send,\n",
+            "\n-- port lifecycle\nfunction M.Port.new(",
+            "\n-- traffic\n-- buf: bytes to send\nfunction M.Port.send(",
+            "\n-- release the port\nfunction M.Port.destroy_port(",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
 
 
 if __name__ == "__main__":

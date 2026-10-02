@@ -21,12 +21,11 @@ _LOWERCASE_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]*\Z")
 _LITERAL_TERM = re.compile(r"(-?)(?:0x([0-9a-fA-F]+)|([0-9]+))\Z")
 FORMATS = ("dec", "hex")
 REFS = ("in", "out", "inout")
-TABLES = frozenset(
-    {"_general", "untyped_bit_const", "untyped_const", "string_const", "typed_const", "opaque_ref", "boxed_scalar",
-     "struct", "function", "_wrapped_api"}
-)
+NAMED_KINDS = ("typed_const", "opaque_ref", "boxed_scalar", "struct", "function")  # a group's members are named items
+TABLES = frozenset({"_general", "untyped_bit_const", "untyped_const", "string_const", *NAMED_KINDS, "_wrapped_api"})
 GROUP_PROPERTIES = frozenset({"_docstring", "_base_type", "_to_string"})
 STRING_GROUP_PROPERTIES = frozenset({"_docstring"})  # a string constant has no fixed-width representation
+NAMED_GROUP_PROPERTIES = frozenset({"_docstring"})  # a group of a named kind; its members are its items
 OPAQUE_PROPERTIES = frozenset({"_docstring", "_class", "_ctor", "_dtor"})
 BOXED_PROPERTIES = frozenset({"_docstring", "_base_type"})
 CONST_ATTRIBUTES = frozenset({"_value", "_docstring", "_format"})
@@ -72,7 +71,7 @@ class _Objections:
 
     def __init__(self, data: Mapping | None = None) -> None:
         self._data = data if data is not None else {}
-        self._found: list[tuple[tuple[int, int], DefinitionError]] = []
+        self._found: list[tuple[tuple[int, int, int], DefinitionError]] = []
         self.failed: set[str] = set()  # the `where` of every item that drew an objection
 
     @contextmanager
@@ -96,26 +95,25 @@ class _Objections:
         if errors:
             raise DefinitionErrors(errors)
 
-    def _position(self, where: str) -> tuple[int, int]:
-        """(the table's position among the top-level tables, the item's within that table)
-        for `where` such as `function.open_port.unit`, `untyped_const[1]` or
-        `untyped_bit_const.feat_a`, an entry of an array table standing where its group does."""
+    def _position(self, where: str) -> tuple[int, int, int]:
+        """(the table's position among the top-level tables, the group's within that array,
+        the member's within that group) for `where` such as `function.open_port.unit`,
+        `untyped_const[1]`, `function[1].open` or `untyped_bit_const.feat_a`; a named member
+        stands in the first group holding it, and a group itself before its members."""
         match = _WHERE.match(where)
         assert match is not None  # every where begins with its table's name
         category, index, name = match.groups()
         tables = list(self._data)
         if category not in tables:
-            return len(tables), 0
+            return len(tables), 0, 0
         table = self._data[category]
+        groups = [g if isinstance(g, dict) else {} for g in table] if isinstance(table, list) else []
         if index is not None:
-            item = int(index)
-        elif isinstance(table, dict) and name in table:
-            item = list(table).index(name)
-        elif isinstance(table, list):
-            item = next((i for i, group in enumerate(table) if isinstance(group, dict) and name in group), 0)
+            group = int(index)
         else:
-            item = 0
-        return tables.index(category), item
+            group = next((i for i, members in enumerate(groups) if name in members), 0)
+        members = list(groups[group]) if group < len(groups) else []
+        return tables.index(category), group, members.index(name) if name in members else -1
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -163,17 +161,35 @@ class StringConst(Node):
     value: str  # holds no '"', '\' or control character, so it is a valid C and Lua literal as-is
 
 
-Entry = TypeVar("Entry", BitConst, EnumEntry, StringConst)
+Entry = TypeVar("Entry", bound=Node)
 
 
 @dataclass(frozen=True, kw_only=True)
 class Group(Node, Generic[Entry]):
-    """One table of an untyped constant array. A group has no name in the definition,
-    so `name` is where it is, `untyped_const[0]`, never an identifier."""
+    """One table of a top-level array: a constant group's entries, or the items of a group of
+    a named kind (`typed_const`, `opaque_ref`, `boxed_scalar`, `struct`, `function`). A group
+    has no name in the definition, so `name` is where it is, `untyped_const[0]`, never an
+    identifier."""
 
-    base_type: str | None  # a key of naming.BASE_C_TYPES; None for a string group
-    to_string: str | None  # the conversion function's name; always None for a string group
+    base_type: str | None  # a key of naming.BASE_C_TYPES; None for a string group and a named kind's
+    to_string: str | None  # the conversion function's name; always None for a string group and a named kind's
     entries: tuple[Entry, ...]
+
+
+def headed(groups: Iterable[Group[Entry]], run: Iterable[Entry] | None = None) -> list[tuple[str | None, Entry]]:
+    """(heading, item) for each item of `run`, the items an output renders together in the
+    order it renders them, by default every item of `groups` in document order: the heading
+    is the item's group's docstring where the item is the first of its group's in `run`,
+    else None, so a group's docstring heads the first of its items wherever they render."""
+    groups = tuple(groups)
+    group_of = {item.name: group for group in groups for item in group.entries}
+    pairs: list[tuple[str | None, Entry]] = []
+    seen: set[str] = set()
+    for item in (item for group in groups for item in group.entries) if run is None else run:
+        group = group_of[item.name]
+        pairs.append((group.docstring if group.name not in seen else None, item))
+        seen.add(group.name)
+    return pairs
 
 
 def single_bit_entries(group: Group[BitConst]) -> tuple[BitConst, ...]:
@@ -260,6 +276,11 @@ class ClassShape:
         is the handle the object holds. The dtor renders none."""
         return [(self.ctor, self.ctor.params, True), *((fn, fn.params[1:], False) for fn in self.methods)]
 
+    def functions(self) -> list[Function]:
+        """The functions the class renders, in the order every binding renders them: the
+        ctor, each method, the dtor."""
+        return [self.ctor, *self.methods, *([self.dtor] if self.dtor is not None else [])]
+
     def members(self, own: Iterable[str]) -> list[tuple[str, str]]:
         """(where, name) of every member the class defines: `own`, the members a binding
         generates itself, then each method and each cached `out` under its parameter's name."""
@@ -271,11 +292,12 @@ class ClassShape:
 
 @dataclass(frozen=True)
 class WrappedApi:
-    """`[_wrapped_api]`: the wrapped API, as its C header, which the implementation includes,
-    and the constants of this API pinned to that header's macros."""
+    """`[_wrapped_api]`: the wrapped API, as its C headers (`_headers`), which the
+    implementation includes, and the constants of this API pinned to those headers' macros
+    (`_pinned_value`)."""
 
-    header: str  # relative to the project directory
-    pins: tuple[tuple[str, str], ...]  # (untyped_bit_const name, the header's macro it equals)
+    headers: tuple[str, ...]  # each relative to the project directory, in list order, none twice
+    pins: tuple[tuple[str, str], ...]  # (untyped_bit_const name, the headers' macro it equals)
 
 
 @dataclass(frozen=True)
@@ -287,12 +309,37 @@ class Api:
     bit_const_groups: tuple[Group[BitConst], ...]
     const_groups: tuple[Group[EnumEntry], ...]
     string_const_groups: tuple[Group[StringConst], ...]
-    typed_consts: tuple[TypedConst, ...]
-    opaque_refs: tuple[OpaqueRef, ...]
-    boxed_scalars: tuple[BoxedScalar, ...]
-    structs: tuple[Struct, ...]
-    functions: tuple[Function, ...]
+    typed_const_groups: tuple[Group[TypedConst], ...]
+    opaque_ref_groups: tuple[Group[OpaqueRef], ...]
+    boxed_scalar_groups: tuple[Group[BoxedScalar], ...]
+    struct_groups: tuple[Group[Struct], ...]
+    function_groups: tuple[Group[Function], ...]
     wrapped_api: WrappedApi | None
+
+    @property
+    def typed_consts(self) -> tuple[TypedConst, ...]:
+        """Every enum across the groups, in document order."""
+        return tuple(t for g in self.typed_const_groups for t in g.entries)
+
+    @property
+    def opaque_refs(self) -> tuple[OpaqueRef, ...]:
+        """Every opaque ref across the groups, in document order."""
+        return tuple(o for g in self.opaque_ref_groups for o in g.entries)
+
+    @property
+    def boxed_scalars(self) -> tuple[BoxedScalar, ...]:
+        """Every boxed scalar across the groups, in document order."""
+        return tuple(b for g in self.boxed_scalar_groups for b in g.entries)
+
+    @property
+    def structs(self) -> tuple[Struct, ...]:
+        """Every struct across the groups, in document order."""
+        return tuple(s for g in self.struct_groups for s in g.entries)
+
+    @property
+    def functions(self) -> tuple[Function, ...]:
+        """Every function across the groups, in document order."""
+        return tuple(f for g in self.function_groups for f in g.entries)
 
     @property
     def bit_consts(self) -> tuple[BitConst, ...]:
@@ -428,11 +475,11 @@ def from_dict(data: Mapping) -> Api:
     """The definition in `data` as an `Api`, else a `DefinitionError` carrying every objection
     found, in the document order of the items they concern (`DefinitionError.objections()`).
 
-    Each top-level item (a constant group, a typed enum, an opaque ref, a boxed scalar, a
-    struct, a function, `[_wrapped_api]`) is parsed on its own, as is each field of a struct
-    and each parameter and the `_return` of a function, so one mistake does not hide
-    another. The checks across items then run over what parsed; one whose subject failed to
-    parse is skipped, and a reference to an item that failed reports an unknown name. A
+    Every kind is an array of groups. Each item (a constant group, a typed enum, an opaque
+    ref, a boxed scalar, a struct, a function, `[_wrapped_api]`) is parsed on its own, as are
+    a named kind's group's own properties, each field of a struct and each parameter and the
+    `_return` of a function, so one mistake does not hide another. The checks across items
+    then run over what parsed; one whose subject failed to parse is skipped, and a reference to an item that failed reports an unknown name. A
     failure that leaves nothing to parse stops alone: an unknown top-level table, a missing
     or malformed `[_general]`, and in `load()` a file that is not UTF-8 TOML.
     """
@@ -442,7 +489,7 @@ def from_dict(data: Mapping) -> Api:
     general = data.get("_general")
     if not isinstance(general, dict):
         raise DefinitionError("missing [_general] table")
-    _reject_unknown(general, {"_name", "_namespace", "_version", "_library"}, "_general")
+    _reject_unknown(general, {"_name", "_namespace", "_version", "_bound_library"}, "_general")
 
     api_name = general.get("_name")
     if not isinstance(api_name, str):
@@ -459,27 +506,28 @@ def from_dict(data: Mapping) -> Api:
         and all(_is_int(v) and 0 <= v <= 255 for v in version)
     ):
         raise DefinitionError("_general._version must be a list of 4 integers in 0..255")
-    library = general.get("_library")
+    library = general.get("_bound_library")
     if library is not None and not isinstance(library, str):
-        raise DefinitionError("_general._library must be a string")
+        raise DefinitionError("_general._bound_library must be a string")
     if library is not None:
-        check_literal_text(library, "_general._library")
+        check_literal_text(library, "_general._bound_library")
 
     objections = _Objections(data)
     resolved_bits: dict[str, tuple[int, str]] = {}
-    bit_const_groups = _each_group(
+    bit_const_groups = _constant_groups(
         data, "untyped_bit_const", objections,
         lambda where, body: _bit_const_group(where, body, resolved=resolved_bits),
     )
     resolved_consts: dict[str, tuple[int, str]] = {}
-    const_groups = _each_group(
+    const_groups = _constant_groups(
         data, "untyped_const", objections, lambda where, body: _const_group(where, body, resolved=resolved_consts)
     )
-    string_const_groups = _each_group(data, "string_const", objections, _string_group)
-    typed_consts = _each_named(data, "typed_const", objections, _typed_const)
-    opaque_refs = _each_named(data, "opaque_ref", objections, _opaque_ref)
-    boxed_scalars = _each_named(data, "boxed_scalar", objections, _boxed_scalar)
-    struct_tables = _named_tables(data, "struct", objections)
+    string_const_groups = _constant_groups(data, "string_const", objections, _string_group)
+    outlines = {kind: _named_groups(data, kind, objections) for kind in NAMED_KINDS}
+    typed_consts = _parse_items(outlines["typed_const"], "typed_const", objections, _typed_const)
+    opaque_refs = _parse_items(outlines["opaque_ref"], "opaque_ref", objections, _opaque_ref)
+    boxed_scalars = _parse_items(outlines["boxed_scalar"], "boxed_scalar", objections, _boxed_scalar)
+    struct_tables = [member for group in outlines["struct"] for member in group.members]
 
     type_names: dict[str, str] = {}
     for category, names in (
@@ -513,8 +561,8 @@ def from_dict(data: Mapping) -> Api:
             del type_names[name]  # so a later use of it reports an unknown type
 
     enums = {t.name: t for t in typed_consts}
-    functions = _each_named(
-        data, "function", objections, lambda name, body: _function(name, body, type_names, enums)
+    functions = _parse_items(
+        outlines["function"], "function", objections, lambda name, body: _function(name, body, type_names, enums)
     )
     functions_by_name = {f.name: f for f in functions}
     for o in opaque_refs:
@@ -535,11 +583,11 @@ def from_dict(data: Mapping) -> Api:
         bit_const_groups=bit_const_groups,
         const_groups=const_groups,
         string_const_groups=string_const_groups,
-        typed_consts=typed_consts,
-        opaque_refs=opaque_refs,
-        boxed_scalars=boxed_scalars,
-        structs=tuple(structs),
-        functions=functions,
+        typed_const_groups=_grouped(outlines["typed_const"], typed_consts),
+        opaque_ref_groups=_grouped(outlines["opaque_ref"], opaque_refs),
+        boxed_scalar_groups=_grouped(outlines["boxed_scalar"], boxed_scalars),
+        struct_groups=_grouped(outlines["struct"], structs),
+        function_groups=_grouped(outlines["function"], functions),
         wrapped_api=wrapped_api,
     )
     for where, message in _identifier_clashes(api):
@@ -548,45 +596,93 @@ def from_dict(data: Mapping) -> Api:
     return api
 
 
-def _each_group(data: Mapping, key: str, objections: _Objections, parse: Callable[[str, dict], T]) -> tuple[T, ...]:
-    """`parse(where, body)` for each table of the array `[[key]]`, each an item of its own."""
+def _groups(data: Mapping, kind: str, objections: _Objections) -> list[tuple[str, dict]]:
+    """(where, body) of each table of the array `[[kind]]`, `where` being `kind[i]`; a `kind`
+    that is not such an array is an objection of its own, and has no groups."""
     bodies: list[dict] = []
-    with objections.item(key):
-        bodies = _group_bodies(data, key)
+    with objections.item(kind):
+        bodies = _group_bodies(data, kind)
+    return [(f"{kind}[{i}]", body) for i, body in enumerate(bodies)]
+
+
+def _constant_groups(
+    data: Mapping, kind: str, objections: _Objections, parse: Callable[[str, dict], T]
+) -> tuple[T, ...]:
+    """`parse(where, body)` for each group of a constant kind, each group an item of its own."""
     parsed = []
-    for i, body in enumerate(bodies):
-        where = f"{key}[{i}]"
+    for where, body in _groups(data, kind, objections):
         with objections.item(where):
             parsed.append(parse(where, body))
     return tuple(parsed)
 
 
-def _named_tables(data: Mapping, category: str, objections: _Objections) -> list[tuple[str, dict]]:
-    """(name, body) for each `[category.<name>]` whose name and shape are sound, in document
-    order; each unsound one is an objection of its own."""
-    table: dict = {}
-    with objections.item(category):
-        table = _table(data, category)
-    result = []
-    for name, body in table.items():
-        where = f"{category}.{name}"
+@dataclass(frozen=True)
+class _GroupOutline:
+    """A group of a named kind before its items are parsed."""
+
+    where: str  # `function[0]`
+    docstring: str | None
+    members: list[tuple[str, dict]]  # (item name, item body), in document order
+
+
+def _named_groups(data: Mapping, kind: str, objections: _Objections) -> list[_GroupOutline]:
+    """Each group of the named kind `kind`, split into its `_docstring` and its items. A
+    group's own fault (an unknown property, a bad docstring, no items) is the group's
+    objection and keeps its items; an item whose name is not an identifier, whose body is
+    not a table, or whose name an earlier group of `kind` holds is an objection of its own
+    and is dropped."""
+    defined: dict[str, str] = {}  # item name -> where its group is
+    outlines = []
+    for where, body in _groups(data, kind, objections):
+        props = {k: v for k, v in body.items() if k.startswith("_")}
+        docstring = None
         with objections.item(where):
-            _identifier(name, where)
-            if not isinstance(body, dict):
-                raise DefinitionError(f"{where} must be a table")
-            result.append((name, body))
-    return result
+            _reject_unknown(props, NAMED_GROUP_PROPERTIES, where)
+            if len(props) == len(body):
+                raise DefinitionError(f"{where}: has no entries")
+            docstring = _docstring(props.get("_docstring"), f"{where}._docstring")
+        members = []
+        for name, item in body.items():
+            if name in props:
+                continue
+            item_where = f"{kind}.{name}"
+            if name in defined:
+                repeat = DefinitionError(f"{item_where}: already defined in {defined[name]}")
+                objections.record(repeat, f"{where}.{name}")
+                continue
+            defined[name] = where
+            with objections.item(item_where):
+                _identifier(name, item_where)
+                if not isinstance(item, dict):
+                    raise DefinitionError(f"{item_where} must be a table")
+                members.append((name, item))
+        outlines.append(_GroupOutline(where, docstring, members))
+    return outlines
 
 
-def _each_named(
-    data: Mapping, category: str, objections: _Objections, parse: Callable[[str, dict], T]
-) -> tuple[T, ...]:
-    """`parse(name, body)` for each `[category.<name>]`, each an item of its own."""
+def _parse_items(
+    outlines: Iterable[_GroupOutline], kind: str, objections: _Objections, parse: Callable[[str, dict], T]
+) -> list[T]:
+    """`parse(name, body)` for each item of `outlines`' groups in document order, each an
+    item of its own."""
     parsed = []
-    for name, body in _named_tables(data, category, objections):
-        with objections.item(f"{category}.{name}"):
-            parsed.append(parse(name, body))
-    return tuple(parsed)
+    for outline in outlines:
+        for name, body in outline.members:
+            with objections.item(f"{kind}.{name}"):
+                parsed.append(parse(name, body))
+    return parsed
+
+
+def _grouped(outlines: Iterable[_GroupOutline], items: Iterable[Entry]) -> tuple[Group[Entry], ...]:
+    """`outlines` as groups of the `items` that parsed, each in the group that wrote it."""
+    by_name = {item.name: item for item in items}
+    return tuple(
+        Group(
+            name=o.where, docstring=o.docstring, base_type=None, to_string=None,
+            entries=tuple(by_name[name] for name, _ in o.members if name in by_name),
+        )
+        for o in outlines
+    )
 
 
 def _is_int(value: object) -> bool:
@@ -608,13 +704,6 @@ def check_literal_text(value: str, where: str) -> None:
     one holding '"', '\\' or a control character. `where` names it in the message."""
     if any(c in '"\\' or ord(c) < 0x20 or ord(c) == 0x7F for c in value):
         raise DefinitionError(f"{where} must not contain '\"', '\\' or a control character")
-
-
-def _table(data: Mapping, key: str) -> dict:
-    value = data.get(key, {})
-    if not isinstance(value, dict):
-        raise DefinitionError(f"[{key}] must be a table")
-    return value
 
 
 def _group_bodies(data: Mapping, key: str) -> list[dict]:
@@ -1039,24 +1128,32 @@ def _wrapped_api(body: object, bit_names: set[str]) -> WrappedApi | None:
         return None
     if not isinstance(body, dict):
         raise DefinitionError("[_wrapped_api] must be a table")
-    props, members = _split(body, frozenset({"_header"}), "_wrapped_api")
-    header = props.get("_header")
-    if not isinstance(header, str):
-        raise DefinitionError("_wrapped_api._header must be a string")
-    check_literal_text(header, "_wrapped_api._header")
-    if header.startswith(("/", "../")):
-        raise DefinitionError(
-            "_wrapped_api._header must be relative to the project directory, not absolute or beginning with '../'"
-        )
+    _reject_unknown(body, frozenset({"_headers", "_pinned_value"}), "_wrapped_api")
+    headers = body.get("_headers")
+    if not (isinstance(headers, list) and headers and all(isinstance(h, str) for h in headers)):
+        raise DefinitionError("_wrapped_api._headers must be a non-empty list of strings")
+    for i, header in enumerate(headers):
+        where = f"_wrapped_api._headers[{i}]"
+        check_literal_text(header, where)
+        if header.startswith(("/", "../")):
+            raise DefinitionError(
+                f"{where} must be relative to the project directory, not absolute or beginning with '../'"
+            )
+        if header in headers[:i]:
+            raise DefinitionError(f"{where}: already listed")
+    pinned = body.get("_pinned_value", {})
+    if not isinstance(pinned, dict):
+        raise DefinitionError("_wrapped_api._pinned_value must be a table")
+    _, members = _split(pinned, frozenset(), "_wrapped_api._pinned_value")
     pins = []
     for key, macro in members:
-        where = f"_wrapped_api.{key}"
+        where = f"_wrapped_api._pinned_value.{key}"
         if key not in bit_names:
             raise DefinitionError(f"{where}: pins undefined untyped_bit_const '{key}'")
         if not isinstance(macro, str) or not _IDENTIFIER.match(macro):
             raise DefinitionError(f"{where}: must be a macro name")
         pins.append((key, macro))
-    return WrappedApi(header, tuple(pins))
+    return WrappedApi(tuple(headers), tuple(pins))
 
 
 def _identifier_clashes(api: Api) -> list[tuple[str, str]]:

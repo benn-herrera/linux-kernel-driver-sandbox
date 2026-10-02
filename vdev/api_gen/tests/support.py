@@ -17,7 +17,7 @@ FIXTURE = """
 _name = "xy_api"
 _namespace = "xy"
 _version = [1, 2, 3, 4]
-_library = "libxy.so"
+_bound_library = "libxy.so"
 
 [[untyped_bit_const]]
 feat_a = 0
@@ -34,6 +34,7 @@ _to_string = "limit_to_string"
 product = "xy widget"
 vendor = { _value = "acme", _docstring = "who made it" }
 
+[[typed_const]]
 [typed_const.status]
 _docstring = "call outcome"
 _to_string = "to_string"
@@ -41,16 +42,19 @@ ok = 0
 err_busy = { _value = 9, _docstring = "try later" }
 err_other = { _value = 0x7fffffff, _format = "hex" }
 
+[[opaque_ref]]
 [opaque_ref.port]
 _ctor = "open_port"
 _dtor = "destroy_port"
 
 [opaque_ref.token]
 
+[[struct]]
 [struct.stats]
 count = { _type = "u32", _docstring = "items seen" }
 bytes = "u64"
 
+[[function]]
 [function.open_port]
 _return = "status"
 unit = "u32"
@@ -73,7 +77,8 @@ _return = "status"
 htoken = "token"
 
 [_wrapped_api]
-_header = "driver/xy_ioctl.h"
+_headers = ["driver/xy_ioctl.h"]
+[_wrapped_api._pinned_value]
 feat_a = "XYD_FEAT_A"
 """
 
@@ -85,7 +90,7 @@ KITCHEN_SINK = """
 _name = "xy_api"
 _namespace = "xy"
 _version = [1, 2, 3, 4]
-_library = "libxy.so"
+_bound_library = "libxy.so"
 
 [[untyped_bit_const]]
 _docstring = "feature flags"
@@ -126,6 +131,7 @@ magic = { _value = 0xbeef, _format = "hex", _docstring = "wire magic" }
 product = "xy widget"
 vendor = { _value = "acme", _docstring = "who made it" }
 
+[[typed_const]]
 [typed_const.status]
 _docstring = "call outcome"
 _to_string = "to_string"
@@ -142,7 +148,7 @@ _to_string = "to_string"
 fine = 0
 slow = 1
 
-[opaque_ref]
+[[opaque_ref]]
 port = { _docstring = "a port", _ctor = "open_port", _dtor = "destroy_port" }
 
 [opaque_ref.token]
@@ -151,10 +157,12 @@ port = { _docstring = "a port", _ctor = "open_port", _dtor = "destroy_port" }
 _ctor = "open_link"
 _class = "data_link"
 
+[[boxed_scalar]]
 [boxed_scalar.offset]
 _docstring = "a device offset"
 _base_type = "u64"
 
+[[struct]]
 [struct.stats]
 _docstring = "counters"
 count = { _type = "u32", _docstring = "items seen" }
@@ -165,6 +173,7 @@ inner = "stats"
 [struct.wrap.n]
 _type = "u32"
 
+[[function]]
 [function.open_port]
 _return = "status"
 unit = "u32"
@@ -262,7 +271,8 @@ pos = "offset"
 ppos = { _type = "offset", _ref = "out" }
 
 [_wrapped_api]
-_header = "driver/xy_ioctl.h"
+_headers = ["driver/xy_ioctl.h"]
+[_wrapped_api._pinned_value]
 feat_a = "XYD_FEAT_A"
 """
 
@@ -324,6 +334,13 @@ TWO_BAD_RETURNS = mutate(
 
 # FIXTURE without its [_wrapped_api], the last table.
 NO_WRAPPED_API = FIXTURE[: FIXTURE.index("[_wrapped_api]")]
+
+# FIXTURE with its functions in two documented groups: open_port and destroy_port, port's
+# ctor and dtor, under "port lifecycle", then send and spend under "traffic".
+DOCUMENTED_FUNCTION_GROUPS = mutate(
+    mutate(FIXTURE, "[[function]]\n", '[[function]]\n_docstring = "port lifecycle"\n'),
+    "\n[function.send]\n", '\n[[function]]\n_docstring = "traffic"\n[function.send]\n',
+)
 
 # KITCHEN_SINK with what only the Rust outputs' compile gates and a Rust stub built as the
 # library exercise: the constructor caching an enum `out`; a method taking an enum by every

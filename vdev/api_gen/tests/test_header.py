@@ -2,7 +2,9 @@ import unittest
 
 from api_gen import model
 from api_gen.emitters import c, emit_c
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, NO_WRAPPED_API, header, load, mutate, param_lists
+from api_gen.tests.support import (
+    DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, NO_WRAPPED_API, header, load, mutate, param_lists,
+)
 
 
 class Preprocessor(unittest.TestCase):
@@ -32,6 +34,10 @@ class Pins(unittest.TestCase):
         text = header(load(mutate(FIXTURE, 'feat_a = "XYD_FEAT_A"\n', "")))
         self.assertIn('#if defined(XY_IMPL)\n# include "xy/driver/xy_ioctl.h"\n', text)
         self.assertNotIn("static_assert", text)
+
+    def test_one_include_per_wrapped_header_in_list_order(self) -> None:
+        text = header(load(mutate(FIXTURE, '_headers = ["driver/xy_ioctl.h"]', '_headers = ["driver/b.h", "driver/a.h"]')))
+        self.assertIn('#if defined(XY_IMPL)\n# include "xy/driver/b.h"\n# include "xy/driver/a.h"\n', text)
 
 
 class Declarations(unittest.TestCase):
@@ -176,6 +182,13 @@ class Declarations(unittest.TestCase):
         self.assertIn("buf: bytes to send", lines[index_of("XY_API xy_status xy_send(") - 1])
         self.assertEqual(lines[index_of("XY_API xy_status xy_destroy_port(") - 1], "/* release the port */")
 
+    def test_a_function_groups_docstring_is_a_comment_line_above_its_first_function_and_that_ones_comment(self) -> None:
+        text = header(load(DOCUMENTED_FUNCTION_GROUPS))
+        self.assertIn("\n/* port lifecycle */\nXY_API xy_status xy_open_port(", text)
+        self.assertIn("\n/* release the port */\nXY_API xy_status xy_destroy_port(", text)
+        self.assertIn("\n/* traffic */\n/* buf: bytes to send */\nXY_API xy_status xy_send(", text)
+        self.assertEqual(text.count("/* port lifecycle */"), 1)
+
 
 class Validate(unittest.TestCase):
     def test_c_keyword_as_name(self) -> None:
@@ -211,7 +224,7 @@ class Validate(unittest.TestCase):
 
     def test_parameter_named_like_a_type_the_declarations_spell(self) -> None:
         # in a prototype the name would hide the type from every parameter after it
-        boxed = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+        boxed = FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.offset]\n_base_type = "u64"\n'
         for name in ("uint32_t", "int8_t", "xy_status", "xy_port", "xy_stats", "xy_offset"):
             with self.subTest(name=name):
                 self.assertEqual(

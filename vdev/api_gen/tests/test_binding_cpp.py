@@ -2,7 +2,7 @@ import re
 import unittest
 
 from api_gen.emitters import emit_binding_cpp
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, load, mutate
+from api_gen.tests.support import DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, load, mutate
 
 
 def wrapper(text: str = FIXTURE) -> str:
@@ -130,7 +130,7 @@ class Validate(unittest.TestCase):
         )
 
     def test_rendered_names_are_refused_as_parameters(self) -> None:
-        boxed = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+        boxed = FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.offset]\n_base_type = "u64"\n'
         for name in ("xy_send", "xy_port", "xy_status", "Port", "Stats", "Status", "uint32_t", "xy_offset", "Offset"):
             with self.subTest(name=name):
                 self.assertEqual(
@@ -179,7 +179,7 @@ class Validate(unittest.TestCase):
         )
 
     def test_boxed_scalar_alias_is_in_the_namespace_list(self) -> None:
-        text = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n\n[struct.Offset]\nv = "u32"\n'
+        text = FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.offset]\n_base_type = "u64"\n\n[struct.Offset]\nv = "u32"\n'
         self.assertEqual(
             self.validate(text),
             ["wrapper: namespace xy: Offset would be defined more than once, by boxed_scalar.offset and struct.Offset"],
@@ -227,6 +227,15 @@ class ToString(unittest.TestCase):
         self.assertIn('return "UNKNOWN";', text)
         self.assertIn('    case Status::ErrBusy: return "ERR_BUSY";\n', text)
         self.assertIn('return "UNKNOWN_STATUS";', text)
+
+
+
+class GroupDocstring(unittest.TestCase):
+    def test_a_function_groups_docstring_heads_its_first_function_in_a_class(self) -> None:
+        text = wrapper(DOCUMENTED_FUNCTION_GROUPS)
+        self.assertIn("\n  // port lifecycle\n  [[nodiscard]] static Port create(", text)
+        self.assertIn("\n  // traffic\n  // buf: bytes to send\n  Status send(", text)
+        self.assertIn("\n  // release the port\n  Status release()", text)
 
 
 if __name__ == "__main__":

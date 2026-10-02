@@ -7,7 +7,7 @@ _namespace = "tcdl"
 # version encoded however works for the target language
 _version = [0, 5, 0, 0]
 # shared library the script bindings load
-_library = "libtiny_compute_rs.so"
+_bound_library = "libtiny_compute_rs.so"
 
 # unused in this API def, but there is an [[untyped_const]] which the same
 # except that the values are literals instead of shifts.
@@ -22,7 +22,7 @@ cap_dma_write = { _value = 2, _docstring = "can be present separately from read"
 cap_dma_read_write = ["cap_dma_read", "cap_dma_write"]
 cap_all = ["cap_compute", "cap_dma_read_write"]
 
-[typed_const]
+[[typed_const]]
   [typed_const.op_result]
     _docstring = "all api functions return a result."
     _base_type = "i32"
@@ -38,7 +38,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     err_misaligned = { _value = 8, _docstring = "offset or size do not meet alignment requirements or offset + size exceeds device buffer size." }
     err_unknown = { _value = 0x7fffffff, _format = "hex" }
 
-[opaque_ref]
+[[opaque_ref]]
   # class/ctor/dtor: bindings with object semantics wrap the handle in a class built on these
   [opaque_ref.handle]
     _class = "device"
@@ -46,7 +46,7 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     _dtor = "destroy_device"
     _docstring = "all device operation api calls require a handle."
 
-[struct]
+[[struct]]
   [struct.info]
     _docstring = "standard pattern is to cache the info with your device handle."
     api_version = { _type = "u32", _docstring = "built api version." }
@@ -55,10 +55,10 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
     dma_alignment = { _type = "u32", _docstring = "dma memory i/o must be aligned to and multiples of this value" }
     device_caps = { _type = "u32", _docstring = "bitwise or of cap bit flags" }
 
-[boxed_scalar]
+[[boxed_scalar]]
   dma_offset = { _base_type = "u64", _docstring = "source or dest offset into device buffer." }
 
-[function]
+[[function]]
   [function.create_device]
     _docstring = "multiple devices and multiple access to single device supported. info out param is optional."
     _return = "op_result"
@@ -94,8 +94,9 @@ cap_all = ["cap_compute", "cap_dma_read_write"]
 
 [_wrapped_api]
   # ioctl API header provided by driver (consumed by gen targets, but never parsed by this system)
-  _header = "driver/tcd_ioctl.h"
-  # values defined in this file that *must* agree with the driver ABI header
-  cap_compute = "TCD_DEVICE_CAP_COMPUTE"
-  cap_dma_read = "TCD_DEVICE_CAP_DMA_READ"
-  cap_dma_write = "TCD_DEVICE_CAP_DMA_WRITE"
+  _headers = [ "driver/tcd_ioctl.h" ]
+  # values defined in this file that *must* agree with the ABI header
+  [_wrapped_api._pinned_value]
+    cap_compute = "TCD_DEVICE_CAP_COMPUTE"
+    cap_dma_read = "TCD_DEVICE_CAP_DMA_READ"
+    cap_dma_write = "TCD_DEVICE_CAP_DMA_WRITE"

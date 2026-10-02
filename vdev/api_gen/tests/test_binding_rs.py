@@ -2,7 +2,9 @@ import unittest
 from pathlib import Path
 
 from api_gen.emitters import emit_binding_rs
-from api_gen.tests.support import FIXTURE, KITCHEN_SINK, REFS, assert_matches_expected, load, mutate
+from api_gen.tests.support import (
+    DOCUMENTED_FUNCTION_GROUPS, FIXTURE, KITCHEN_SINK, REFS, assert_matches_expected, load, mutate,
+)
 
 EXPECTED = Path(__file__).resolve().parent / "expected_binding_xy.rs"
 
@@ -148,7 +150,7 @@ class Validate(unittest.TestCase):
         for text, where in (
             (FIXTURE + '\n[struct.self_]\nv = "u32"\n', "struct.self_"),
             (mutate(FIXTURE, "ok = 0\n", "ok = 0\nself_ = 3\n"), "typed_const.status.self_"),
-            (FIXTURE + '\n[boxed_scalar.self_]\n_base_type = "u8"\n', "boxed_scalar.self_"),
+            (FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.self_]\n_base_type = "u8"\n', "boxed_scalar.self_"),
         ):
             with self.subTest(where=where):
                 self.assertIn(f"rust: {where}: 'self_' renders as 'Self', a Rust keyword", self.validate(text))
@@ -170,7 +172,7 @@ class Validate(unittest.TestCase):
                 self.assertEqual(self.validate(mutate(FIXTURE, 'htoken = "token"', f'{name} = "token"')), [])
 
     def test_names_the_class_reaches_only_through_a_path_or_a_field_are_not_refused(self) -> None:
-        boxed = FIXTURE + '\n[boxed_scalar.offset]\n_base_type = "u64"\n'
+        boxed = FIXTURE + '\n[[boxed_scalar]]\n[boxed_scalar.offset]\n_base_type = "u64"\n'
         for text in (
             *(mutate(boxed, 'unit = "u32"', f'{name} = "u32"')
               for name in ("ffi", "handle", "core", "xy_send", "xy_port", "xy_port_opaque", "xy_status", "u32", "f64", "xy_offset")),
@@ -244,6 +246,21 @@ class Validate(unittest.TestCase):
     def test_release_is_a_method_name_when_no_release_is_generated(self) -> None:
         text = mutate(mutate(FIXTURE, '_dtor = "destroy_port"\n', ""), "[function.send]", "[function.release]")
         self.assertEqual(self.validate(text), [])
+
+
+
+class GroupDocstring(unittest.TestCase):
+    def test_a_function_groups_docstring_heads_its_first_function_in_ffi_and_a_class(self) -> None:
+        text = binding(DOCUMENTED_FUNCTION_GROUPS)
+        for expected in (
+            "\n        // port lifecycle\n        pub fn xy_open_port(",
+            "\n        // traffic\n        /// buf: bytes to send\n        pub fn xy_send(",
+            "\n    // port lifecycle\n    pub fn create(",
+            "\n    // traffic\n    /// buf: bytes to send\n    pub fn send(",
+            "\n    /// release the port\n    pub fn release(",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, text)
 
 
 if __name__ == "__main__":

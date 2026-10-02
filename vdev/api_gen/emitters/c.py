@@ -5,7 +5,7 @@ render."""
 from api_gen import naming
 from api_gen.model import (
     Api, BitConst, BoxedScalar, EnumEntry, Function, Group, LiteralTerm, OpaqueRef, Param, Struct, Term, TypedConst,
-    generated_name_objections,
+    generated_name_objections, headed,
 )
 
 C_KEYWORDS = frozenset(
@@ -97,7 +97,8 @@ def header_macros(namespace: str) -> frozenset[str]:
 def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> str:
     """The header's declarations in its order, each function after `function_prefix`
     (`NS_API ` in the header): with `constants`, the version, the bit, plain, enum and string
-    constants, then the opaque refs, boxed scalars, structs and functions."""
+    constants, then the opaque refs, boxed scalars, structs and functions, a named kind's
+    group docstring a comment line above the first of the group's items."""
     ns = api.namespace
     blocks = []
     if constants:
@@ -105,24 +106,28 @@ def declarations(api: Api, *, function_prefix: str, constants: bool = True) -> s
         blocks.append(_define(naming.version_const(ns), version, None))
         blocks += [_constant_group(api, g, operator="|") for g in api.bit_const_groups]
         blocks += [_constant_group(api, g, operator="+") for g in api.const_groups]
-        blocks += [_typed_enum(api, t) for t in api.typed_consts]
+        blocks += [comment_line(h) + _typed_enum(api, t) for h, t in headed(api.typed_const_groups)]
         blocks += [
-            _comment_line(g.docstring)
+            comment_line(g.docstring)
             + "".join(
                 f'static const char {naming.const_name(ns, c.name)}[] = "{c.value}";{_trailing(c.docstring)}\n'
                 for c in g.entries
             )
             for g in api.string_const_groups
         ]
-    blocks += [_opaque(api, o) for o in api.opaque_refs]
-    blocks += [_boxed(api, b) for b in api.boxed_scalars]  # before the structs, so a struct may hold one
-    blocks += [_struct(api, s) for s in api.structs]
+    blocks += [comment_line(h) + _opaque(api, o) for h, o in headed(api.opaque_ref_groups)]
+    # before the structs, so a struct may hold one
+    blocks += [comment_line(h) + _boxed(api, b) for h, b in headed(api.boxed_scalar_groups)]
+    blocks += [comment_line(h) + _struct(api, s) for h, s in headed(api.struct_groups)]
     if api.functions:
-        blocks.append("".join(_function(api, f, function_prefix) for f in api.functions))
+        blocks.append(
+            "".join(comment_line(h) + _function(api, f, function_prefix) for h, f in headed(api.function_groups))
+        )
     return "\n".join(blocks)
 
 
-def _comment_line(doc: str | None) -> str:
+def comment_line(doc: str | None) -> str:
+    """`doc` as a `/* */` comment line, nothing for none."""
     return f"/* {doc} */\n" if doc else ""
 
 
@@ -149,7 +154,7 @@ def _constant_group(api: Api, group: Group[BitConst] | Group[EnumEntry], *, oper
         else:
             value = typed_literal(c.value, c.format, group.base_type)
         lines.append(_define(naming.const_name(ns, c.name), value, c.docstring))
-    return _comment_line(group.docstring) + "".join(lines)
+    return comment_line(group.docstring) + "".join(lines)
 
 
 def _sum(api: Api, parts: tuple[Term, ...], *, operator: str, base_type: str) -> str:
@@ -174,14 +179,14 @@ def _typed_enum(api: Api, typed: TypedConst) -> str:
         f"{',' if i < len(entries) - 1 else ''}{_trailing(e.docstring)}\n"
         for i, e in enumerate(entries)
     )
-    return f"{_comment_line(typed.docstring)}enum {name} {{\n{lines}}};\ntypedef enum {name} {name};\n"
+    return f"{comment_line(typed.docstring)}enum {name} {{\n{lines}}};\ntypedef enum {name} {name};\n"
 
 
 def _opaque(api: Api, opaque: OpaqueRef) -> str:
     ns = api.namespace
     target = naming.opaque_struct(ns, opaque.name)
     return (
-        f"{_comment_line(opaque.docstring)}struct {target};\n"
+        f"{comment_line(opaque.docstring)}struct {target};\n"
         f"typedef struct {target}* {naming.type_name(ns, opaque.name)};\n"
     )
 
@@ -189,7 +194,7 @@ def _opaque(api: Api, opaque: OpaqueRef) -> str:
 def _boxed(api: Api, boxed: BoxedScalar) -> str:
     name = naming.type_name(api.namespace, boxed.name)
     value = naming.BUILTIN_C_TYPES[boxed.base_type]
-    return f"{_comment_line(boxed.docstring)}typedef struct {name} {{ {value} value; }} {name};\n"
+    return f"{comment_line(boxed.docstring)}typedef struct {name} {{ {value} value; }} {name};\n"
 
 
 def _struct(api: Api, struct: Struct) -> str:
@@ -200,10 +205,10 @@ def _struct(api: Api, struct: Struct) -> str:
         f"\t{d.ljust(width)} /* {f.docstring} */\n" if f.docstring else f"\t{d}\n"
         for d, f in zip(decls, struct.fields)
     )
-    return f"{_comment_line(struct.docstring)}struct {name} {{\n{lines}}};\ntypedef struct {name} {name};\n"
+    return f"{comment_line(struct.docstring)}struct {name} {{\n{lines}}};\ntypedef struct {name} {name};\n"
 
 
 def _function(api: Api, fn: Function, prefix: str) -> str:
     returns = c_type(api, fn.returns)
     name = naming.function_name(api.namespace, fn.name)
-    return f"{_comment_line(' '.join(fn.docs()))}{prefix}{returns} {name}({param_list(api, fn)});\n"
+    return f"{comment_line(' '.join(fn.docs()))}{prefix}{returns} {name}({param_list(api, fn)});\n"
